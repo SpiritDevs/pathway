@@ -162,49 +162,25 @@ const ACTIVE_ROW_CLASS =
   "cursor-pointer select-none hover:bg-transparent hover:text-inherit data-highlighted:bg-transparent data-highlighted:text-inherit data-active:bg-accent! data-active:text-accent-foreground!";
 
 /**
- * Panel that grows out of the composer's top edge. Render it as a direct child
- * of the composer surface; the surface squares its top corners while it is open.
- * The editor keeps focus: what is typed after the menu opens is `search`, and
- * arrows, Enter, Tab and Escape drive the menu.
+ * The attached panel's rows: which one is active, and the keys and pointer that drive them
+ * while the editor keeps focus. Shared by every menu the + button opens.
  */
-export function ComposerAddMenu(props: {
-  search: string;
+function useAttachedMenuRows(input: {
   view: ComposerAddMenuView;
   onViewChange: (view: ComposerAddMenuView) => void;
-  attachmentDisabled: boolean;
-  actions: readonly ComposerAddAction[];
-  skills: readonly ComposerAddSkillItem[];
-  skillsLoading: boolean;
-  skillsError: string | null;
-  onSelectSkill: (item: ComposerAddSkillItem) => void;
-  stashEntries: readonly PromptStashEntry[];
-  stashShortcut: string | null;
-  /** True when the draft is empty or cannot be stashed right now. */
-  stashDisabled: boolean;
-  stashRestoreDisabled: boolean;
-  onStash: () => void;
-  onRestoreStash: (entry: PromptStashEntry) => void;
-  onDeleteStash: (entry: PromptStashEntry) => void;
-  onAttachFiles: () => void;
-  paths: readonly Pick<ProjectEntry, "path" | "kind">[];
-  pathsLoading: boolean;
-  pathsError: string | null;
-  canBrowsePaths: boolean;
-  onAttachPath: (path: string) => void;
-  /** Closes the panel; `restoreFocus` is true when the composer should take focus back. */
   onClose: (restoreFocus: boolean) => void;
 }) {
-  const { view, search } = props;
+  const { view } = input;
   const [activeRow, setActiveRow] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const heightStyle = useAttachedPanelHeightStyle(panelRef);
   const latestRef = useRef({
     view,
     activeRow,
-    onClose: props.onClose,
-    onViewChange: props.onViewChange,
+    onClose: input.onClose,
+    onViewChange: input.onViewChange,
   });
-  latestRef.current = { view, activeRow, onClose: props.onClose, onViewChange: props.onViewChange };
+  latestRef.current = { view, activeRow, onClose: input.onClose, onViewChange: input.onViewChange };
 
   const enabledRows = () =>
     Array.from(
@@ -280,9 +256,47 @@ export function ComposerAddMenu(props: {
     },
   });
   const select = (run: () => void) => {
-    props.onClose(false);
+    input.onClose(false);
     run();
   };
+  return { panelRef, heightStyle, rowProps, select };
+}
+
+/**
+ * Panel that grows out of the composer's top edge. Render it as a direct child
+ * of the composer surface; the surface squares its top corners while it is open.
+ * The editor keeps focus: what is typed after the menu opens is `search`, and
+ * arrows, Enter, Tab and Escape drive the menu.
+ */
+export function ComposerAddMenu(props: {
+  search: string;
+  view: ComposerAddMenuView;
+  onViewChange: (view: ComposerAddMenuView) => void;
+  attachmentDisabled: boolean;
+  actions: readonly ComposerAddAction[];
+  skills: readonly ComposerAddSkillItem[];
+  skillsLoading: boolean;
+  skillsError: string | null;
+  onSelectSkill: (item: ComposerAddSkillItem) => void;
+  stashEntries: readonly PromptStashEntry[];
+  stashShortcut: string | null;
+  /** True when the draft is empty or cannot be stashed right now. */
+  stashDisabled: boolean;
+  stashRestoreDisabled: boolean;
+  onStash: () => void;
+  onRestoreStash: (entry: PromptStashEntry) => void;
+  onDeleteStash: (entry: PromptStashEntry) => void;
+  onAttachFiles: () => void;
+  paths: readonly Pick<ProjectEntry, "path" | "kind">[];
+  pathsLoading: boolean;
+  pathsError: string | null;
+  canBrowsePaths: boolean;
+  onAttachPath: (path: string) => void;
+  /** Closes the panel; `restoreFocus` is true when the composer should take focus back. */
+  onClose: (restoreFocus: boolean) => void;
+}) {
+  const { view, search } = props;
+  const { panelRef, heightStyle, rowProps, select } = useAttachedMenuRows(props);
   const matches = (label: string, description = "") =>
     `${label} ${description}`.toLowerCase().includes(search.trim().toLowerCase());
   const backButton = (
@@ -525,6 +539,55 @@ export function ComposerAddMenu(props: {
               ) : null}
             </CommandGroup>
           )}
+        </CommandList>
+      </Command>
+    </div>
+  );
+}
+
+const NO_SUB_VIEWS = () => {};
+
+/**
+ * The + menu for a composer that only attaches files from this device, such as an
+ * orchestrator conversation. Render it as a direct child of the composer surface.
+ */
+export function ComposerUploadMenu(props: {
+  onAttachFiles: () => void;
+  onClose: (restoreFocus: boolean) => void;
+}) {
+  const { panelRef, heightStyle, rowProps, select } = useAttachedMenuRows({
+    view: "main",
+    onViewChange: NO_SUB_VIEWS,
+    onClose: props.onClose,
+  });
+  return (
+    <div
+      ref={panelRef}
+      id="composer-add-menu"
+      role="dialog"
+      aria-label="Add to message"
+      data-composer-add-menu="true"
+      style={heightStyle}
+      className={ATTACHED_PANEL_CLASS}
+      // The editor owns focus and the keyboard while this menu is open.
+      onMouseDown={(event) => event.preventDefault()}
+    >
+      <Command autoHighlight={false} mode="none">
+        <CommandList className="max-h-(--add-menu-max-height,26rem) overflow-y-auto overscroll-contain px-1.5 pb-1.5">
+          <CommandGroup>
+            <CommandGroupLabel className={GROUP_LABEL_CLASS}>Add</CommandGroupLabel>
+            <CommandItem
+              {...rowProps("upload-files")}
+              className={cn(ROW_CLASS, ACTIVE_ROW_CLASS)}
+              onClick={() => select(props.onAttachFiles)}
+            >
+              <PaperclipIcon />
+              <span className="flex-1">
+                Upload files
+                <span className="ml-2 text-muted-foreground">From this device</span>
+              </span>
+            </CommandItem>
+          </CommandGroup>
         </CommandList>
       </Command>
     </div>

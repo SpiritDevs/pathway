@@ -4,6 +4,18 @@ import { eligibleRecipients, recipientTarget } from "./conversationRecipients";
 import { mapEnvironmentControlError } from "../../cloud/environmentControl";
 import { ConversationAttachmentDrafts } from "./ConversationAttachments";
 import { shouldHandleComposerAttachmentPaste } from "../chat/composerAttachmentFiles";
+import { ComposerAddMenuButton, ComposerUploadMenu } from "../chat/ComposerAddMenu";
+import {
+  COMPOSER_BODY_CLASS_NAME,
+  COMPOSER_INPUT_ROW_CLASS_NAME,
+  ComposerSurface,
+} from "../chat/ComposerSurface";
+import type { ComposerPromptEditorHandle } from "../ComposerPromptEditor";
+import {
+  COMPOSER_SEND_BUTTON_CLASS_NAME,
+  COMPOSER_SEND_BUTTON_FILL_CLASS_NAME,
+  ComposerSendIcon,
+} from "../chat/ComposerPrimaryActions";
 import {
   useCallback,
   useEffect,
@@ -15,7 +27,6 @@ import {
 import { useNavigate } from "@tanstack/react-router";
 import { createPortal } from "react-dom";
 import {
-  ArrowUpIcon,
   ArrowUpRightIcon,
   ChevronDownIcon,
   ChevronRightIcon,
@@ -24,7 +35,6 @@ import {
   MinusIcon,
   PanelRightIcon,
   PlusIcon,
-  PaperclipIcon,
   SearchIcon,
   XIcon,
 } from "lucide-react";
@@ -37,6 +47,7 @@ import type {
 import { cn, randomUUID } from "../../lib/utils";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { Button } from "../ui/button";
+import { Spinner } from "../ui/spinner";
 import { SidebarInset } from "../ui/sidebar";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { RightPanelSheet } from "../RightPanelSheet";
@@ -52,6 +63,7 @@ import { ConversationMetadata } from "./ConversationMetadata";
 import type { ComposerSendMotion } from "./messageSendMotion";
 
 const EMPTY_ACTIVITY: OrchestratorActivity = [];
+const MAX_MESSAGE_LENGTH = 32000;
 const errorMessage = (cause: unknown) => mapEnvironmentControlError(cause).message;
 export function Composer({
   chat,
@@ -64,12 +76,14 @@ export function Composer({
   activity: OrchestratorActivity;
   sendMotion: RefObject<ComposerSendMotion | null>;
 }) {
-  const input = useRef<HTMLTextAreaElement>(null);
+  const editor = useRef<ComposerPromptEditorHandle>(null);
+  const [surface, setSurface] = useState<HTMLDivElement | null>(null);
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
   const activeIds = useConversationActivity(activity);
   const state = useOrchestrators();
   const reply = state.replies[chat.id];
   useEffect(() => {
-    if (reply) input.current?.focus();
+    if (reply) editor.current?.focusAtEnd();
   }, [reply]);
   const clearReply = () => {
     state.setReply(chat.id, undefined);
@@ -124,6 +138,10 @@ export function Composer({
   const canSend = humanSelection ? canAddressHuman : !!lead?.canDirect;
   const send = () => {
     if (sending || blocked || (!text.trim() && !drafts.length) || chat.archived || !canSend) return;
+    if (text.length > MAX_MESSAGE_LENGTH) {
+      state.setError("Messages can be up to 32,000 characters.");
+      return;
+    }
     const attachmentIds = drafts.map((draft) => draft.attachment.id);
     const previous = pending.get(chat.id);
     const message =
@@ -146,11 +164,12 @@ export function Composer({
             ...(reply?.workId ? { workId: reply.workId } : {}),
           };
     pending.set(chat.id, message);
-    if (input.current && reply?.kind !== "edit")
+    const typed = surface?.querySelector("[data-conversation-composer-editor]");
+    if (typed && reply?.kind !== "edit")
       sendMotion.current = {
         chatId: chat.id,
         messageId: message.id,
-        origin: input.current.getBoundingClientRect(),
+        origin: typed.getBoundingClientRect(),
         ready: false,
       };
     setSending(true);
@@ -206,7 +225,8 @@ export function Composer({
       </div>
     );
   return (
-    <div className="shrink-0 px-4 pb-4 pt-2 sm:px-6">
+    // The attached menus cap their height at the room above this row.
+    <div className="shrink-0 px-4 pb-4 pt-2 sm:px-6" data-chat-composer-overlay="true">
       <form
         className="mx-auto max-w-3xl"
         onSubmit={(event) => {
@@ -246,8 +266,20 @@ export function Composer({
             event.target.value = "";
           }}
         />
-        <div
-          className="rounded-[26px] border bg-background shadow-sm"
+        <ComposerSurface
+          ref={setSurface}
+          className="bg-background"
+          attachedMenu={
+            addMenuOpen && (
+              <ComposerUploadMenu
+                onAttachFiles={() => fileInput.current?.click()}
+                onClose={(restoreFocus) => {
+                  setAddMenuOpen(false);
+                  if (restoreFocus) editor.current?.focus();
+                }}
+              />
+            )
+          }
           onDragOver={(event) => {
             if (event.dataTransfer.types.includes("Files")) event.preventDefault();
           }}
@@ -291,27 +323,29 @@ export function Composer({
               }}
             />
           )}
-          <div className="flex items-end gap-2 p-2">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="mb-0.5 rounded-full"
-              aria-label="Attach images and files"
+          <div className={cn(COMPOSER_BODY_CLASS_NAME, COMPOSER_INPUT_ROW_CLASS_NAME)}>
+            <ComposerAddMenuButton
+              open={addMenuOpen}
               disabled={sending || !lead?.canDirect || reply?.kind === "edit"}
-              onClick={() => fileInput.current?.click()}
-            >
-              <PaperclipIcon className="size-5" />
-            </Button>
+              onOpenChange={(open) => {
+                setAddMenuOpen(open);
+                if (open) editor.current?.focus();
+              }}
+            />
             <ConversationRecipientInput
-              input={input}
+              editor={editor}
+              menuSlot={surface}
+              menuSuppressed={addMenuOpen}
               text={text}
               title={chat.title}
               recipients={recipients}
               selected={recipients.find((contact) => contact.id === selectedRecipient)}
               onSelect={(id) => state.setRecipient(chat.id, id)}
               locked={lockedRecipient}
-              onChange={(value) => state.setDraft(chat.id, value)}
+              onChange={(value) => {
+                setAddMenuOpen(false);
+                state.setDraft(chat.id, value);
+              }}
               disabled={sending}
               onSend={send}
               onEscape={reply ? clearReply : undefined}
@@ -332,22 +366,20 @@ export function Composer({
                 }
               }}
             />
-            <Button
+            <button
               type="submit"
-              size="icon"
-              className="size-9 shrink-0 rounded-full bg-blue-500 text-white hover:bg-blue-600"
+              className={cn(
+                COMPOSER_SEND_BUTTON_CLASS_NAME,
+                COMPOSER_SEND_BUTTON_FILL_CLASS_NAME,
+                "w-9 shrink-0 sm:w-8",
+              )}
               aria-label={reply?.kind === "edit" ? "Save message" : "Send message"}
               disabled={sending || blocked || (!text.trim() && !drafts.length) || !canSend}
             >
-              <ArrowUpIcon className="size-5" />
-            </Button>
+              {sending ? <Spinner className="size-3.5" aria-hidden="true" /> : <ComposerSendIcon />}
+            </button>
           </div>
-        </div>
-        {sending && reply?.kind !== "edit" && (
-          <p role="status" className="mt-2 px-3 text-right text-[11px] text-muted-foreground">
-            Sending…
-          </p>
-        )}
+        </ComposerSurface>
         {blocked && (
           <p role="status" className="mt-2 px-3 text-[11px] text-muted-foreground">
             {drafts.some((draft) => draft.status === "failed")

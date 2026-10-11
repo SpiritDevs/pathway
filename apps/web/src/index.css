@@ -3083,8 +3083,9 @@ label:has(> select#reasoning-effort) select {
 }
 
 .chat-composer-attached-panel {
-  /* Opaque on purpose: the panel covers the conversation, and backdrop blur is not guaranteed here. */
-  background: var(--chat-composer-glass-surface);
+  /* Opaque on purpose: the panel covers the conversation, and backdrop blur is not guaranteed here.
+     Outside the thread view's glass shell it matches the plain composer surface. */
+  background: var(--chat-composer-glass-surface, var(--background));
 }
 
 /* Dark workspace chrome: the navigation rail, top bar and the padding around the content

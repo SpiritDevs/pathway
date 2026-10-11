@@ -4,7 +4,7 @@ import { reactHookHarness as hooks } from "../../test/reactHookHarness";
 import { visitElements } from "../../test/reactElementTree";
 import type { PromptStashEntry } from "../../promptStashStore";
 import { Command, CommandItem } from "../ui/command";
-import { ComposerAddMenu, resolveAddMenuKey } from "./ComposerAddMenu";
+import { ComposerAddMenu, ComposerUploadMenu, resolveAddMenuKey } from "./ComposerAddMenu";
 
 vi.mock("react", async (original) => {
   const actual = await original<typeof import("react")>();
@@ -79,6 +79,24 @@ function activate(element: ReactElement<Record<string, unknown>>) {
 }
 
 beforeEach(() => hooks.reset());
+
+describe("Upload-only menu", () => {
+  it("offers only the device upload, and closes when it is picked", () => {
+    const props = { onAttachFiles: vi.fn(), onClose: vi.fn() };
+    hooks.beginRender();
+    const tree = ComposerUploadMenu(props);
+    const values: unknown[] = [];
+    visitElements(tree, (element) => {
+      if (element.type === CommandItem) values.push(element.props.value);
+      return false;
+    });
+    expect(values).toEqual(["upload-files"]);
+
+    activate(row(tree, "upload-files"));
+    expect(props.onClose).toHaveBeenCalledWith(false);
+    expect(props.onAttachFiles).toHaveBeenCalledOnce();
+  });
+});
 
 describe("Stash prompts submenu", () => {
   it("opens from Add and lists every prompt in stored order", () => {

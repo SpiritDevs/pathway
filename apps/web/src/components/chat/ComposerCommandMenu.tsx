@@ -5,6 +5,7 @@ import {
   type ServerProviderSlashCommand,
 } from "@spiritdevs/contracts";
 import {
+  AtSignIcon,
   BotIcon,
   CircleDotIcon,
   CpuIcon,
@@ -59,6 +60,13 @@ export type ComposerCommandItem =
       skill: ServerProviderSkill;
       label: string;
       description: string;
+    }
+  | {
+      /** Who an orchestrator conversation message is addressed to. */
+      id: string;
+      type: "recipient";
+      label: string;
+      description: string;
     };
 
 type ComposerCommandGroup = {
@@ -72,6 +80,7 @@ const GROUP_LABELS: Record<ComposerCommandItem["type"], string> = {
   "provider-slash-command": "Commands",
   skill: "Skills",
   path: "Files and folders",
+  recipient: "Recipients",
 };
 
 const TOOL_ICONS: Record<ComposerSlashCommand, typeof BotIcon> = {
@@ -123,6 +132,8 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
   resolvedTheme: "light" | "dark";
   isLoading: boolean;
   triggerKind: ComposerTriggerKind | null;
+  /** Names the panel for assistive tech; defaults to the trigger's own name. */
+  label?: string;
   emptyStateText?: string;
   activeItemId: string | null;
   onHighlightedItemChange: (itemId: string | null) => void;
@@ -144,7 +155,7 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
     <div
       ref={panelRef}
       role="dialog"
-      aria-label={props.triggerKind === "skill" ? "Skills" : "Tools and skills"}
+      aria-label={props.label ?? (props.triggerKind === "skill" ? "Skills" : "Tools and skills")}
       data-composer-command-menu="true"
       style={heightStyle}
       className={ATTACHED_PANEL_CLASS}
@@ -226,6 +237,8 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
         <ToolIcon />
       ) : item.type === "skill" ? (
         <SparklesIcon />
+      ) : item.type === "recipient" ? (
+        <AtSignIcon />
       ) : (
         <span className="inline-flex size-4 shrink-0 items-center justify-center text-muted-foreground">
           <SkillGlyph className="size-3.5" />

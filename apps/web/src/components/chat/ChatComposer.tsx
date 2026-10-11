@@ -128,6 +128,12 @@ import { ComposerPendingReviewComments } from "./ComposerPendingReviewComments";
 import { ComposerPreviewAnnotationCards } from "./ComposerPreviewAnnotationCards";
 import { type ComposerFooterFit, resolveComposerFooterFit } from "../composerFooterLayout";
 import { type ComposerPromptEditorHandle, ComposerPromptEditor } from "../ComposerPromptEditor";
+import {
+  COMPOSER_BODY_CLASS_NAME,
+  COMPOSER_EDITOR_CLASS_NAME,
+  COMPOSER_INPUT_ROW_CLASS_NAME,
+  ComposerSurface,
+} from "./ComposerSurface";
 import { ProviderModelPicker } from "./ProviderModelPicker";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
@@ -3577,17 +3583,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         onDragLeaveCapture={onComposerMentionDragLeaveCapture}
         onDropCapture={composerMentionDragHandlers.onDrop}
       >
-        <div
+        <ComposerSurface
           data-chat-composer-content-sized="true"
+          attachedMenu={attachedMenu}
           className={cn(
-            "relative rounded-[28px] border border-border/60 shadow-sm transition-[background-color] duration-200",
-            attachedMenu && "rounded-t-none",
             isDragOverComposer ? "bg-accent/45 ring-1 ring-primary/70" : null,
             environmentUnavailable || projectSelectionRequired ? "opacity-75" : null,
             composerProviderState.composerSurfaceClassName,
           )}
         >
-          {attachedMenu}
           {activePendingApproval ? (
             <div className="rounded-t-[19px] border-b border-border/65 bg-muted/20">
               <ComposerPendingApprovalPanel
@@ -3653,7 +3657,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             </div>
           ) : null}
 
-          <div ref={setComposerMenuAnchor} className="relative px-3 py-3 sm:px-4">
+          <div ref={setComposerMenuAnchor} className={COMPOSER_BODY_CLASS_NAME}>
             {stashSlot
               ? createPortal(
                   <ComposerStashBadge
@@ -3951,7 +3955,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             </div>
             <div
               className={cn(
-                "flex min-w-0 items-end gap-2",
+                COMPOSER_INPUT_ROW_CLASS_NAME,
                 composerFooterHasWideActions && "flex-wrap",
               )}
               data-chat-composer-input-row="true"
@@ -3980,7 +3984,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         : []
                     }
                     skills={composerCatalog?.skills ?? []}
-                    className="min-h-[1lh] max-h-[min(6lh,22dvh)] overscroll-contain"
+                    className={COMPOSER_EDITOR_CLASS_NAME}
                     onRemoveTerminalContext={removeComposerTerminalContextFromDraft}
                     onChange={onPromptChange}
                     onCommandKeyDown={onComposerCommandKey}
@@ -4025,7 +4029,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               )}
             </div>
           </div>
-        </div>
+        </ComposerSurface>
         {/* Bottom toolbar */}
         {activePendingApproval ? (
           <div className="flex flex-wrap items-center justify-end gap-2 px-3 pb-3 sm:px-4 sm:pb-4">
