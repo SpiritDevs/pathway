@@ -312,3 +312,17 @@ it("releases the subscription while hidden without cancelling", async () => {
   expect(commands.subscribed).not.toHaveBeenCalled();
   expect(commands.cancel).not.toHaveBeenCalled();
 });
+
+it("keeps a dismissed build closed when the panel shows again", async () => {
+  commands.list.mockResolvedValue({
+    _tag: "Success",
+    value: [job({ phase: "running", terminal: true })],
+  });
+  const update = await mount();
+  expect(() => button("Dismiss build")).not.toThrow();
+  await press("Dismiss build");
+  await update({ visible: false });
+  await update({ visible: true });
+  expect(commands.list).toHaveBeenCalledTimes(2);
+  expect(() => button("Dismiss build")).toThrow();
+});

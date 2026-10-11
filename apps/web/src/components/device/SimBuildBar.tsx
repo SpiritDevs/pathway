@@ -75,6 +75,8 @@ export function SimBuildBar(props: {
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<CommandFailure | null>(null);
   const [job, setJob] = useState<SimBuildJob | null>(null);
+  // The job the user closed, so showing the panel again doesn't restore it.
+  const dismissedJobIdRef = useRef<string | null>(null);
 
   // Restore the thread's latest job; a build started from another client or an agent shows here too.
   useEffect(() => {
@@ -83,7 +85,7 @@ export function SimBuildBar(props: {
     void list({ environmentId, input: { environmentId, projectId, threadId } }).then((result) => {
       if (cancelled || result._tag === "Failure") return;
       const latest = currentSimBuildJob(result.value);
-      if (latest) setJob((current) => current ?? latest);
+      if (latest && latest.id !== dismissedJobIdRef.current) setJob((current) => current ?? latest);
     });
     return () => {
       cancelled = true;
@@ -207,7 +209,10 @@ export function SimBuildBar(props: {
           starting={starting}
           onRunAgain={(previous) => void startJob(previous)}
           onChangeSettings={openForm}
-          onDismiss={() => setJob(null)}
+          onDismiss={() => {
+            dismissedJobIdRef.current = job.id;
+            setJob(null);
+          }}
         />
       ) : null}
     </section>
