@@ -6,6 +6,7 @@ import { ComposerAsyncQuestions } from "./ComposerAsyncQuestions";
 import { turnItemIsWorkspacePreparation } from "@spiritdevs/client-runtime/state/turn-item-presentation";
 import { WorkspacePreparationCard } from "./WorkspacePreparationCard";
 import { computerNoticeOfTurnItem } from "@spiritdevs/client-runtime/state/computer-notice";
+import { COMPACT_FIRST_MESSAGE_PREFIX } from "@spiritdevs/client-runtime/state/thread-workflows";
 import { ConnectedComputerControlDeniedCard } from "./ComputerControlDeniedCard";
 import { ConnectedComputerSetupRequiredCard } from "./ComputerSetupRequiredCard";
 import {
@@ -98,6 +99,7 @@ import {
   WrenchIcon,
   XIcon,
   ZapIcon,
+  FoldVerticalIcon,
 } from "lucide-react";
 import { Button } from "../ui/button";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
@@ -1645,7 +1647,10 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
     (attachment) => attachment.type !== "image" && attachment.type !== "file",
   );
   const canRevertAgentWork = typeof row.revertTurnCount === "number";
+  // The `/compact` run sent ahead of this message stands in for it until its own turn starts.
+  const compactingFirst = row.message.id.startsWith(COMPACT_FIRST_MESSAGE_PREFIX);
   const canEditMessage =
+    !compactingFirst &&
     !isGeneratedQuestionReply(row.message) &&
     row.message.createdBy === "user" &&
     (ctx.editableUserMessageId === row.message.id ||
@@ -1653,6 +1658,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
     hasEditableText;
   const isEditingMessage = canEditMessage && ctx.editingUserMessageId === row.message.id;
   const canRetryMessage =
+    !compactingFirst &&
     row.message.createdBy === "user" &&
     (ctx.retryableUserMessageId === row.message.id ||
       ctx.queuedMessageControls.get(row.message.id)?.retryable) &&
@@ -1680,7 +1686,16 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           Sent by another agent
         </p>
       ) : null}
-      {row.message.inputIntent && row.message.inputIntent !== "turn_start" ? (
+      {compactingFirst ? (
+        <div
+          className="me-1 flex items-center justify-end gap-1 text-xs leading-none text-muted-foreground"
+          data-user-message-intent="compact_first"
+          title="Compacting the conversation before sending this message"
+        >
+          <FoldVerticalIcon aria-hidden="true" className="size-3" />
+          Compacting first
+        </div>
+      ) : row.message.inputIntent && row.message.inputIntent !== "turn_start" ? (
         <UserMessageIntentMarker intent={row.message.inputIntent} />
       ) : null}
       {regularImages.length > 0 && (

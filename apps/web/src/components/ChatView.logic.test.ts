@@ -53,6 +53,7 @@ import {
   shouldShowComposerContextStrip,
   shouldWriteThreadErrorToCurrentServerThread,
   threadProjectionIsPending,
+  presentCompactFirstTurnItems,
   visibleTurnItemsForThreadPresentation,
 } from "./ChatView.logic";
 
@@ -401,6 +402,38 @@ describe("visibleTurnItemsForThreadPresentation", () => {
         [inherited, local],
       ),
     ).toEqual([inherited, local]);
+  });
+});
+
+describe("presentCompactFirstTurnItems", () => {
+  const compact = {
+    visibility: "local",
+    item: {
+      type: "user_message",
+      messageId: "compact-first:message",
+      text: "/compact",
+      attachments: [],
+    },
+  } as unknown as OrchestrationV2ProjectedTurnItem;
+  const earlier = {
+    visibility: "local",
+    item: { type: "user_message", messageId: "earlier", text: "Hi", attachments: [] },
+  } as unknown as OrchestrationV2ProjectedTurnItem;
+  const target = { id: "message", text: "Fix the build", attachments: [] } as never;
+
+  it("shows the queued message in place of its compaction, with a stable row", () => {
+    const compacting = new Map([["compact-first:message", target]]);
+    const first = presentCompactFirstTurnItems([earlier, compact], compacting);
+    expect(first[0]).toBe(earlier);
+    expect(first[1]?.item).toMatchObject({
+      messageId: "compact-first:message",
+      text: "Fix the build",
+    });
+    expect(presentCompactFirstTurnItems([earlier, compact], compacting)[1]).toBe(first[1]);
+  });
+
+  it("drops the compaction's bubble once the message has its own turn", () => {
+    expect(presentCompactFirstTurnItems([earlier, compact], new Map())).toEqual([earlier]);
   });
 });
 

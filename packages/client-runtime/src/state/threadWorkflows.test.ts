@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   canDetachThreadProviderSession,
   canForkProjectedAssistantItem,
+  deriveCompactingFirstMessages,
   deriveThreadQueueWorkflowState,
   isQueuedRunOrderStale,
   orderQueuedRuns,
@@ -149,6 +150,47 @@ describe("thread workflows", () => {
 
     expect(state.queuedRuns.map(({ run, text }) => [run.id, text])).toEqual([
       ["visible", "Visible queued message"],
+    ]);
+  });
+
+  it("moves a compact-and-send message out of the queue only while its compaction runs", () => {
+    const projection = (compactStatus: string) =>
+      ({
+        thread: { id: "thread", activeProviderThreadId: null },
+        runs: [
+          {
+            id: "compact",
+            status: compactStatus,
+            userMessageId: "compact-first:message",
+            ordinal: 1,
+          },
+          { id: "message", status: "queued", userMessageId: "message", ordinal: 2 },
+          { id: "other", status: "queued", userMessageId: "other", ordinal: 3 },
+        ],
+        messages: [
+          { id: "compact-first:message", text: "/compact" },
+          { id: "message", text: "Fix the build" },
+          { id: "other", text: "Then the docs" },
+        ],
+        providerTurns: [],
+        providerThreads: [],
+        providerSessions: [],
+      }) as never;
+
+    const compacting = projection("running");
+    expect([...deriveCompactingFirstMessages(compacting)].map(([id, m]) => [id, m.text])).toEqual([
+      ["compact-first:message", "Fix the build"],
+    ]);
+    expect(deriveThreadQueueWorkflowState(compacting).queuedRuns.map(({ run }) => run.id)).toEqual([
+      "other",
+    ]);
+
+    // A failed compaction leaves the message queued, where the user can steer or remove it.
+    const failed = projection("failed");
+    expect(deriveCompactingFirstMessages(failed).size).toBe(0);
+    expect(deriveThreadQueueWorkflowState(failed).queuedRuns.map(({ run }) => run.id)).toEqual([
+      "message",
+      "other",
     ]);
   });
 

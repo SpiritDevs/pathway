@@ -81,6 +81,8 @@ import {
   deriveThreadRuntimeRun,
 } from "@spiritdevs/client-runtime/state/thread-execution";
 import {
+  COMPACT_FIRST_MESSAGE_PREFIX,
+  deriveCompactingFirstMessages,
   resolveActiveThreadRun,
   resolveLatestForkableRun,
   resolveThreadProviderSession,
@@ -528,6 +530,7 @@ import {
   resolveEditableV2UserMessageId,
   resolveRetryableV2UserMessageId,
   resolvePanelSurfaceOwnerThreadRef,
+  presentCompactFirstTurnItems,
   visibleTurnItemsForThreadPresentation,
   resolveSendEnvMode,
   shortcutScopeOwnsEvent,
@@ -591,6 +594,7 @@ const EMPTY_SUBAGENT_COMPOSER_STATES: NonNullable<
 const EMPTY_PROJECTION_SUBAGENTS: OrchestrationV2ThreadProjection["subagents"] = [];
 const EMPTY_EXECUTION_NODES: OrchestrationV2ThreadProjection["nodes"] = [];
 const EMPTY_ATTACHMENT_IDS: string[] = [];
+const EMPTY_COMPACTING_FIRST_MESSAGES: ReturnType<typeof deriveCompactingFirstMessages> = new Map();
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
 
 function useDraftHeroLayoutTransition(isDraftHeroState: boolean) {
@@ -1693,9 +1697,20 @@ function ChatViewContent(props: ChatViewProps) {
     [serverProjection?.subagents],
   );
   const serverVisibleTurnItems = useThreadVisibleTurnItems(routeThreadDetailRef);
+  const compactingFirstMessages = useMemo(
+    () =>
+      serverProjection
+        ? deriveCompactingFirstMessages(serverProjection)
+        : EMPTY_COMPACTING_FIRST_MESSAGES,
+    [serverProjection],
+  );
   const presentedServerVisibleTurnItems = useMemo(
-    () => visibleTurnItemsForThreadPresentation(serverThread, serverVisibleTurnItems),
-    [serverThread, serverVisibleTurnItems],
+    () =>
+      presentCompactFirstTurnItems(
+        visibleTurnItemsForThreadPresentation(serverThread, serverVisibleTurnItems),
+        compactingFirstMessages,
+      ),
+    [compactingFirstMessages, serverThread, serverVisibleTurnItems],
   );
   const committedServerMessageIds = useMemo(
     () =>
@@ -8460,7 +8475,12 @@ function ChatViewContent(props: ChatViewProps) {
         environmentId,
         input: {
           threadId: threadIdForSend,
-          message: { messageId: newMessageId(), role: "user", text: "/compact", attachments: [] },
+          message: {
+            messageId: MessageId.make(`${COMPACT_FIRST_MESSAGE_PREFIX}${messageIdForSend}`),
+            role: "user",
+            text: "/compact",
+            attachments: [],
+          },
           modelSelection: ctxSelectedModelSelection,
           runtimeMode,
           interactionMode,

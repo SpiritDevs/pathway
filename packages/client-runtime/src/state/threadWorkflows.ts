@@ -38,6 +38,39 @@ export interface ThreadQueueWorkflowState {
   readonly canPromoteToSteer: boolean;
 }
 
+/**
+ * Prefixes the id of the `/compact` message a "Compact and send" sends ahead of the user's
+ * message; the rest of the id is that message's id.
+ */
+export const COMPACT_FIRST_MESSAGE_PREFIX = "compact-first:";
+
+/**
+ * Queued messages waiting on a compaction sent just for them, keyed by the `/compact`
+ * message's id. Surfaces show each in its compaction's place instead of in the queue.
+ */
+export function deriveCompactingFirstMessages(
+  projection: Projection,
+): ReadonlyMap<string, Projection["messages"][number]> {
+  const compacting = new Map<string, Projection["messages"][number]>();
+  for (const message of projection.messages) {
+    if (!message.id.startsWith(COMPACT_FIRST_MESSAGE_PREFIX)) continue;
+    const compactRun = projection.runs.find((run) => run.userMessageId === message.id);
+    if (
+      compactRun === undefined ||
+      (compactRun.status !== "queued" && !ACTIVE_RUN_STATUSES.has(compactRun.status))
+    ) {
+      continue;
+    }
+    const targetId = message.id.slice(COMPACT_FIRST_MESSAGE_PREFIX.length);
+    const target = projection.messages.find((candidate) => candidate.id === targetId);
+    const targetQueued = projection.runs.some(
+      (run) => run.userMessageId === targetId && run.status === "queued",
+    );
+    if (target !== undefined && targetQueued) compacting.set(message.id, target);
+  }
+  return compacting;
+}
+
 export function resolveActiveThreadRun(projection: Projection): Run | null {
   return projection.runs.findLast((run) => ACTIVE_RUN_STATUSES.has(run.status)) ?? null;
 }
@@ -119,9 +152,15 @@ export function deriveThreadQueueWorkflowState(projection: Projection): ThreadQu
       .filter((message) => message.delegatedCompletion !== undefined)
       .map((message) => message.id),
   );
+  const compactingFirstMessageIds = new Set(
+    [...deriveCompactingFirstMessages(projection).values()].map((message) => message.id),
+  );
   const queuedRuns = copySorted(
     projection.runs.filter(
-      (run) => run.status === "queued" && !automaticCompletionMessageIds.has(run.userMessageId),
+      (run) =>
+        run.status === "queued" &&
+        !automaticCompletionMessageIds.has(run.userMessageId) &&
+        !compactingFirstMessageIds.has(run.userMessageId),
     ),
     (left, right) =>
       (left.queuePosition ?? left.ordinal) - (right.queuePosition ?? right.ordinal) ||

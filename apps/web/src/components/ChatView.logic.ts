@@ -20,6 +20,7 @@ import { presentThreadShell } from "@spiritdevs/client-runtime/state/shell";
 import type { EnvironmentThreadState } from "@spiritdevs/client-runtime/state/threads";
 import { modelSelectionsEqual } from "@spiritdevs/shared/model";
 import { resolveThreadForkKind } from "@spiritdevs/client-runtime/state/thread-relationships";
+import { COMPACT_FIRST_MESSAGE_PREFIX } from "@spiritdevs/client-runtime/state/thread-workflows";
 import { type ChatMessage, type Project, type SessionPhase, type Thread } from "../types";
 import { type ComposerAttachment, type DraftThreadState } from "../composerDraftStore";
 import * as Schema from "effect/Schema";
@@ -48,6 +49,39 @@ export function visibleTurnItemsForThreadPresentation(
 ): ReadonlyArray<OrchestrationV2ProjectedTurnItem> {
   if (thread === null || resolveThreadForkKind(thread) !== "side_chat") return rows;
   return rows.filter((row) => row.visibility !== "inherited");
+}
+
+type CompactingFirstMessage = OrchestrationV2ThreadProjection["messages"][number];
+const compactingFirstRows = new WeakMap<
+  OrchestrationV2ProjectedTurnItem,
+  { readonly target: CompactingFirstMessage; readonly row: OrchestrationV2ProjectedTurnItem }
+>();
+
+/**
+ * A "Compact and send" reads as one message: its `/compact` bubble shows the user's queued
+ * message until that message's own turn starts, then disappears.
+ */
+export function presentCompactFirstTurnItems(
+  rows: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
+  compactingFirst: ReadonlyMap<string, CompactingFirstMessage>,
+): ReadonlyArray<OrchestrationV2ProjectedTurnItem> {
+  const isCompactFirst = (row: OrchestrationV2ProjectedTurnItem) =>
+    row.item.type === "user_message" && row.item.messageId.startsWith(COMPACT_FIRST_MESSAGE_PREFIX);
+  if (!rows.some(isCompactFirst)) return rows;
+  return rows.flatMap((row) => {
+    if (!isCompactFirst(row) || row.item.type !== "user_message") return [row];
+    const target = compactingFirst.get(row.item.messageId);
+    if (target === undefined) return [];
+    // Stable identity keeps the timeline's per-item message cache warm.
+    const cached = compactingFirstRows.get(row);
+    if (cached?.target === target) return [cached.row];
+    const presented = {
+      ...row,
+      item: { ...row.item, text: target.text, attachments: target.attachments },
+    };
+    compactingFirstRows.set(row, { target, row: presented });
+    return [presented];
+  });
 }
 
 export function shortcutScopeOwnsEvent(
