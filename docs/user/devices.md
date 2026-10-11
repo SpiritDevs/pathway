@@ -56,30 +56,38 @@ Small panels and browsers without 3D support use the flat screen view.
 
 One person or agent controls a device at a time. Everyone else watches: the
 live screen stays visible, but touch, typing, hardware buttons, rotation, fold
-changes, device tools, and power off are unavailable. The bar at the top of
-the panel says who is in control: you, this conversation's agent, an agent in
-another conversation (choose **Open thread** to go there), someone else, or
-nobody.
+changes, device tools, and power off are unavailable.
 
-Choose **Take control** to use the device yourself, even while the previous
-controller's input is finishing. The button reads **Taking control…** until
-that input finishes, and the device becomes interactive once the environment
-confirms you are in control.
-Taking control from an agent pauses its device use.
+The device is yours by default. While this conversation's agent is idle, the
+panel takes control for you and the bar reads **You're in control. Agent
+idle.** When the agent starts working, the panel steps aside so the agent can
+use the device, and the bar reads **Agent working** until it does, then
+**Agent in control**.
 
-While you are in control, choose **Release control** to go back to watching,
-or **Resume agent** to hand the device back to this conversation's agent.
-Resume agent waits for the environment to confirm your control has ended,
-then asks the agent to continue. If that can't be confirmed, the agent is not
-asked, and the panel says why. Hiding the panel, switching to another browser
-tab, minimizing the window, or closing the device also releases control.
-Moving focus to another window while Pathway stays visible does not.
+The **You** and **Agent** switch at the top of the panel moves control between
+you and this conversation's agent:
+
+- Choose **You** to use the device yourself, even while the agent is working or
+  the previous controller's input is finishing. Taking control from a working
+  agent pauses its device use, and the device stays yours until you choose
+  **Agent**.
+- Choose **Agent** to hand the device back. If the agent is idle, Pathway waits
+  for the environment to confirm your control has ended, then asks the agent to
+  continue. If that can't be confirmed, the agent is not asked, and the panel
+  says why.
+
+When an agent in another conversation, or someone else, controls the device,
+the bar says so; choose **Open thread** to go to that conversation, or **You**
+to take the device.
+
+Closing the panel or the device releases control. Switching to another app or
+window keeps it, though a long absence can let it lapse.
 
 If the connection to the environment drops, your control ends and the panel
-switches to watching. Choose **Take control** again once it reconnects.
+switches to watching. Choose **You** again once it reconnects.
 
 If someone else takes control, or your control ends some other way, the panel
-says so and returns to watching. Choose **Take control** again to continue.
+says so and returns to watching. Choose **You** again to continue.
 If Pathway can't confirm the last input on a device finished, the panel says
 so and offers **Restart device tools**, even when the tools are current. After
 the restart, take control again. A restart that leaves one device unconfirmed

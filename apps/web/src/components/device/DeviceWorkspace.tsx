@@ -6,6 +6,7 @@ import {
 } from "@spiritdevs/client-runtime/device/screenshot";
 import { refreshDeviceHubAccess, useDeviceHubAccess } from "~/state/device";
 import { DeviceControlBar } from "./DeviceControlBar";
+import { useDeviceControlMode } from "./useDeviceControlMode";
 import { Button } from "~/components/ui/button";
 import { DeviceControlsRail } from "./DeviceControlsRail";
 import { DeviceStreamView, type DeviceStreamHandle } from "./DeviceStreamView";
@@ -29,13 +30,21 @@ export const DeviceWorkspace = memo(function DeviceWorkspace(props: {
   hostDiagnostics: string | undefined;
   /** All devices in the environment, for Watch companion choices. */
   devices: ReadonlyArray<DeviceSummary>;
+  /** On screen: the panel is showing and the window is not hidden. Streams and input follow it. */
   visible: boolean;
+  /**
+   * The panel is showing, whatever the window's state. Control follows this, so switching to
+   * another app keeps the device yours.
+   */
+  panelVisible: boolean;
   onFloat?: (() => void) | undefined;
   onClose: () => void;
   onPowerOff: (control: DeviceControlProof | undefined) => void;
   onOpenThread: (threadId: string) => void;
+  /** This thread's agent is running a turn, so control steps aside for it. */
+  agentWorking: boolean;
   /** Starts the thread's continuation; called only after control is released. */
-  onResumeAgent?: (() => void) | undefined;
+  onResumeAgent?: (() => Promise<boolean>) | undefined;
 }) {
   const [handle, setHandle] = useState<DeviceStreamHandle | null>(null);
   const [toolsOpen, setToolsOpen] = useState(false);
@@ -49,7 +58,14 @@ export const DeviceWorkspace = memo(function DeviceWorkspace(props: {
     environmentId: props.environmentId,
     hostId: props.device.hostId,
     deviceId: props.device.id,
-    visible: props.visible,
+    visible: props.panelVisible,
+  });
+  const controlMode = useDeviceControlMode({
+    lease,
+    threadId: props.threadId,
+    visible: props.panelVisible,
+    agentWorking: props.agentWorking,
+    onResumeAgent: props.onResumeAgent,
   });
   const controls = useDeviceControls({
     ...props,
@@ -117,9 +133,9 @@ export const DeviceWorkspace = memo(function DeviceWorkspace(props: {
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         <DeviceControlBar
           lease={lease}
+          control={controlMode}
           threadId={props.threadId}
           onOpenThread={props.onOpenThread}
-          onResumeAgent={props.onResumeAgent}
         />
         {screenshotError || input.error || (controls.error && !toolsOpen) ? (
           <p role="alert" className="px-3 py-2 text-xs text-destructive">

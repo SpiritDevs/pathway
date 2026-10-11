@@ -1,32 +1,37 @@
 import { X } from "lucide-react";
 import { Button } from "~/components/ui/button";
 import type { DeviceControlLease } from "./useDeviceControlLease";
+import type { DeviceControlModeState } from "./useDeviceControlMode";
 
-/** Who controls the device, and the way in or out of control for this viewer. */
+/** Who controls the device: the viewer or this thread's agent, with a switch between them. */
 export function DeviceControlBar(props: {
   readonly lease: DeviceControlLease;
+  readonly control: DeviceControlModeState;
   readonly threadId: string;
   readonly onOpenThread: (threadId: string) => void;
-  /** Called only after the environment acknowledges the release. */
-  readonly onResumeAgent?: (() => void) | undefined;
 }) {
-  const { lease } = props;
+  const { lease, control } = props;
   const { view } = lease;
   if (view.kind === "unsupported") return null;
   const status =
     view.kind === "you"
-      ? "You're in control."
+      ? control.agentTurn
+        ? "You're in control. The agent waits until you hand it back."
+        : "You're in control. Agent idle."
       : view.kind === "agent"
         ? view.threadId === props.threadId
-          ? "This thread's agent is in control. You're watching."
-          : "An agent in another thread is in control. You're watching."
+          ? "Agent in control."
+          : "An agent in another thread is in control."
         : view.kind === "viewer"
-          ? "Someone else is in control. You're watching."
+          ? "Someone else is in control."
           : view.kind === "draining"
-            ? "Finishing the previous controller's input. You're watching."
+            ? "Finishing the previous controller's input."
             : view.kind === "unknown"
-              ? "Control status is unavailable. You're watching."
-              : "Nobody is in control. You're watching.";
+              ? "Control status is unavailable."
+              : control.agentTurn
+                ? "Agent working."
+                : "Taking control…";
+  const switching = lease.acquiring || lease.releasing;
   return (
     <div className="border-b text-xs">
       <div role="status" className="flex items-center gap-2 px-3 py-1.5">
@@ -36,42 +41,33 @@ export function DeviceControlBar(props: {
             Open thread
           </Button>
         ) : null}
-        {view.kind === "you" ? (
-          <>
-            {props.onResumeAgent ? (
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={() => {
-                  const resume = props.onResumeAgent;
-                  // The continuation's device_open needs the lease released and drained first.
-                  void lease.release().then((released) => {
-                    if (released) resume?.();
-                  });
-                }}
-              >
-                Resume agent
-              </Button>
-            ) : null}
-            <Button size="xs" variant="outline" onClick={() => void lease.release()}>
-              Release control
-            </Button>
-          </>
-        ) : lease.releasing ? (
-          <Button size="xs" variant="outline" disabled>
-            Releasing control…
-          </Button>
-        ) : (
+        <div
+          role="group"
+          aria-label="Device control"
+          className="inline-flex shrink-0 rounded-md border p-0.5"
+        >
           <Button
             size="xs"
-            variant="outline"
+            variant={control.mode === "you" ? "secondary" : "ghost"}
+            aria-pressed={control.mode === "you"}
             // Allowed while draining: acquisition waits for the drain, or reports why it can't.
-            disabled={lease.acquiring || view.kind === "unknown"}
-            onClick={() => void lease.take()}
+            disabled={switching || view.kind === "unknown"}
+            onClick={() => {
+              if (control.mode !== "you") control.chooseYou();
+            }}
           >
-            {lease.acquiring ? "Taking control…" : "Take control"}
+            You
           </Button>
-        )}
+          <Button
+            size="xs"
+            variant={control.mode === "agent" ? "secondary" : "ghost"}
+            aria-pressed={control.mode === "agent"}
+            disabled={switching || control.mode !== "you" || !control.canChooseAgent}
+            onClick={() => void control.chooseAgent()}
+          >
+            Agent
+          </Button>
+        </div>
       </div>
       {lease.error ? (
         <div role="alert" className="flex items-start gap-2 px-3 pb-1.5 text-destructive">

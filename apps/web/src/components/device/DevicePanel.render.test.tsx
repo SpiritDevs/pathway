@@ -131,7 +131,7 @@ const nodeMock = {
     getBoundingClientRect: () => ({ width: 400, height: 800 }),
   }),
 };
-const resumeAgent = () => {};
+const resumeAgent = async () => true;
 
 /** ChatView's device wiring: session sync plus the embedded panel and its resume callback. */
 function ChatDeviceParent() {
@@ -143,6 +143,7 @@ function ChatDeviceParent() {
       threadRef={threadRef}
       surface={surface}
       visible
+      agentWorking={false}
       onDismissSetup={() => {}}
       onResumeAgent={resumeAgent}
     />
@@ -196,6 +197,7 @@ it("does not re-commit the stream when a publication only renews control", async
           threadRef={threadRef}
           surface={surface}
           visible
+          agentWorking={false}
           onDismissSetup={() => {}}
         />
       </RegistryContext.Provider>,

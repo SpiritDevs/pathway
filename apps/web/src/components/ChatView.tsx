@@ -6748,8 +6748,8 @@ function ChatViewContent(props: ChatViewProps) {
     }
   }, [activeThreadRef, browserTakeoverId, releaseBrowserTakeoverMutation]);
   // The device panel releases control before calling this, so the run's device_open succeeds.
-  const resumeDeviceAgent = useCallback(async () => {
-    if (!activeThread || !activeThreadRef) return;
+  const resumeDeviceAgent = useCallback(async (): Promise<boolean> => {
+    if (!activeThread || !activeThreadRef) return false;
     const createdAt = new Date().toISOString();
     const result = await startThreadTurn({
       environmentId: activeThreadRef.environmentId,
@@ -6768,16 +6768,19 @@ function ChatViewContent(props: ChatViewProps) {
         createdAt,
       },
     });
-    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-      const error = squashAtomCommandFailure(result);
-      setThreadError(
-        activeThread.id,
-        error instanceof Error ? error.message : "Failed to resume the agent.",
-      );
+    if (result._tag === "Failure") {
+      if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        setThreadError(
+          activeThread.id,
+          error instanceof Error ? error.message : "Failed to resume the agent.",
+        );
+      }
+      return false;
     }
+    return true;
   }, [activeThread, activeThreadRef, setThreadError, startThreadTurn]);
   // Stable, so lease renewals don't re-render the device panel through this prop.
-  const handleResumeDeviceAgent = useCallback(() => void resumeDeviceAgent(), [resumeDeviceAgent]);
   const browserTakeoverBanner = useMemo<ComposerBannerStackItem | null>(() => {
     if (browserTakeoverDescriptor === null) return null;
     return browserTakeoverBannerItem(browserTakeoverDescriptor, {
@@ -9973,7 +9976,8 @@ function ChatViewContent(props: ChatViewProps) {
           threadRef={activeThreadRef}
           surface={activeRightPanelSurface}
           visible={rightPanelOpen}
-          onResumeAgent={handleResumeDeviceAgent}
+          agentWorking={isWorking}
+          onResumeAgent={resumeDeviceAgent}
           onDismissSetup={() =>
             useRightPanelStore.getState().closeSurface(activeThreadRef, activeRightPanelSurface.id)
           }

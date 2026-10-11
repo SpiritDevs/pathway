@@ -11,6 +11,7 @@ import { create, type ReactTestInstance, type ReactTestRenderer } from "react-te
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import { DeviceAndroidFoldControls } from "./DeviceAndroidFoldControls";
 import { DeviceControlBar } from "./DeviceControlBar";
+import { useDeviceControlMode } from "./useDeviceControlMode";
 import {
   DEVICE_CONTROL_RENEW_MS,
   useDeviceControlLease,
@@ -113,33 +114,40 @@ function deferred() {
 
 let renderer: ReactTestRenderer | undefined;
 let lease: DeviceControlLease;
-const resume = vi.fn();
-function Probe({ visible = true, threadId = "thread-1" }) {
+const resume = vi.fn<() => Promise<boolean>>();
+type ProbeProps = { visible?: boolean; threadId?: string; agentWorking?: boolean };
+function Probe({ visible = true, threadId = "thread-1", agentWorking = false }: ProbeProps) {
   const next = useDeviceControlLease({
     environmentId,
     hostId: "local",
     deviceId: "phone",
     visible,
   });
+  const control = useDeviceControlMode({
+    lease: next,
+    threadId,
+    visible,
+    agentWorking,
+    onResumeAgent: resume,
+  });
   useEffect(() => {
     lease = next;
   }, [next]);
   return (
-    <DeviceControlBar
-      lease={next}
-      threadId={threadId}
-      onOpenThread={() => {}}
-      onResumeAgent={resume}
-    />
+    <DeviceControlBar lease={next} control={control} threadId={threadId} onOpenThread={() => {}} />
   );
 }
-async function mount(props: { visible?: boolean; threadId?: string } = {}) {
+let probeProps: ProbeProps = {};
+async function mount(props: ProbeProps = {}) {
+  probeProps = props;
   await act(async () => {
     renderer = create(<Probe {...props} />);
   });
 }
-const rerender = (props: { visible?: boolean } = {}) =>
-  act(async () => renderer!.update(<Probe {...props} />));
+const rerender = (props: ProbeProps = {}) => {
+  probeProps = { ...probeProps, ...props };
+  return act(async () => renderer!.update(<Probe {...probeProps} />));
+};
 const text = () =>
   renderer!.root
     .findAll((node) => typeof node.type === "string" && node.type === "p")
@@ -164,6 +172,7 @@ beforeEach(() => {
   ])
     command.mockReset();
   resume.mockReset();
+  resume.mockResolvedValue(true);
   commands.release.mockResolvedValue(success(control({ phase: "idle" })));
   commands.state.current = serviceState([control({})]);
   commands.stateError.current = null;
@@ -178,24 +187,24 @@ afterEach(async () => {
 
 it("stays watch-only until the environment confirms this viewer's generation", async () => {
   await mount();
-  expect(text()).toContain("This thread's agent is in control");
+  expect(text()).toContain("Agent in control.");
   expect(lease.control).toBeNull();
 
   const acquired = deferred();
   commands.acquire.mockReturnValueOnce(acquired.promise);
-  await click("Take control");
+  await click("You");
   expect(commands.acquire).toHaveBeenCalledWith({
     environmentId,
     input: { hostId: "local", deviceId: "phone", viewerId: "viewer-1" },
   });
-  expect(button("Taking control…").props.disabled).toBe(true);
+  expect(button("You").props.disabled).toBe(true);
 
   // State can lag the acknowledgement; until it names this viewer, input stays off.
   commands.state.current = serviceState([control({ generation: 3, phase: "draining" })]);
   await act(async () => acquired.resolve(success(mine(4))));
   await rerender();
   expect(lease.control).toBeNull();
-  expect(button("Taking control…").props.disabled).toBe(true);
+  expect(button("You").props.disabled).toBe(true);
 
   commands.state.current = serviceState([mine(4)]);
   await rerender();
@@ -203,17 +212,17 @@ it("stays watch-only until the environment confirms this viewer's generation", a
   expect(text()).toContain("You're in control.");
 });
 
-it("offers Take control while another controller drains, but not while the state is unknown", async () => {
+it("offers You while another controller drains, but not while the state is unknown", async () => {
   commands.state.current = serviceState([control({ phase: "draining" })]);
   await mount();
   expect(text()).toContain("Finishing the previous controller's input");
-  expect(button("Take control").props.disabled).toBe(false);
+  expect(button("You").props.disabled).toBe(false);
 
   commands.state.current = serviceState([]);
   commands.stateError.current = "Disconnected";
   await rerender();
   expect(text()).toContain("Control status is unavailable");
-  expect(button("Take control").props.disabled).toBe(true);
+  expect(button("You").props.disabled).toBe(true);
   expect(lease.control).toBeNull();
 });
 
@@ -228,7 +237,7 @@ it("renews while held and releases on hide before input resumes", async () => {
   vi.useFakeTimers();
   commands.acquire.mockResolvedValueOnce(success(mine(5)));
   await mount();
-  await click("Take control");
+  await click("You");
   commands.state.current = serviceState([mine(5)]);
   await rerender();
   expect(lease.control).not.toBeNull();
@@ -256,7 +265,7 @@ it("releases on unmount and when hidden while still taking control", async () =>
   commands.acquire.mockReturnValueOnce(acquired.promise);
   commands.release.mockResolvedValue(success(control({ phase: "idle" })));
   await mount();
-  await click("Take control");
+  await click("You");
   await act(async () => renderer!.unmount());
   renderer = undefined;
   await act(async () => acquired.resolve(success(mine(7))));
@@ -269,15 +278,15 @@ it("releases on unmount and when hidden while still taking control", async () =>
 it("resumes the agent only after the release is acknowledged", async () => {
   commands.acquire.mockResolvedValueOnce(success(mine(8)));
   await mount();
-  await click("Take control");
+  await click("You");
   commands.state.current = serviceState([mine(8)]);
   await rerender();
 
   const released = deferred();
   commands.release.mockReturnValueOnce(released.promise);
-  await click("Resume agent");
+  await click("Agent");
   expect(lease.control).toBeNull();
-  expect(button("Releasing control…").props.disabled).toBe(true);
+  expect(button("Agent").props.disabled).toBe(true);
   expect(resume).not.toHaveBeenCalled();
   await act(async () => released.resolve(success(control({ generation: 9, phase: "idle" }))));
   expect(resume).toHaveBeenCalledOnce();
@@ -286,11 +295,11 @@ it("resumes the agent only after the release is acknowledged", async () => {
 it("does not resume the agent when the release fails", async () => {
   commands.acquire.mockResolvedValueOnce(success(mine(8)));
   await mount();
-  await click("Take control");
+  await click("You");
   commands.state.current = serviceState([mine(8)]);
   await rerender();
   commands.release.mockResolvedValueOnce(failure("input_unconfirmed"));
-  await click("Resume agent");
+  await click("Agent");
   expect(resume).not.toHaveBeenCalled();
   expect(text()).toContain("couldn't confirm the last input finished");
 });
@@ -298,12 +307,12 @@ it("does not resume the agent when the release fails", async () => {
 it("re-reads state on a stale generation and reports a takeover by another viewer", async () => {
   commands.acquire.mockResolvedValueOnce(failure("stale_generation"));
   await mount();
-  await click("Take control");
+  await click("You");
   expect(commands.refresh).toHaveBeenCalledOnce();
   expect(text()).toContain("Your control of this device ended");
 
   commands.acquire.mockResolvedValueOnce(success(mine(10)));
-  await click("Take control");
+  await click("You");
   commands.state.current = serviceState([mine(10)]);
   await rerender();
   expect(lease.control).not.toBeNull();
@@ -317,7 +326,7 @@ it("re-reads state on a stale generation and reports a takeover by another viewe
   await rerender();
   expect(lease.control).toBeNull();
   expect(text()).toContain("Someone else took control of this device.");
-  expect(text()).toContain("Someone else is in control. You're watching.");
+  expect(text()).toContain("Someone else is in control.");
 });
 
 it("links to another thread whose agent is in control", async () => {
@@ -331,7 +340,7 @@ it("links to another thread whose agent is in control", async () => {
 
 async function holding(generation: number) {
   commands.acquire.mockResolvedValueOnce(success(mine(generation)));
-  await click("Take control");
+  await click("You");
   commands.state.current = serviceState([mine(generation)]);
   await rerender();
   expect(lease.control?.generation).toBe(generation);
@@ -343,7 +352,7 @@ it.each(["stale_generation", "control_held", "control_required"] as const)(
     await mount();
     await holding(8);
     commands.release.mockResolvedValueOnce(failure(code));
-    await click("Resume agent");
+    await click("Agent");
     expect(resume).not.toHaveBeenCalled();
     expect(lease.control).toBeNull();
     expect(lease.error).not.toBeNull();
@@ -377,13 +386,13 @@ it("ends control when the environment connection drops or is replaced", async ()
   expect(lease.control).toBeNull();
   expect(text()).toContain("Control status is unavailable");
   expect(text()).toContain("Lost the connection to the environment");
-  expect(button("Take control").props.disabled).toBe(true);
+  expect(button("You").props.disabled).toBe(true);
 
   // The same snapshot after reconnecting does not restore the old lease.
   commands.connection.current = connected(2);
   await rerender();
   expect(lease.control).toBeNull();
-  expect(button("Take control").props.disabled).toBe(false);
+  expect(button("You").props.disabled).toBe(false);
   await holding(9);
 });
 
@@ -391,7 +400,7 @@ it("drops control when the connection changes while acquiring", async () => {
   const acquired = deferred();
   commands.acquire.mockReturnValueOnce(acquired.promise);
   await mount();
-  await click("Take control");
+  await click("You");
   commands.connection.current = connected(2);
   commands.state.current = serviceState([mine(7)]);
   await rerender();
@@ -413,12 +422,15 @@ it("treats a renewal that fails without a control code as lost control", async (
 
 it("ignores a late renewal failure from a released lease", async () => {
   vi.useFakeTimers();
-  await mount();
+  // A working agent keeps automatic control from re-taking the device between the two leases.
+  await mount({ agentWorking: true });
   await holding(8);
   const oldRenew = deferred();
   commands.renew.mockReturnValueOnce(oldRenew.promise);
   await act(async () => vi.advanceTimersByTime(DEVICE_CONTROL_RENEW_MS));
-  await click("Release control");
+  await act(async () => {
+    await lease.release();
+  });
   commands.state.current = serviceState([control({ generation: 9, phase: "idle", owner: null })]);
   await rerender();
   await holding(10);
@@ -442,10 +454,10 @@ it("hands back an acquisition hidden and shown again before it returned", async 
   const acquired = deferred();
   commands.acquire.mockReturnValueOnce(acquired.promise);
   await mount();
-  await click("Take control");
+  await click("You");
   await rerender({ visible: false });
   await rerender({ visible: true });
-  expect(button("Take control").props.disabled).toBe(false);
+  expect(button("You").props.disabled).toBe(false);
   commands.state.current = serviceState([mine(7)]);
   await act(async () => acquired.resolve(success(mine(7))));
   expect(lease.control).toBeNull();
@@ -521,7 +533,7 @@ it("offers a helper restart when the environment can't confirm earlier input fin
   commands.connection.current = connected(1);
   commands.acquire.mockResolvedValue(failure("input_unconfirmed"));
   await mount();
-  await click("Take control");
+  await click("You");
   expect(text()).toContain("Pathway couldn't confirm the last input finished");
 
   const restart = deferred();
@@ -534,7 +546,7 @@ it("offers a helper restart when the environment can't confirm earlier input fin
   expect(maybeButton("Restart device tools")).toBeUndefined();
 
   commands.acquire.mockResolvedValue(success(mine(4)));
-  await click("Take control");
+  await click("You");
   expect(commands.acquire).toHaveBeenCalledTimes(2);
 });
 
@@ -546,13 +558,13 @@ it("does not offer a helper restart for other control errors or without restart 
   commands.connection.current = connected(1);
   commands.acquire.mockResolvedValue(failure("input_unconfirmed"));
   await mount();
-  await click("Take control");
+  await click("You");
   expect(text()).toContain("Pathway couldn't confirm the last input finished");
   expect(maybeButton("Restart device tools")).toBeUndefined();
 
   commands.state.current = serviceState([control({ phase: "draining", owner: null })]);
   commands.acquire.mockResolvedValue(failure("control_held"));
-  await click("Take control");
+  await click("You");
   expect(maybeButton("Restart device tools")).toBeUndefined();
 });
 
@@ -563,7 +575,7 @@ it("retires the recovery error once the device recovers and another viewer takes
   commands.connection.current = connected(1);
   commands.acquire.mockResolvedValue(failure("input_unconfirmed"));
   await mount();
-  await click("Take control");
+  await click("You");
   expect(lease.canRecover).toBe(true);
 
   // Another client restarts the helpers and takes the device.
@@ -588,7 +600,7 @@ it("drops a refusal that arrives after the device recovered since it was asked",
   const acquired = deferred();
   commands.acquire.mockReturnValue(acquired.promise);
   await mount();
-  await click("Take control");
+  await click("You");
 
   // Another client recovers and takes the device before the refusal comes back.
   commands.state.current = serviceState([
@@ -609,7 +621,7 @@ it("keeps the recovery error while state is loading, failing or missing the devi
   commands.state.current = draining;
   commands.acquire.mockResolvedValue(failure("input_unconfirmed"));
   await mount();
-  await click("Take control");
+  await click("You");
   expect(lease.canRecover).toBe(true);
 
   for (const missing of [
@@ -632,8 +644,8 @@ it("ignores a late restart failure once recovery retired its error", async () =>
   commands.state.current = serviceState([control({ phase: "draining", owner: null })]);
   commands.connection.current = connected(1);
   commands.acquire.mockResolvedValue(failure("input_unconfirmed"));
-  await mount();
-  await click("Take control");
+  await mount({ agentWorking: true });
+  await click("You");
   const restart = deferred();
   commands.restart.mockReturnValue(restart.promise);
   await click("Restart device tools");
@@ -655,8 +667,8 @@ it("follows the device a restart failure names, not just this panel's device", a
   ]);
   commands.connection.current = connected(1);
   commands.acquire.mockResolvedValue(failure("input_unconfirmed"));
-  await mount();
-  await click("Take control");
+  await mount({ agentWorking: true });
+  await click("You");
   commands.restart.mockResolvedValue({
     _tag: "Failure",
     cause: Cause.fail(
@@ -690,4 +702,65 @@ it("follows the device a restart failure names, not just this panel's device", a
   expect(text()).not.toContain("couldn't confirm");
   await act(async () => restart.resolve(failure("input_unconfirmed")));
   expect(text()).not.toContain("couldn't confirm");
+});
+
+const nobody = () => control({ generation: 9, phase: "idle", owner: null });
+
+it("takes control by default while this thread's agent is idle", async () => {
+  commands.state.current = serviceState([nobody()]);
+  commands.acquire.mockResolvedValueOnce(success(mine(10)));
+  await mount();
+  expect(commands.acquire).toHaveBeenCalledOnce();
+  commands.state.current = serviceState([mine(10)]);
+  await rerender();
+  expect(text()).toContain("You're in control. Agent idle.");
+  expect(button("You").props["aria-pressed"]).toBe(true);
+});
+
+it("steps aside when the agent starts working, unless the viewer took control mid-turn", async () => {
+  commands.state.current = serviceState([nobody()]);
+  commands.acquire.mockResolvedValueOnce(success(mine(10)));
+  await mount();
+  commands.state.current = serviceState([mine(10)]);
+  await rerender();
+
+  await rerender({ agentWorking: true });
+  expect(commands.release).toHaveBeenCalledOnce();
+  commands.state.current = serviceState([nobody()]);
+  await rerender();
+  expect(text()).toContain("Agent working.");
+  expect(commands.acquire).toHaveBeenCalledOnce();
+
+  // Taking control during the turn sticks until it is handed back.
+  commands.acquire.mockResolvedValueOnce(success(mine(11)));
+  await click("You");
+  commands.state.current = serviceState([mine(11)]);
+  await rerender();
+  expect(commands.release).toHaveBeenCalledOnce();
+  expect(text()).toContain("The agent waits until you hand it back.");
+
+  await click("Agent");
+  expect(commands.release).toHaveBeenCalledTimes(2);
+  expect(resume).not.toHaveBeenCalled();
+});
+
+it("hands an idle agent the device without taking it back before its turn starts", async () => {
+  commands.state.current = serviceState([nobody()]);
+  commands.acquire.mockResolvedValueOnce(success(mine(10)));
+  await mount();
+  commands.state.current = serviceState([mine(10)]);
+  await rerender();
+
+  await click("Agent");
+  expect(resume).toHaveBeenCalledOnce();
+  commands.state.current = serviceState([nobody()]);
+  await rerender();
+  expect(text()).toContain("Agent working.");
+  expect(commands.acquire).toHaveBeenCalledOnce();
+
+  // Once the agent's turn has run and ended, control comes back to the viewer.
+  await rerender({ agentWorking: true });
+  commands.acquire.mockResolvedValueOnce(success(mine(12)));
+  await rerender({ agentWorking: false });
+  expect(commands.acquire).toHaveBeenCalledTimes(2);
 });

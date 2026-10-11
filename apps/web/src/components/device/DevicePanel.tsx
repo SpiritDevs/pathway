@@ -64,8 +64,10 @@ export function DevicePanel(props: {
   readonly surface: Extract<RightPanelSurface, { kind: "device" }>;
   readonly visible: boolean;
   readonly onDismissSetup: () => void;
+  /** This thread's agent is running a turn. */
+  readonly agentWorking: boolean;
   /** Sends the thread's continuation after this viewer hands control back. */
-  readonly onResumeAgent?: (() => void) | undefined;
+  readonly onResumeAgent?: (() => Promise<boolean>) | undefined;
 }) {
   const { environmentId, threadId } = props.threadRef;
   // A background tab or minimized window stops decoding video; the device keeps running.
@@ -268,6 +270,8 @@ export function DevicePanel(props: {
             hostDiagnostics={state.hostStatusDetail}
             devices={workspace.devices}
             visible={props.visible && pageVisible}
+            panelVisible={props.visible}
+            agentWorking={props.agentWorking}
             onClose={onClose}
             onPowerOff={onPowerOff}
             onOpenThread={onOpenThread}
