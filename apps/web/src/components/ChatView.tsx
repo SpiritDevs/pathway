@@ -4270,6 +4270,10 @@ function ChatViewContent(props: ChatViewProps) {
   );
   // The floating composer has no hero headline, so a new thread picks its project in the strip.
   const floatingProjectPicker = floatingChatCollapsed && isLocalDraftThread;
+  // Once there is an answer, the collapsed floating chat's title takes the context strip's place,
+  // so banners tuck behind it the same way.
+  const showFloatingChatTitleBar =
+    floatingChatCollapsed && floatingReplyText === null && timelineEntries.length > 0;
   const showComposerContextStrip =
     !isPanelPresentation &&
     !showSubagentComposerBar &&
@@ -10796,7 +10800,7 @@ function ChatViewContent(props: ChatViewProps) {
                       <ComposerBannerStack
                         className="relative z-0"
                         items={composerBannerItems}
-                        behindContextStrip={showComposerContextStrip}
+                        behindContextStrip={showComposerContextStrip || showFloatingChatTitleBar}
                         trailingSlotRef={hasPromptStash ? setStashSlot : undefined}
                       />
                     </div>
@@ -10806,7 +10810,7 @@ function ChatViewContent(props: ChatViewProps) {
                       <ComposerBannerStack
                         className="relative z-0"
                         items={composerBannerItems}
-                        behindContextStrip={showComposerContextStrip}
+                        behindContextStrip={showComposerContextStrip || showFloatingChatTitleBar}
                         trailingSlotRef={hasPromptStash ? setStashSlot : undefined}
                       />
                     </>
@@ -10830,9 +10834,7 @@ function ChatViewContent(props: ChatViewProps) {
                         : undefined
                     }
                   >
-                    {floatingChatCollapsed &&
-                    floatingReplyText === null &&
-                    timelineEntries.length > 0 ? (
+                    {showFloatingChatTitleBar ? (
                       // Once there is an answer, the conversation's title takes the strip's place.
                       <div className="relative z-0">
                         <FloatingChatTitleBar
