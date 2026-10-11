@@ -87,16 +87,29 @@ export const make = Effect.gen(function* BrowserExtensionsMake() {
   /** Brings one session's loaded extensions in line with the settings. */
   const reconcile = async (previewSession: Session) => {
     const enabled = new Set(desired.filter((entry) => entry.enabled).map((entry) => entry.path));
-    for (const extension of previewSession.extensions.getAllExtensions()) {
-      if (!enabled.has(extension.path)) previewSession.extensions.removeExtension(extension.id);
+    // Some Electron runtimes ship without the extensions API. Report that per
+    // extension rather than throwing, which would fail every settings save.
+    const extensions: Session["extensions"] | undefined = previewSession.extensions;
+    if (!extensions) {
+      for (const extensionPath of enabled) {
+        loadStates.set(extensionPath, {
+          id: null,
+          error: "Extensions are not available in this version of Pathway.",
+        });
+      }
+      emit();
+      return;
     }
-    const loaded = new Set(previewSession.extensions.getAllExtensions().map((entry) => entry.path));
+    for (const extension of extensions.getAllExtensions()) {
+      if (!enabled.has(extension.path)) extensions.removeExtension(extension.id);
+    }
+    const loaded = new Set(extensions.getAllExtensions().map((entry) => entry.path));
     await Promise.all(
       [...enabled]
         .filter((extensionPath) => !loaded.has(extensionPath))
         .map(async (extensionPath) => {
           try {
-            const extension = await previewSession.extensions.loadExtension(extensionPath, {
+            const extension = await extensions.loadExtension(extensionPath, {
               allowFileAccess: false,
             });
             loadStates.set(extensionPath, { id: extension.id, error: null });
