@@ -210,6 +210,13 @@ export const OrchestratorWorkerReference = Schema.Struct({
   isSecret: Schema.optionalKey(Schema.Boolean),
 });
 export type OrchestratorWorkerReference = typeof OrchestratorWorkerReference.Type;
+/** The reactions a person can leave on a conversation message, in menu order. */
+export const ORCHESTRATOR_MESSAGE_REACTIONS = ["❤️", "👍", "👎", "😂", "‼️", "❓"] as const;
+export const OrchestratorMessageReaction = Schema.Struct({
+  emoji: Schema.String,
+  userId: Schema.String,
+});
+export type OrchestratorMessageReaction = typeof OrchestratorMessageReaction.Type;
 export const OrchestratorMessage = Schema.Struct({
   worker: Schema.optionalKey(OrchestratorWorkerReference),
   reply: Schema.optionalKey(
@@ -242,6 +249,8 @@ export const OrchestratorMessage = Schema.Struct({
   mentions: Schema.optionalKey(Schema.Array(HumanMention)),
   replyToId: Schema.NullOr(Schema.String),
   attachments: Schema.optionalKey(Schema.Array(OrchestratorAttachment)),
+  /** At most one per person. The agent that wrote the message is told about a new one. */
+  reactions: Schema.optionalKey(Schema.Array(OrchestratorMessageReaction)),
 });
 export type OrchestratorMessage = typeof OrchestratorMessage.Type;
 export const OrchestratorReader = Schema.Struct({
@@ -475,6 +484,8 @@ export const OrchestratorDecision = Schema.Struct({
   routeTo: Schema.optionalKey(Schema.String),
   expression: Schema.optionalKey(Schema.Unknown),
   message: Schema.String,
+  /** An earlier conversation message this one answers, instead of the one being responded to. */
+  replyToId: Schema.optionalKey(Schema.String),
   attention: Schema.optional(Schema.Literals(["none", "routine", "urgent"])),
   actions: Schema.Array(OrchestratorAction),
   summary: Schema.String,

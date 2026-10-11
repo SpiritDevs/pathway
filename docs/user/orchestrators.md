@@ -96,9 +96,17 @@ The coordinator sees available models and supported reasoning options from eligi
 
 Assignment cards show the selected model and a short explanation when available. Unsupported or unavailable choices fail without silently switching models. Allowance limits still apply, and another account needs its own allocation. Offline or older environments may not provide a current catalog. Presets remain saved and apply to conversations opened on mobile; edit them from web or desktop.
 
+## Message actions
+
+On the web and desktop, right-click a message to react to it, reply to it, copy its text, or share it. On a touch screen, use the **…** button on the message instead.
+
+Each person can leave one reaction on a message; choose the same reaction again to remove it. Reactions appear on the top corner of the message for everyone in the conversation. When you react to an agent's message, that agent is told and treats it as a short reply: ❓ asks it to explain, 👎 tells it to change course, ‼️ marks the message as important, and 👍 or ❤️ answers yes to a question or proposal. It stays quiet when a reaction needs no answer. Reactions to another person's message, or to your own, are not sent to agents.
+
+**Share** opens the system share sheet. It is available in the Mac desktop app and in browsers that support sharing.
+
 ## Images and files
 
-Use the paperclip in a conversation to attach images and files, or paste an image into the compose box. On the web and desktop you can also drop files onto the compose bar. On iOS, use Photos, Choose files, or Paste in the attachment menu.
+On the web and desktop, choose **+** in a conversation and then **Upload files** to attach images and files, or paste an image into the compose box. On the web and desktop you can also drop files onto the compose bar. On iOS, use Photos, Choose files, or Paste in the attachment menu.
 
 Attach up to eight files per message: images up to 10 MB each, other files up to 50 MB. You can send attachments without text. Preview images and remove unwanted files before sending. Wait for uploads to finish; if an upload fails, retry it or remove it. Selected files stay with the draft when you switch between the full conversation and floating companion. Unsent drafts are not retained after closing or reloading the app.
 

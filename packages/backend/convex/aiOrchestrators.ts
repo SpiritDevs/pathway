@@ -6,7 +6,11 @@ import {
 } from "./lib/personalAssistant.ts";
 import { internal } from "./_generated/api.js";
 import { conversationWork, reconcileConversationLifecycle } from "./lib/conversationLifecycle.ts";
-import { conversationAttention, type HumanMention } from "@spiritdevs/contracts/aiOrchestrator";
+import {
+  conversationAttention,
+  ORCHESTRATOR_MESSAGE_REACTIONS,
+  type HumanMention,
+} from "@spiritdevs/contracts/aiOrchestrator";
 import {
   sendWorkerReply,
   decorateConversationMessage,
@@ -1254,6 +1258,89 @@ export const markRead = mutation({
       memberId: member._id,
       through: Math.min(chat.lastSequence, args.sequence),
     });
+    return null;
+  },
+});
+/**
+ * Lets the agent that wrote a message respond to a reaction on it. The note stays out of
+ * history, and quotes the message so the agent reads the reaction as a reply to it.
+ */
+async function notifyOrchestratorReaction(
+  ctx: MutationCtx,
+  chat: Doc<"aiOrchestratorChats">,
+  user: Doc<"users">,
+  message: Doc<"aiOrchestratorMessages">,
+  emoji: string,
+) {
+  if (message.senderKind !== "orchestrator" || chat.archived) return;
+  const targetId = chat.orchestratorIds.includes(message.senderId) ? message.senderId : chat.leadId;
+  const target = await findOrchestrator(ctx, targetId);
+  if (!target || target.status !== "active" || !canDirectOrchestrator(target, user.clerkSubject))
+    return;
+  const companyId = await orchestratorJobCompanyId(ctx, target, chat);
+  if (!companyId) return;
+  // Taking a reaction off and putting the same one back says nothing new.
+  const id = `reaction:${message.id}:${user.clerkSubject}:${emoji}`;
+  const repeated = await ctx.db
+    .query("aiOrchestratorMessages")
+    .withIndex("by_domain_id", (q) => q.eq("id", id))
+    .unique();
+  if (repeated) return;
+  await appendChatMessage(ctx, chat, {
+    id,
+    senderKind: "system",
+    senderId: "reaction",
+    senderName: "Pathway",
+    text: `${user.displayName || "A participant"} reacted ${emoji} to your quoted message. Read it as their brief reply to that message, not as a new request. ❓ asks you to clarify or explain it. ‼️ marks it as important or urgent. 👎 means they disagree or it was not what they wanted: correct course, or ask what to change. 👍 and ❤️ are approval, and mean yes when the message asked a question or proposed something. 😂 is amusement. Reply or act only when the reaction calls for it; for plain approval or amusement with nothing pending, return an empty message with attention "none".`,
+    status: "queued",
+    replyToId: message.id,
+  });
+  const now = Date.now();
+  await ctx.db.insert("aiOrchestratorJobs", {
+    id: mintDomainId(now),
+    orchestratorId: target.id,
+    chatId: chat.id,
+    messageId: id,
+    companyId,
+    status: "queued",
+    environmentId: null,
+    generation: 0,
+    leaseExpiresAt: 0,
+    modelIndex: 0,
+    error: "",
+    createdAt: now,
+    updatedAt: now,
+  });
+}
+
+/** Sets the caller's reaction to a message; choosing the same emoji again removes it. */
+export const react = mutation({
+  args: { chatId: v.string(), messageId: v.string(), emoji: v.string() },
+  handler: async (ctx, args) => {
+    const { chat, member, user } = await readableChat(ctx, args.chatId);
+    if (!(ORCHESTRATOR_MESSAGE_REACTIONS as readonly string[]).includes(args.emoji))
+      return fail("Choose one of the available reactions.");
+    const message = await ctx.db
+      .query("aiOrchestratorMessages")
+      .withIndex("by_domain_id", (q) => q.eq("id", args.messageId))
+      .unique();
+    if (
+      !message ||
+      message.chatId !== args.chatId ||
+      message.sequence < member.fromSequence ||
+      message.senderKind === "system"
+    )
+      return fail("This message is not available.");
+    const others = (message.reactions ?? []).filter(
+      (reaction) => reaction.userId !== user.clerkSubject,
+    );
+    const removing = message.reactions?.some(
+      (reaction) => reaction.userId === user.clerkSubject && reaction.emoji === args.emoji,
+    );
+    await ctx.db.patch(message._id, {
+      reactions: removing ? others : [...others, { emoji: args.emoji, userId: user.clerkSubject }],
+    });
+    if (!removing) await notifyOrchestratorReaction(ctx, chat, user, message, args.emoji);
     return null;
   },
 });

@@ -19,6 +19,12 @@ export interface ElectronMenuContextInput {
   readonly position: Option.Option<ElectronMenuPosition>;
 }
 
+export interface ElectronMenuShareInput {
+  readonly window: Electron.BrowserWindow;
+  readonly text: string;
+  readonly position: Option.Option<ElectronMenuPosition>;
+}
+
 export interface ElectronMenuTemplateInput {
   readonly window: Electron.BrowserWindow;
   readonly template: readonly Electron.MenuItemConstructorOptions[];
@@ -56,6 +62,8 @@ export class ElectronMenu extends Context.Service<
       input: ElectronMenuContextInput,
     ) => Effect.Effect<Option.Option<string>>;
     readonly popupTemplate: (input: ElectronMenuTemplateInput) => Effect.Effect<void>;
+    /** Opens the macOS share sheet; false on platforms without one or when it cannot open. */
+    readonly shareText: (input: ElectronMenuShareInput) => Effect.Effect<boolean>;
   }
 >()("@spiritdevs/desktop/electron/ElectronMenu") {}
 
@@ -206,6 +214,24 @@ export const make = Effect.gen(function* () {
                 cause,
               }),
           }).pipe(Effect.orDie),
+    shareText: (input) =>
+      platform !== "darwin"
+        ? Effect.succeed(false)
+        : Effect.sync(() => {
+            try {
+              const position = normalizePosition(
+                input.position,
+                input.window.webContents.getZoomFactor(),
+              );
+              new Electron.ShareMenu({ texts: [input.text] }).popup({
+                window: input.window,
+                ...Option.getOrUndefined(position),
+              });
+              return true;
+            } catch {
+              return false;
+            }
+          }),
     showContextMenu: (input) =>
       Effect.callback<Option.Option<string>>((resume) => {
         const normalizedItems = normalizeContextMenuItems(input.items);

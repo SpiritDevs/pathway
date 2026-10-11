@@ -276,6 +276,7 @@ export const aiOrchestratorTables = {
     seenBy: v.optional(v.array(v.string())),
     coordination: v.optional(v.boolean()),
     mentions: v.optional(v.array(v.object({ kind: v.literal("user"), id: v.string() }))),
+    reactions: v.optional(v.array(v.object({ emoji: v.string(), userId: v.string() }))),
     replyToId: v.union(v.string(), v.null()),
     createdAt: v.number(),
   })

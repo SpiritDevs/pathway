@@ -849,7 +849,12 @@ export async function decorateConversationMessage(
   const seenBy =
     row.seenBy ??
     (legacyJob && !legacyJob.routingCandidateIds?.length ? [legacyJob.orchestratorId] : []);
-  const source = row.replyToId ? await chatMessage(ctx, row.replyToId) : null;
+  const trigger = row.replyToId ? await chatMessage(ctx, row.replyToId) : null;
+  // A reply to a reaction quotes the message that was reacted to, not the hidden note.
+  const source =
+    trigger?.senderKind === "system" && trigger.senderId === "reaction" && trigger.replyToId
+      ? await chatMessage(ctx, trigger.replyToId)
+      : trigger;
   const delivery = row.worker
     ? await ctx.db
         .query("aiOrchestratorWorkerMessages")

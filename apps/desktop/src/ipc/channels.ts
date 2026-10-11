@@ -11,6 +11,7 @@ export const SET_THEME_CHANNEL = "desktop:set-theme";
 export const SET_WINDOW_BUTTONS_VISIBLE_CHANNEL = "desktop:set-window-buttons-visible";
 export const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
 export const OPEN_EXTERNAL_CHANNEL = "desktop:open-external";
+export const SHARE_TEXT_CHANNEL = "desktop:share-text";
 export const MENU_ACTION_CHANNEL = "desktop:menu-action";
 export const SNAP_SHOT_EVENT_CHANNEL = "desktop:snap-shot-event";
 export const TRACKPAD_SCROLL_END_CHANNEL = "desktop:trackpad-scroll-end";

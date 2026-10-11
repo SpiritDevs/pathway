@@ -340,6 +340,31 @@ export const openExternal = DesktopIpc.makeIpcMethod({
   }),
 });
 
+export const shareText = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.SHARE_TEXT_CHANNEL,
+  payload: Schema.Struct({
+    text: Schema.String,
+    position: Schema.optionalKey(ContextMenuPosition),
+  }),
+  result: Schema.Boolean,
+  handler: Effect.fn("desktop.ipc.window.shareText")(function* (input, event) {
+    const electronMenu = yield* ElectronMenu.ElectronMenu;
+    const electronWindow = yield* ElectronWindow.ElectronWindow;
+    const window = yield* ElectronWindow.senderWindowOr(
+      event?.sender,
+      electronWindow.focusedMainOrFirst,
+    );
+    if (Option.isNone(window)) {
+      return false;
+    }
+    return yield* electronMenu.shareText({
+      window: window.value,
+      text: input.text,
+      position: Option.fromNullishOr(input.position),
+    });
+  }),
+});
+
 /** Theme files are a few KB; anything larger returns empty text and lets the
  *  renderer reject it by size without the contents ever crossing the bridge. */
 const PICKED_THEME_FILE_MAX_BYTES = 256 * 1024;

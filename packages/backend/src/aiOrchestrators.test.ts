@@ -154,6 +154,92 @@ describe("persistent orchestrator identities and messages", () => {
       owner.mutation(api.aiOrchestrators.send, { ...message, text: "Different request" }),
     ).rejects.toThrow("already in use");
   });
+  it("keeps one reaction per person and removes it when chosen again", async () => {
+    const t = harness();
+    await seed(t);
+    const { owner, chatId } = await personalChat(t);
+    await owner.mutation(api.aiOrchestrators.send, { chatId, id: "message-1", text: "Hello" });
+    const reactions = async () =>
+      (await owner.query(api.aiOrchestrators.messages, { chatId })).messages[0]?.reactions;
+    const react = (emoji: string) =>
+      owner.mutation(api.aiOrchestrators.react, { chatId, messageId: "message-1", emoji });
+
+    await react("👍");
+    await react("❤️");
+    expect(await reactions()).toEqual([{ emoji: "❤️", userId: "owner" }]);
+    await react("❤️");
+    expect(await reactions()).toEqual([]);
+
+    await expect(react("🦄")).rejects.toThrow("available reactions");
+    await expect(
+      human(t, "colleague").mutation(api.aiOrchestrators.react, {
+        chatId,
+        messageId: "message-1",
+        emoji: "👍",
+      }),
+    ).rejects.toThrow("access");
+  });
+  it("tells the agent about a new reaction to its message, once, without adding history", async () => {
+    const t = harness();
+    await seed(t);
+    const { owner, id, chatId } = await personalChat(t);
+    await owner.mutation(api.aiOrchestrators.send, { chatId, id: "message-1", text: "Hello" });
+    const agentSays = (messageId: string, text: string, replyToId: string | null) =>
+      t.run(async (ctx) => {
+        const chat = (await ctx.db.query("aiOrchestratorChats").collect()).find(
+          (row) => row.id === chatId,
+        )!;
+        await appendChatMessage(ctx, chat, {
+          id: messageId,
+          senderKind: "orchestrator",
+          senderId: id,
+          senderName: "Chief",
+          text,
+          status: "sent",
+          replyToId,
+        });
+      });
+    await agentSays("reply-1", "Shall I proceed?", null);
+    const react = (messageId: string, emoji: string) =>
+      owner.mutation(api.aiOrchestrators.react, { chatId, messageId, emoji });
+    const wakes = () =>
+      t.run(async (ctx) =>
+        (await ctx.db.query("aiOrchestratorJobs").collect()).filter((job) =>
+          job.messageId.startsWith("reaction:"),
+        ),
+      );
+
+    // Reacting to your own message is between people.
+    await react("message-1", "👍");
+    expect(await wakes()).toHaveLength(0);
+
+    // On, off, and on again is still one reaction.
+    await react("reply-1", "👍");
+    await react("reply-1", "👍");
+    await react("reply-1", "👍");
+    const queued = await wakes();
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatchObject({ orchestratorId: id, status: "queued" });
+    const note = await t.run((ctx) =>
+      ctx.db
+        .query("aiOrchestratorMessages")
+        .withIndex("by_domain_id", (q) => q.eq("id", queued[0]!.messageId))
+        .unique(),
+    );
+    expect(note).toMatchObject({ senderKind: "system", replyToId: "reply-1" });
+    expect(note?.text).toContain("owner reacted 👍");
+
+    const page = await owner.query(api.aiOrchestrators.messages, { chatId });
+    expect(page.messages.map((message) => message.id)).toEqual(["message-1", "reply-1"]);
+
+    // The agent's answer quotes the message that was reacted to.
+    await agentSays("reply-2", "Going ahead.", queued[0]!.messageId);
+    const answered = await owner.query(api.aiOrchestrators.messages, { chatId });
+    expect(answered.messages.at(-1)?.reply).toMatchObject({
+      id: "reply-1",
+      text: "Shall I proceed?",
+    });
+  });
   it("cancels unstarted messages atomically and cannot cancel one already claimed", async () => {
     const t = harness();
     await seed(t);
@@ -773,6 +859,39 @@ describe("coordinator reasoning claims and action boundaries", () => {
       seenAt,
       seenBy: [test.id],
     });
+  });
+
+  it("lets the coordinator answer an earlier message, falling back to its trigger", async () => {
+    const test = await coordinatorHarness();
+    const answer = async (text: string, replyToId?: string) => {
+      const run = (await test.claim())!;
+      await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+        companyId: "workspace",
+        jobId: run.id,
+        generation: run.generation,
+        result: { ...decision(), message: text, ...(replyToId ? { replyToId } : {}) },
+      });
+      const page = await test.owner.query(api.aiOrchestrators.messages, { chatId: test.chatId });
+      return page.messages.at(-1);
+    };
+    expect(await answer("Hi Corey!")).toMatchObject({ replyToId: "greeting" });
+
+    await test.owner.mutation(api.aiOrchestrators.send, {
+      chatId: test.chatId,
+      id: "ask",
+      text: "Reply to my first message",
+    });
+    expect(await answer("Noted, Corey.", "greeting")).toMatchObject({
+      replyToId: "greeting",
+      reply: { id: "greeting" },
+    });
+
+    await test.owner.mutation(api.aiOrchestrators.send, {
+      chatId: test.chatId,
+      id: "again",
+      text: "And this one",
+    });
+    expect(await answer("Done.", "not-a-message")).toMatchObject({ replyToId: "again" });
   });
 
   it("does not expose activity for messages outside a participant's shared history", async () => {

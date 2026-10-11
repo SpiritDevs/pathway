@@ -7,24 +7,35 @@ import {
   PencilIcon,
   ReplyIcon,
   SendIcon,
+  ShareIcon,
   XIcon,
 } from "lucide-react";
 import { makeFunctionReference } from "convex/server";
-import type {
-  OrchestratorMessage,
-  OrchestratorWorkerAction,
-  OrchestratorWorkerMessage,
+import {
+  ORCHESTRATOR_MESSAGE_REACTIONS,
+  type OrchestratorMessage,
+  type OrchestratorWorkerAction,
+  type OrchestratorWorkerMessage,
 } from "@spiritdevs/contracts/aiOrchestrator";
+import { cn, isMacPlatform } from "../../lib/utils";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { mapEnvironmentControlError } from "../../cloud/environmentControl";
 import { useOrchestrators } from "./OrchestratorContext";
+import { groupReactions } from "./conversationReactions";
 import { canDirectMessageWorker, replyToMessage } from "./conversationReply";
 
+/**
+ * A message with its right-click menu (react, reply, copy, share) and the reactions left on
+ * it, shown as a tapback on its top corner. Touch screens cannot right-click, so they keep a button that opens the same menu.
+ */
 export function ConversationMessageActions({
   message,
+  own,
   children,
 }: {
   message: OrchestratorMessage;
+  /** The viewer sent this message, so its reactions ride its top-left corner. */
+  own: boolean;
   children: ReactNode;
 }) {
   const state = useOrchestrators();
@@ -33,6 +44,30 @@ export function ConversationMessageActions({
   const pending = delivery?.state === "pending";
   const canDirect = canDirectMessageWorker(message, state.contacts);
   const reply = () => state.setReply(message.chatId, replyToMessage(message));
+  const reactions = groupReactions(message.reactions, state.accountID);
+  const react = (emoji: string) => {
+    void state
+      .request("aiOrchestrators:react", { chatId: message.chatId, messageId: message.id, emoji })
+      .catch((cause) => state.setError(mapEnvironmentControlError(cause).message));
+  };
+  // The desktop app opens the Mac share sheet; browsers that can share use their own.
+  const shareOnDesktop = isMacPlatform(navigator.platform)
+    ? window.desktopBridge?.shareText
+    : undefined;
+  const canShare = shareOnDesktop !== undefined || typeof navigator.share === "function";
+  const share = (position: { x: number; y: number }) => {
+    const failed = () => state.setError("Could not share this message.");
+    if (shareOnDesktop) {
+      void shareOnDesktop(message.text, position).then((opened) => {
+        if (!opened) failed();
+      }, failed);
+      return;
+    }
+    void navigator.share({ text: message.text }).catch((cause: unknown) => {
+      // Closing the share sheet is not a failure.
+      if (!(cause instanceof DOMException && cause.name === "AbortError")) failed();
+    });
+  };
   const run = async (action: OrchestratorWorkerAction) => {
     try {
       await state.request("aiOrchestratorControls:control", {
@@ -84,7 +119,8 @@ export function ConversationMessageActions({
   };
   return (
     <div
-      className="group/message relative"
+      // Room above for the tapback, which overlaps the bubble's top edge.
+      className={cn("group/message relative", reactions.length > 0 && "mt-4")}
       onContextMenu={(event) => {
         event.preventDefault();
         setPoint({ x: event.clientX, y: event.clientY });
@@ -94,8 +130,11 @@ export function ConversationMessageActions({
       <button
         type="button"
         aria-label={`Actions for message from ${message.senderName}`}
-        className="absolute -top-3 right-1 flex size-7 items-center justify-center rounded-full border bg-popover text-foreground opacity-0 shadow-sm transition-opacity group-hover/message:opacity-100 focus:opacity-100 data-[open=true]:opacity-100"
-        data-open={!!point}
+        className={cn(
+          "absolute -top-3 hidden size-7 items-center justify-center rounded-full border bg-popover text-foreground shadow-sm pointer-coarse:flex",
+          // Opposite the tapback's corner.
+          own ? "right-1" : "left-1",
+        )}
         onClick={(event) => {
           const rect = event.currentTarget.getBoundingClientRect();
           setPoint({ x: rect.right, y: rect.bottom });
@@ -122,8 +161,25 @@ export function ConversationMessageActions({
           <MenuPopup
             align="start"
             anchor={{ getBoundingClientRect: () => new DOMRect(point.x, point.y, 0, 0) }}
-            className="w-48"
+            className="w-56"
           >
+            <div role="group" aria-label="React" className="flex justify-between px-1 pb-1">
+              {ORCHESTRATOR_MESSAGE_REACTIONS.map((emoji) => (
+                <MenuItem
+                  key={emoji}
+                  aria-label={`React with ${emoji}`}
+                  className={cn(
+                    "size-8 min-h-0 justify-center rounded-full p-0 text-lg sm:min-h-0 sm:text-lg",
+                    reactions.some((reaction) => reaction.mine && reaction.emoji === emoji) &&
+                      "bg-accent",
+                  )}
+                  onClick={() => react(emoji)}
+                >
+                  {emoji}
+                </MenuItem>
+              ))}
+            </div>
+            <MenuSeparator />
             <MenuItem onClick={reply} disabled={message.worker?.isSecret}>
               <ReplyIcon />
               Reply
@@ -136,8 +192,14 @@ export function ConversationMessageActions({
               }}
             >
               <CopyIcon />
-              Copy text
+              Copy
             </MenuItem>
+            {canShare && (
+              <MenuItem disabled={!message.text} onClick={() => share(point)}>
+                <ShareIcon />
+                Share…
+              </MenuItem>
+            )}
             {pending && canDirect && delivery.mode !== "answer" && (
               <>
                 <MenuSeparator />
@@ -232,6 +294,41 @@ export function ConversationMessageActions({
             )}
           </MenuPopup>
         </Menu>
+      )}
+      {reactions.length > 0 && (
+        // A tapback: it rides the bubble's outer top corner, away from the side it hangs on.
+        <div
+          className={cn(
+            "absolute -top-3.5 flex h-7 items-center gap-0.5 rounded-full border bg-popover px-0.5 shadow-sm",
+            own ? "-left-3" : "-right-3",
+          )}
+        >
+          {reactions.map((reaction) => (
+            <button
+              key={reaction.emoji}
+              type="button"
+              aria-pressed={reaction.mine}
+              aria-label={`${reaction.emoji} ${reaction.count}, ${reaction.mine ? "remove your reaction" : "react too"}`}
+              className={cn(
+                "flex h-6 min-w-6 items-center justify-center gap-0.5 rounded-full px-1 text-[11px] tabular-nums",
+                reaction.mine ? "bg-blue-500 text-white" : "text-muted-foreground",
+              )}
+              onClick={() => react(reaction.emoji)}
+            >
+              <span
+                className={cn(
+                  "text-sm leading-none",
+                  // Emoji keep their own colours, so red or yellow glyphs are flattened to
+                  // white on the blue. A face would become a blank disc, so it stays as it is.
+                  reaction.mine && reaction.emoji !== "😂" && "brightness-0 invert",
+                )}
+              >
+                {reaction.emoji}
+              </span>
+              {reaction.count > 1 ? reaction.count : null}
+            </button>
+          ))}
+        </div>
       )}
     </div>
   );

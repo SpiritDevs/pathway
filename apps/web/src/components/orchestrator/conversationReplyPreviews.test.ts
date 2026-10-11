@@ -50,6 +50,38 @@ describe("redundant reply previews", () => {
       ]),
     ]).toEqual(["new-reply"]);
   });
+  it("hides replies to any of the messages one person sent back to back", () => {
+    expect([
+      ...redundantReplyPreviews([
+        request("request", 1),
+        request("follow-up", 2),
+        reply("first", 3),
+        reply("second", 4, "follow-up"),
+      ]),
+    ]).toEqual(["first", "second"]);
+  });
+  it("hides the quote on an answer to a reaction only when the message is directly above", () => {
+    const quoting = (id: string, sequence: number, target: string): OrchestratorMessage => ({
+      ...reply(id, sequence, `reaction:${target}:user:❓`),
+      reply: { id: target, senderName: "chief", text: target },
+    });
+    // The hidden reaction note takes sequence 3.
+    expect([
+      ...redundantReplyPreviews([
+        request("request", 1),
+        reply("one", 2),
+        quoting("answer", 4, "one"),
+      ]),
+    ]).toEqual(["one", "answer"]);
+    expect([
+      ...redundantReplyPreviews([
+        request("request", 1),
+        reply("one", 2),
+        reply("two", 3),
+        quoting("answer", 5, "one"),
+      ]),
+    ]).toEqual(["one", "two"]);
+  });
   it("keeps previews once another coordinator participates, including when the first returns", () => {
     expect([
       ...redundantReplyPreviews([

@@ -121,6 +121,7 @@ const makeElectronMenuLayer = (
       Deferred.succeed(applicationMenuTemplate, template).pipe(Effect.asVoid),
     popupTemplate: () => Effect.void,
     showContextMenu: () => Effect.succeed(Option.none()),
+    shareText: () => Effect.succeed(false),
   } satisfies ElectronMenu.ElectronMenu["Service"]);
 
 const configureMenu = (

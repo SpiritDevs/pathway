@@ -1654,6 +1654,25 @@ export const complete = mutation({
     }
     if (result.message.trim()) {
       const chat = await findChat(ctx, claim.chat.id);
+      // The coordinator may answer an earlier message it can see instead of its trigger.
+      const chosen =
+        result.replyToId && result.replyToId !== claim.message.id
+          ? await ctx.db
+              .query("aiOrchestratorMessages")
+              .withIndex("by_domain_id", (q) => q.eq("id", result.replyToId!))
+              .unique()
+          : null;
+      const historyStart =
+        claim.chat.orchestratorHistory?.find(
+          (entry) => entry.orchestratorId === claim.orchestrator.id,
+        )?.fromSequence ?? 0;
+      const replyToId =
+        chosen &&
+        chosen.chatId === claim.chat.id &&
+        chosen.senderKind !== "system" &&
+        chosen.sequence >= historyStart
+          ? chosen.id
+          : claim.message.id;
       const sameMessage = sentMessages.find((message) => message.text === result.message.trim());
       const replyId = sameMessage?.id ?? mintDomainId(Date.now());
       if (!sameMessage)
@@ -1669,7 +1688,7 @@ export const complete = mutation({
             mentions: [...(result.mentions ?? [])],
             expression: normalizeAvatarExpression(result.expression),
             status: "sent",
-            replyToId: claim.message.id,
+            replyToId,
           },
           {
             urgent: result.attention === "urgent",

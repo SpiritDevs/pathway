@@ -1743,6 +1743,8 @@ export interface DesktopBridge {
     position?: { x: number; y: number },
   ) => Promise<T | null>;
   openExternal: (url: string) => Promise<boolean>;
+  /** Opens the system share sheet for some text; resolves false where there is none. */
+  shareText?: (text: string, position?: { x: number; y: number }) => Promise<boolean>;
   onMenuAction: (listener: (action: string) => void) => () => void;
   onSnapShotEvent?: (listener: (event: DesktopSnapShotEvent) => void) => () => void;
   getWindowFullscreenState: () => boolean;

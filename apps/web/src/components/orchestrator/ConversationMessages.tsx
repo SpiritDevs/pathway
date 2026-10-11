@@ -294,7 +294,7 @@ export function ConversationMessages({
                           {own ? "You" : message.senderName}
                         </p>
                       )}
-                      <ConversationMessageActions message={message}>
+                      <ConversationMessageActions message={message} own={own}>
                         <div
                           data-message-id={message.id}
                           style={

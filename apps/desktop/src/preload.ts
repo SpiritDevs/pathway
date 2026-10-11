@@ -185,6 +185,11 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ...(position === undefined ? {} : { position }),
     }),
   openExternal: (url: string) => ipcRenderer.invoke(IpcChannels.OPEN_EXTERNAL_CHANNEL, url),
+  shareText: (text, position) =>
+    ipcRenderer.invoke(IpcChannels.SHARE_TEXT_CHANNEL, {
+      text,
+      ...(position === undefined ? {} : { position }),
+    }),
   onMenuAction: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, action: unknown) => {
       if (typeof action !== "string") return;
