@@ -27,6 +27,8 @@ export type BrowserHistoryListEntry = BrowserHistoryEntry & { readonly projectKe
 export const BROWSER_HISTORY_MAX_ENTRIES_PER_PROJECT = 50;
 /** Pages imported from another browser live under their own key with a larger cap. */
 export const BROWSER_HISTORY_IMPORTED_KEY = "imported";
+/** Conversations have no project, so their visits share this key. */
+export const CONVERSATIONS_BROWSER_HISTORY_KEY = "conversations";
 export const BROWSER_HISTORY_MAX_IMPORTED_ENTRIES = 500;
 /** A committed navigation this soon after a recorded visit to the same page is that visit. */
 const SAME_VISIT_WINDOW_MS = 5_000;

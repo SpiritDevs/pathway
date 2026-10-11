@@ -308,7 +308,11 @@ import {
   shouldShowProviderInstanceBadge,
   sortProviderInstanceEntries,
 } from "../providerInstances";
-import { useClientSettings, useEnvironmentSettings } from "../hooks/useSettings";
+import {
+  useClientSettings,
+  useClientSettingsHydrated,
+  useEnvironmentSettings,
+} from "../hooks/useSettings";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import {
@@ -324,8 +328,11 @@ import {
 import { resolveNewDraftStartFromOrigin } from "../lib/chatThreadActions";
 import {
   deriveLogicalProjectKeyFromSettings,
+  derivePhysicalProjectKey,
   selectProjectGroupingSettings,
 } from "../logicalProject";
+import { buildPhysicalToLogicalProjectKeyMap } from "../sidebarProjectGrouping";
+import { CONVERSATIONS_BROWSER_HISTORY_KEY, useBrowserHistoryStore } from "../browserHistoryStore";
 import { buildDraftThreadRouteParams, buildThreadRouteParams } from "../threadRoutes";
 import {
   type ComposerAttachment,
@@ -2694,6 +2701,38 @@ function ChatViewContent(props: ChatViewProps) {
     () => selectProjectGroupingSettings(settings),
     [settings],
   );
+  const clientSettingsHydrated = useClientSettingsHydrated();
+  // Browser history files each thread's visits under its project; until a thread registers one,
+  // its visits wait unsaved. Conversations have no project and share one history.
+  const isConversationThread = activeThread?.projectId === null;
+  const browserHistoryProjectKey = useMemo(() => {
+    if (!clientSettingsHydrated) return null;
+    if (isConversationThread) return CONVERSATIONS_BROWSER_HISTORY_KEY;
+    if (!activeProject) return null;
+    // Reuse the sidebar's grouping so history follows the project rows the user sees.
+    const logicalKeyByPhysicalKey = buildPhysicalToLogicalProjectKeyMap({
+      projects: allProjects,
+      settings: projectGroupingSettings,
+      primaryEnvironmentId,
+    });
+    return (
+      logicalKeyByPhysicalKey.get(derivePhysicalProjectKey(activeProject)) ??
+      deriveLogicalProjectKeyFromSettings(activeProject, projectGroupingSettings)
+    );
+  }, [
+    activeProject,
+    allProjects,
+    clientSettingsHydrated,
+    isConversationThread,
+    primaryEnvironmentId,
+    projectGroupingSettings,
+  ]);
+  useEffect(() => {
+    if (!activeThreadRef || browserHistoryProjectKey === null) return;
+    useBrowserHistoryStore
+      .getState()
+      .registerThreadProject(activeThreadRef, browserHistoryProjectKey);
+  }, [activeThreadRef, browserHistoryProjectKey]);
   const logicalProjectEnvironments = useMemo(() => {
     if (!activeProject) return [];
     const logicalKey = deriveLogicalProjectKeyFromSettings(activeProject, projectGroupingSettings);
