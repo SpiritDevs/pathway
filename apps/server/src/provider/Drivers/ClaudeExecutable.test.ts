@@ -24,16 +24,35 @@ function withWindowsResolution(input: {
 }
 
 describe("resolveClaudeSdkExecutablePath", () => {
-  it.effect("returns the configured path unchanged on non-Windows platforms", () =>
+  it.effect("resolves bare commands using the instance environment on macOS and Linux", () =>
     Effect.gen(function* () {
-      expect(
-        yield* resolveClaudeSdkExecutablePath("claude", {}).pipe(
-          Effect.provideService(HostProcessPlatform, "darwin"),
-          Effect.provideService(SpawnExecutableResolution, () => {
-            throw new Error("must not resolve on non-Windows platforms");
-          }),
-        ),
-      ).toBe("claude");
+      const environment = { PATH: "/instance/bin:/usr/bin" };
+      for (const platform of ["darwin", "linux"] as const) {
+        expect(
+          yield* resolveClaudeSdkExecutablePath("claude", environment).pipe(
+            Effect.provideService(HostProcessPlatform, platform),
+            Effect.provideService(SpawnExecutableResolution, (command, hostPlatform, env) => {
+              expect(command).toBe("claude");
+              expect(hostPlatform).toBe(platform);
+              expect(env).toBe(environment);
+              return "/instance/bin/claude";
+            }),
+          ),
+        ).toBe("/instance/bin/claude");
+      }
+    }),
+  );
+
+  it.effect("preserves explicit paths and unresolved commands on POSIX", () =>
+    Effect.gen(function* () {
+      for (const binaryPath of ["/custom/bin/claude", "claude"]) {
+        expect(
+          yield* resolveClaudeSdkExecutablePath(binaryPath, {}).pipe(
+            Effect.provideService(HostProcessPlatform, "linux"),
+            Effect.provideService(SpawnExecutableResolution, () => undefined),
+          ),
+        ).toBe(binaryPath);
+      }
     }),
   );
 

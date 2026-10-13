@@ -47,27 +47,25 @@ export const ClaudeExecutableFileCheck = Context.Reference<ExecutableFileCheck>(
  * Resolves the configured Claude binary path into a value the Claude Agent
  * SDK can spawn directly via `pathToClaudeCodeExecutable`.
  *
- * The SDK spawns the given path without a shell and without Windows PATH /
- * PATHEXT resolution, so a bare command name like `claude` fails with
- * "native binary not found" and an npm `claude.cmd` shim fails with
- * `spawn EINVAL`. CLI probes avoid this via `resolveSpawnCommand`, which can
- * fall back to `shell: true`; the SDK offers no such escape hatch.
+ * Resolve command names ourselves so SDK versions with path-existence checks
+ * and instances with a custom PATH use the same executable as CLI probes.
+ * Windows npm launcher scripts also need unwrapping because the SDK spawns
+ * without a shell, producing `spawn EINVAL` for `claude.cmd`.
  *
- * On Windows this resolves the command against PATH/PATHEXT and, when the
- * result is an npm launcher shim, follows it to the real package entry
- * (`bin/claude.exe`, or `cli.js` for older package versions). On other
- * platforms the configured value is returned unchanged.
+ * Resolve against the provider instance's PATH on every platform. On Windows,
+ * follow npm launcher shims to the real package entry (`bin/claude.exe`, or
+ * `cli.js` for older package versions).
  */
 export const resolveClaudeSdkExecutablePath = Effect.fn("resolveClaudeSdkExecutablePath")(
   function* (binaryPath: string, environment: NodeJS.ProcessEnv): Effect.fn.Return<string> {
     const platform = yield* HostProcessPlatform;
+    const resolveExecutable = yield* SpawnExecutableResolution;
+    const resolved = resolveExecutable(binaryPath, platform, environment) ?? binaryPath;
     if (platform !== "win32") {
-      return binaryPath;
+      return resolved;
     }
 
-    const resolveExecutable = yield* SpawnExecutableResolution;
     const isFile = yield* ClaudeExecutableFileCheck;
-    const resolved = resolveExecutable(binaryPath, platform, environment) ?? binaryPath;
     const extension = NodePath.win32.extname(resolved).toLowerCase();
     if (!WINDOWS_SHIM_EXTENSIONS.has(extension)) {
       return resolved;
