@@ -76,6 +76,7 @@ const parentPrompt = "Keep this parent turn active while orchestration tools are
 const delegatedPrompt = "Inspect the delegated API boundary and return the result.";
 const delegatedResult = "Delegated API boundary inspected.";
 const questionPrompt = "Ask which generated updates to keep.";
+const blockingQuestionPrompt = "Stop and ask which generated updates to keep.";
 const cancellationPrompt = "Remain active until the parent cancels this delegated task.";
 const createdThreadPrompt = "Complete the newly created ordinary thread.";
 
@@ -252,7 +253,11 @@ function makeDeterministicAdapter(input: {
                   },
                 },
               ]);
-              if (turnInput.message.text === questionPrompt) {
+              if (
+                turnInput.message.text === questionPrompt ||
+                turnInput.message.text === blockingQuestionPrompt
+              ) {
+                const blocking = turnInput.message.text === blockingQuestionPrompt;
                 const requestId = RuntimeRequestId.make(`question:${turnInput.threadId}`);
                 yield* publish([
                   {
@@ -266,11 +271,10 @@ function makeDeterministicAdapter(input: {
                       nativeRequestRef: null,
                       kind: "user_input",
                       status: "pending",
-                      isBlocking: false,
-                      responseCapability: {
-                        type: "message",
-                        providerThreadId: turnInput.providerThread.id,
-                      },
+                      isBlocking: blocking,
+                      responseCapability: blocking
+                        ? { type: "live", providerSessionId: sessionInput.providerSessionId }
+                        : { type: "message", providerThreadId: turnInput.providerThread.id },
                       createdAt: eventTime,
                       resolvedAt: null,
                     },
@@ -493,7 +497,9 @@ describe("orchestrator MCP toolkit", () => {
               capabilities: CodexProviderCapabilitiesV2,
               capturedTurns,
               shouldComplete: (turn) =>
-                turn.threadId !== parentThreadId && turn.message.text !== cancellationPrompt,
+                turn.threadId !== parentThreadId &&
+                turn.message.text !== cancellationPrompt &&
+                turn.message.text !== blockingQuestionPrompt,
               terminalGate: (turn) =>
                 turn.message.text.startsWith("Delegated task") ||
                 turn.message.text.startsWith("Delegated tasks")
@@ -1739,6 +1745,38 @@ describe("orchestrator MCP toolkit", () => {
               )?.completionDelivery,
             ).toMatchObject({ state: "disposed" });
             yield* expectOffersToStay(0);
+
+            // A blocking question ends the wait instead of holding both sides
+            // until the timeout, and leaves completion delivery to the wake.
+            const blockedCall = yield* invoke("delegate_task", {
+              task: blockingQuestionPrompt,
+              target: { providerInstanceId: codexInstanceId, model: codexModel },
+              mode: "wait",
+              timeoutMs: 30_000,
+              clientRequestId: "delegate-blocking-question-1",
+            });
+            const blocked = yield* decodeDelegateTaskResult(blockedCall.structuredContent).pipe(
+              Effect.orDie,
+            );
+            expect(blocked).toMatchObject({
+              status: "running",
+              waitTimedOut: false,
+              pendingQuestions: [
+                { requestId: RuntimeRequestId.make(`question:${blocked.childThreadId}`) },
+              ],
+            });
+            expect(
+              (yield* orchestrator.getThreadProjection(parentThreadId)).subagents.find(
+                (task) => task.id === blocked.taskId,
+              )?.completionWake,
+            ).toBe("always");
+            yield* invoke("task_cancel", {
+              taskId: blocked.taskId,
+              clientRequestId: "cancel-blocking-question-1",
+            });
+            yield* waitForProjection(orchestrator, blocked.childThreadId, (projection) =>
+              projection.runs.some((run) => run.status === "interrupted"),
+            );
 
             const createInput = {
               clientRequestId: "create-thread-batch-1",

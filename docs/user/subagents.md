@@ -10,7 +10,7 @@ Typing, using the model shortcut, or adding files also opens the message box for
 
 A subagent started through Pathway gets the same access as the agent that started it. When that agent has full access, so do all of its subagents, so they don't stop for approvals you have already waived.
 
-When a subagent stops to ask something, such as whether it may change a file outside the scope it was given, the question goes to the agent that started it. That agent answers when the decision is part of the work it handed off, and the subagent carries on. When the question needs your judgement, the agent asks you and passes your answer back. You can still answer a subagent's question yourself in its conversation.
+When a subagent stops to ask something, such as whether it may change a file outside the scope it was given, the question goes to the agent that started it. That agent is told right away, even if it had finished its turn or was waiting for the subagent to finish. If it is in the middle of other work, it hears about the question once that work ends, unless the question has been answered by then. That agent answers when the decision is part of the work it handed off, and the subagent carries on. When the question needs your judgement, the agent asks you and passes your answer back. You can still answer a subagent's question yourself in its conversation.
 
 Codex task names appear as readable labels. For example, `audit_server` appears as "Audit server" in the conversation, Lineage, and the child conversation's title. Nested subagents use their own task name; their relationship to the parent remains in Lineage. Previously saved conversations retain their saved titles.
 

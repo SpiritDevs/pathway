@@ -10,6 +10,7 @@ import type {
   OrchestrationV2Run,
   OrchestrationV2ThreadProjection,
   OrchestrationV2TurnItem,
+  OrchestratorMcpTaskQuestion,
   ProviderInstanceId,
   ProviderThreadId,
   ProviderTurnId,
@@ -217,4 +218,38 @@ export function subagentResultForRun(
     messageId: message?.id ?? turnItem?.messageId ?? null,
     turnItemId: turnItem?.id ?? null,
   };
+}
+
+/**
+ * Questions a delegated child is still waiting on. Secret questions stay with
+ * the user, so they are left out rather than offered to the parent agent.
+ */
+export function openTaskQuestions(
+  projection: Pick<OrchestrationV2ThreadProjection, "runtimeRequests" | "turnItems">,
+): ReadonlyArray<OrchestratorMcpTaskQuestion> {
+  return projection.runtimeRequests.flatMap((request) => {
+    if (
+      request.kind !== "user_input" ||
+      request.status !== "pending" ||
+      request.responseCapability.type === "not_resumable"
+    ) {
+      return [];
+    }
+    const item = projection.turnItems.find(
+      (candidate) => candidate.type === "user_input_request" && candidate.requestId === request.id,
+    );
+    if (item?.type !== "user_input_request" || item.questions.some((q) => q.isSecret)) {
+      return [];
+    }
+    return [
+      {
+        requestId: request.id,
+        questions: item.questions.map((question) => ({
+          id: question.id,
+          question: question.question,
+          options: question.options.map((option) => option.label),
+        })),
+      },
+    ];
+  });
 }

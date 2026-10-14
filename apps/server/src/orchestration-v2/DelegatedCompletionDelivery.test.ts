@@ -6,12 +6,16 @@ import {
   MessageId,
   type ModelSelection,
   NodeId,
+  type OrchestrationV2DomainEvent,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderThreadId,
+  ProviderSessionId,
   RunId,
+  RuntimeRequestId,
   ThreadId,
+  TurnItemId,
 } from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -31,6 +35,7 @@ import { ServerSettingsService } from "../serverSettings.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import { makeHandler as makeQuestionWakeHandler } from "./DelegatedTaskQuestionWake.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import { OrchestratorV2 } from "./Orchestrator.ts";
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
@@ -596,5 +601,199 @@ it.layer(TestLayer)("delegated completion delivery repairs", (it) => {
           },
         );
       }),
+  );
+});
+
+it.layer(TestLayer)("delegated task question wakes", (it) => {
+  it.effect("wakes the parent once per answerable question and withdraws stale wakes", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const sink = yield* EventSinkV2;
+      const handle = yield* makeQuestionWakeHandler;
+      const now = yield* DateTime.now;
+      const parentThreadId = ThreadId.make("thread:question-wake-parent");
+      const childThreadId = ThreadId.make("thread:question-wake-child");
+      const parentRunId = RunId.make("run:question-wake-parent");
+      const rootNodeId = NodeId.make("node:question-wake-root");
+      const taskId = NodeId.make("task:question-wake");
+      // The parent stays mid-run, so each wake queues behind it.
+      yield* seedParentWithTerminalTask({
+        threadId: parentThreadId,
+        projectId: ProjectId.make("project:question-wake"),
+        runId: parentRunId,
+        rootNodeId,
+        taskId: NodeId.make("task:question-wake-earlier"),
+        deliveryState: "acknowledged",
+        now,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "agent",
+        creationSource: "mcp",
+        commandId: CommandId.make("command:question-wake-child"),
+        threadId: childThreadId,
+        projectId: ProjectId.make("project:question-wake"),
+        title: "Child",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      const child = (yield* orchestrator.getThreadProjection(childThreadId)).thread;
+      const parent = yield* orchestrator.getThreadProjection(parentThreadId);
+      yield* sink.write({
+        commandId: CommandId.make("command:question-wake-lineage"),
+        events: [
+          {
+            id: EventId.make("event:question-wake-lineage"),
+            type: "thread.metadata-updated",
+            threadId: childThreadId,
+            occurredAt: now,
+            payload: {
+              ...child,
+              lineage: {
+                parentThreadId,
+                relationshipToParent: "subagent",
+                rootThreadId: parentThreadId,
+              },
+            },
+          },
+          {
+            id: EventId.make("event:question-wake-task"),
+            type: "subagent.updated",
+            threadId: parentThreadId,
+            runId: parentRunId,
+            nodeId: taskId,
+            occurredAt: now,
+            payload: {
+              ...parent.subagents[0]!,
+              id: taskId,
+              childThreadId,
+              status: "running",
+              result: null,
+              completedAt: null,
+            },
+          },
+        ],
+      });
+
+      const request = (
+        id: string,
+        options: {
+          readonly status?: "pending" | "resolved";
+          readonly kind?: "user_input" | "command";
+          readonly blocking?: boolean;
+        } = {},
+      ) =>
+        ({
+          id: EventId.make(`event:request:${id}:${options.status ?? "pending"}`),
+          type: "runtime-request.updated",
+          threadId: childThreadId,
+          occurredAt: now,
+          payload: {
+            id: RuntimeRequestId.make(id),
+            nodeId: NodeId.make(`node:${id}`),
+            providerTurnId: null,
+            nativeRequestRef: null,
+            kind: options.kind ?? "user_input",
+            status: options.status ?? "pending",
+            isBlocking: options.blocking ?? true,
+            responseCapability:
+              options.blocking === false
+                ? { type: "message", providerThreadId: ProviderThreadId.make("provider:child") }
+                : { type: "live", providerSessionId: ProviderSessionId.make("session:child") },
+            createdAt: now,
+            resolvedAt: options.status === "resolved" ? now : null,
+          },
+        }) satisfies OrchestrationV2DomainEvent;
+      const item = (id: string, secret = false) =>
+        ({
+          id: EventId.make(`event:item:${id}`),
+          type: "turn-item.updated",
+          threadId: childThreadId,
+          occurredAt: now,
+          payload: {
+            id: TurnItemId.make(`item:${id}`),
+            threadId: childThreadId,
+            runId: null,
+            nodeId: NodeId.make(`node:${id}`),
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal: 1,
+            status: "waiting",
+            title: null,
+            startedAt: now,
+            completedAt: null,
+            updatedAt: now,
+            type: "user_input_request",
+            requestId: RuntimeRequestId.make(id),
+            questions: [
+              {
+                id: "question-1",
+                header: "Updates",
+                question: "Which updates?",
+                isOther: true,
+                ...(secret ? { isSecret: true } : {}),
+                options: [{ label: "Lockfile", description: "Dependencies" }],
+              },
+            ],
+          },
+        }) satisfies OrchestrationV2DomainEvent;
+      const deliver = (...events: ReadonlyArray<OrchestrationV2DomainEvent>) =>
+        Effect.gen(function* () {
+          yield* sink.write({ events });
+          yield* Effect.forEach(events, handle, { discard: true });
+        });
+      const wakes = () =>
+        orchestrator
+          .getThreadProjection(parentThreadId)
+          .pipe(
+            Effect.map((projection) =>
+              projection.messages.filter((message) =>
+                message.id.startsWith("message:delegated-task-question:"),
+              ),
+            ),
+          );
+
+      // The request lands before its question item, so the item is what wakes the parent.
+      yield* deliver(request("ask"));
+      assert.lengthOf(yield* wakes(), 0);
+      yield* deliver(item("ask"));
+      yield* Effect.forEach([request("ask"), item("ask")], handle, { discard: true });
+      const [blocked] = yield* wakes();
+      assert.lengthOf(yield* wakes(), 1);
+      assert.include(blocked?.text, "is blocked on a question");
+      assert.include(blocked?.text, `taskId ${taskId}`);
+      assert.include(blocked?.text, "requestId is ask");
+      assert.equal(blocked?.createdBy, "agent");
+
+      // Async questions say the child is still working; secret questions and
+      // approvals cannot be answered with task_answer, so they never wake.
+      yield* deliver(request("async", { blocking: false }), item("async"));
+      yield* deliver(request("secret"), item("secret", true));
+      yield* deliver(request("approval", { kind: "command" }));
+      const texts = (yield* wakes()).map((message) => message.text);
+      assert.lengthOf(texts, 2);
+      assert.include(texts[1], "asked a question and is still working");
+
+      // Answering a question withdraws its wake while it is still queued.
+      const runFor = (messageId: MessageId) =>
+        orchestrator
+          .getThreadProjection(parentThreadId)
+          .pipe(
+            Effect.map((projection) =>
+              projection.runs.find((run) => run.userMessageId === messageId),
+            ),
+          );
+      assert.equal((yield* runFor(blocked!.id))?.status, "queued");
+      yield* deliver(request("ask", { status: "resolved" }));
+      assert.equal((yield* runFor(blocked!.id))?.status, "cancelled");
+      // A late replay of the answered question does not wake the parent again.
+      yield* handle(item("ask"));
+      assert.lengthOf(yield* wakes(), 2);
+    }),
   );
 });

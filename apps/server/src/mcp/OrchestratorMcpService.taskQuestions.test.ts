@@ -26,7 +26,8 @@ import { ScheduledTaskService } from "../scheduledTasks/ScheduledTaskService.ts"
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 
-import { openTaskQuestions, resolveDelegatedRuntimeMode } from "./OrchestratorMcpService.ts";
+import { openTaskQuestions } from "../orchestration-v2/SubagentProjection.ts";
+import { resolveDelegatedRuntimeMode } from "./OrchestratorMcpService.ts";
 
 const now = DateTime.makeUnsafe("2026-10-08T12:00:00.000Z");
 const threadId = ThreadId.make("thread-child");
