@@ -678,6 +678,9 @@ type ShellRunItemCountRow = {
 const encodeThreadPayload = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2AppThreadJsonSchema),
 );
+const encodeThreadUpdatedAt = Schema.encodeEffect(
+  OrchestrationV2AppThreadJsonSchema.fields.updatedAt,
+);
 const encodeRunPayload = Schema.encodeEffect(Schema.fromJsonString(OrchestrationV2RunJsonSchema));
 const encodeRunAttemptPayload = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2RunAttemptJsonSchema),
@@ -2241,28 +2244,39 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           event.type !== "thread.model-selection-updated" &&
           event.type !== "thread.provider-switched"
         ) {
-          const rows = yield* sql<PayloadRow>`
-            SELECT payload_json
-            FROM orchestration_v2_projection_threads
-            WHERE thread_id = ${event.threadId}
-            LIMIT 1
-          `;
-          const row = rows[0];
-          if (row !== undefined) {
-            const thread = yield* decodeThreadPayload(row.payload_json);
-            const updatedThread = {
-              ...thread,
-              ...(event.type === "thread.model-reported"
-                ? { modelSelection: event.payload.modelSelection }
-                : {}),
-              updatedAt: event.occurredAt,
-            };
-            const payloadJson = yield* encodeThreadPayload(updatedThread);
+          if (event.type === "thread.model-reported") {
+            const rows = yield* sql<PayloadRow>`
+              SELECT payload_json
+              FROM orchestration_v2_projection_threads
+              WHERE thread_id = ${event.threadId}
+              LIMIT 1
+            `;
+            const row = rows[0];
+            if (row !== undefined) {
+              const thread = yield* decodeThreadPayload(row.payload_json);
+              const payloadJson = yield* encodeThreadPayload({
+                ...thread,
+                modelSelection: event.payload.modelSelection,
+                updatedAt: event.occurredAt,
+              });
+              yield* sql`
+                UPDATE orchestration_v2_projection_threads
+                SET
+                  updated_at = ${stringField(parseEncodedPayload(payloadJson), "updatedAt")},
+                  payload_json = ${payloadJson}
+                WHERE thread_id = ${event.threadId}
+              `;
+            }
+          } else {
+            // Only the activity timestamp changes. This runs for every streamed
+            // run, node and turn-item event, so the thread row is patched in place
+            // instead of being read, decoded and re-encoded each time.
+            const updatedAt = yield* encodeThreadUpdatedAt(event.occurredAt);
             yield* sql`
               UPDATE orchestration_v2_projection_threads
               SET
-                updated_at = ${stringField(parseEncodedPayload(payloadJson), "updatedAt")},
-                payload_json = ${payloadJson}
+                updated_at = ${updatedAt},
+                payload_json = json_set(payload_json, '$.updatedAt', ${updatedAt})
               WHERE thread_id = ${event.threadId}
             `;
           }

@@ -20,6 +20,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as Tracer from "effect/Tracer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
@@ -45,6 +46,74 @@ const providerInstanceId = modelSelection.instanceId;
 const encodeUnknownJsonString = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const encodeThreadShell = Schema.encodeEffect(OrchestrationV2ThreadShellJson);
 const decodeThreadShell = Schema.decodeUnknownEffect(OrchestrationV2ThreadShellJson);
+
+const traceSqlStatements = () => {
+  const statements: Array<string> = [];
+  const tracer = Tracer.make({
+    span(options) {
+      const span = new Tracer.NativeSpan(options);
+      const end = span.end.bind(span);
+      span.end = (endTime, exit) => {
+        end(endTime, exit);
+        const query = span.attributes.get("db.query.text");
+        if (typeof query === "string") statements.push(query);
+      };
+      return span;
+    },
+  });
+  return { statements, tracer };
+};
+
+const makeActivityThread = (threadId: ThreadId, createdAt: DateTime.Utc) => ({
+  createdBy: "user" as const,
+  creationSource: "web" as const,
+  id: threadId,
+  projectId: ProjectId.make(`project:${threadId}`),
+  title: "Projection activity",
+  providerInstanceId,
+  modelSelection,
+  runtimeMode: "full-access" as const,
+  interactionMode: "default" as const,
+  branch: "feature/activity",
+  worktreePath: null,
+  activeProviderThreadId: null,
+  lineage: {
+    parentThreadId: null,
+    relationshipToParent: null,
+    rootThreadId: threadId,
+  },
+  forkedFrom: null,
+  createdAt,
+  updatedAt: createdAt,
+  archivedAt: null,
+  settledOverride: null,
+  settledAt: null,
+  lastVisitedAt: createdAt,
+  deletedAt: null,
+});
+
+const makeActivityRun = (input: {
+  readonly threadId: ThreadId;
+  readonly runId: RunId;
+  readonly rootNodeId: NodeId;
+  readonly occurredAt: DateTime.Utc;
+}) => ({
+  id: input.runId,
+  threadId: input.threadId,
+  ordinal: 1,
+  providerInstanceId,
+  modelSelection,
+  providerThreadId: null,
+  userMessageId: MessageId.make(`message:${input.runId}`),
+  rootNodeId: input.rootNodeId,
+  activeAttemptId: null,
+  status: "running" as const,
+  requestedAt: input.occurredAt,
+  startedAt: input.occurredAt,
+  completedAt: null,
+  checkpointId: null,
+  contextHandoffId: null,
+});
 
 it("selects only run-bound history when selecting fork context through a run", () => {
   const firstRunId = RunId.make("run:projection-imported-fork:1");
@@ -621,6 +690,134 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
       const markedUnread = yield* projectionStore.getThreadProjection(threadId);
       assert.isNull(markedUnread.thread.lastVisitedAt);
       assert.deepEqual(markedUnread.thread.updatedAt, createdAt);
+    }),
+  );
+
+  it.effect("dates thread activity by a run event and leaves the rest of the thread alone", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStoreV2;
+      const sql = yield* SqlClient.SqlClient;
+      const createdAt = yield* DateTime.now;
+      const runOccurredAt = DateTime.add(createdAt, { seconds: 5 });
+      const threadId = ThreadId.make("thread:projection-activity");
+      const runId = RunId.make("run:projection-activity");
+      const rootNodeId = NodeId.make("node:projection-activity");
+
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-activity:created"),
+        type: "thread.created",
+        threadId,
+        occurredAt: createdAt,
+        payload: makeActivityThread(threadId, createdAt),
+      });
+      const created = (yield* projectionStore.getThreadProjection(threadId)).thread;
+
+      const { statements, tracer } = traceSqlStatements();
+      yield* projectionStore
+        .apply({
+          id: EventId.make("event:projection-activity:run-created"),
+          type: "run.created",
+          threadId,
+          runId,
+          nodeId: rootNodeId,
+          driver,
+          providerInstanceId,
+          occurredAt: runOccurredAt,
+          payload: makeActivityRun({ threadId, runId, rootNodeId, occurredAt: runOccurredAt }),
+        })
+        .pipe(Effect.withTracer(tracer));
+      assert.isNotEmpty(statements);
+      // The thread row is patched in place, never read back to be re-encoded.
+      assert.isEmpty(
+        statements.filter(
+          (statement) =>
+            /^\s*SELECT/i.test(statement) &&
+            statement.includes("orchestration_v2_projection_threads"),
+        ),
+      );
+
+      const active = (yield* projectionStore.getThreadProjection(threadId)).thread;
+      assert.deepEqual(active, { ...created, updatedAt: runOccurredAt });
+      const shell = (yield* projectionStore.getShellSnapshot()).threads.find(
+        (candidate) => candidate.id === threadId,
+      );
+      assert.deepEqual(shell?.updatedAt, runOccurredAt);
+      const rows = yield* sql<{ readonly updated_at: string; readonly payload_updated_at: string }>`
+        SELECT updated_at, json_extract(payload_json, '$.updatedAt') AS payload_updated_at
+        FROM orchestration_v2_projection_threads
+        WHERE thread_id = ${threadId}
+      `;
+      assert.deepEqual(rows, [
+        {
+          updated_at: DateTime.formatIso(runOccurredAt),
+          payload_updated_at: DateTime.formatIso(runOccurredAt),
+        },
+      ]);
+    }),
+  );
+
+  it.effect("records a reported model along with thread activity", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStoreV2;
+      const createdAt = yield* DateTime.now;
+      const reportedAt = DateTime.add(createdAt, { seconds: 3 });
+      const threadId = ThreadId.make("thread:projection-model-reported");
+      const reportedModel = {
+        instanceId: providerInstanceId,
+        model: "gpt-5.5",
+      } satisfies ModelSelection;
+
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-model-reported:created"),
+        type: "thread.created",
+        threadId,
+        occurredAt: createdAt,
+        payload: makeActivityThread(threadId, createdAt),
+      });
+      const created = (yield* projectionStore.getThreadProjection(threadId)).thread;
+
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-model-reported:reported"),
+        type: "thread.model-reported",
+        threadId,
+        occurredAt: reportedAt,
+        payload: { modelSelection: reportedModel },
+      });
+
+      const reported = (yield* projectionStore.getThreadProjection(threadId)).thread;
+      assert.deepEqual(reported, {
+        ...created,
+        modelSelection: reportedModel,
+        updatedAt: reportedAt,
+      });
+    }),
+  );
+
+  it.effect("ignores activity for a thread with no projection row", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStoreV2;
+      const sql = yield* SqlClient.SqlClient;
+      const occurredAt = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:projection-activity-missing");
+      const runId = RunId.make("run:projection-activity-missing");
+      const rootNodeId = NodeId.make("node:projection-activity-missing");
+
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-activity-missing:run-created"),
+        type: "run.created",
+        threadId,
+        runId,
+        nodeId: rootNodeId,
+        driver,
+        providerInstanceId,
+        occurredAt,
+        payload: makeActivityRun({ threadId, runId, rootNodeId, occurredAt }),
+      });
+
+      const rows = yield* sql`
+        SELECT thread_id FROM orchestration_v2_projection_threads WHERE thread_id = ${threadId}
+      `;
+      assert.isEmpty(rows);
     }),
   );
 
