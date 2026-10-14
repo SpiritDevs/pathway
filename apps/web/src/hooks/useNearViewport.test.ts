@@ -24,16 +24,28 @@ describe("near viewport observer", () => {
     expect(constructor).toHaveBeenCalledWith(expect.any(Function), { rootMargin: "200px" });
     expect(visible).not.toHaveBeenCalled();
     receive(
-      [{ target: first, isIntersecting: true } as IntersectionObserverEntry],
+      [
+        {
+          target: first,
+          isIntersecting: true,
+          boundingClientRect: { height: 34 },
+        } as IntersectionObserverEntry,
+      ],
       {} as IntersectionObserver,
     );
-    expect(visible).toHaveBeenLastCalledWith(true);
+    expect(visible).toHaveBeenLastCalledWith(true, 34);
     expect(other).not.toHaveBeenCalled();
     receive(
-      [{ target: first, isIntersecting: false } as IntersectionObserverEntry],
+      [
+        {
+          target: first,
+          isIntersecting: false,
+          boundingClientRect: { height: 34 },
+        } as IntersectionObserverEntry,
+      ],
       {} as IntersectionObserver,
     );
-    expect(visible).toHaveBeenLastCalledWith(false);
+    expect(visible).toHaveBeenLastCalledWith(false, 34);
     stop();
     expect(unobserve).toHaveBeenCalledWith(first);
     expect(disconnect).not.toHaveBeenCalled();
@@ -44,6 +56,6 @@ describe("near viewport observer", () => {
     vi.stubGlobal("IntersectionObserver", undefined);
     const visible = vi.fn();
     observeNearViewport({} as Element, visible)();
-    expect(visible).toHaveBeenCalledWith(true);
+    expect(visible).toHaveBeenCalledWith(true, 0);
   });
 });

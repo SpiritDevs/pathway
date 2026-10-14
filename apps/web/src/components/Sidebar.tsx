@@ -1040,7 +1040,7 @@ function SettleActionTooltipText(props: {
   return settleActionLabel({ controlKeyHeld, ...props });
 }
 
-const SidebarThreadRow = memo(function SidebarThreadRow(props: {
+type SidebarThreadRowProps = {
   queuedStatusLabel?: string | null;
   alertProjectKey: string | null;
   alertPolicies: readonly AlertPolicyRow[] | null;
@@ -1110,7 +1110,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   cachedChangeRequest?: ThreadChangeRequestState | undefined;
   onOpenIssue: (issueKey: string) => void;
   onOpenSideChat: (parentRef: ScopedThreadRef, sideChatThreadId: ThreadId) => void;
-}) {
+};
+
+const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
+  props: SidebarThreadRowProps & {
+    rowRef: (element: HTMLLIElement | null) => (() => void) | undefined;
+    near: boolean;
+  },
+) {
   const {
     isRenaming,
     onChangeRequestState,
@@ -1152,24 +1159,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
   const terminalProcessCount = runningTerminalIds.length;
 
-  const viewport = useNearViewport();
-  const rowRef = useCallback(
-    (element: HTMLLIElement | null) => {
-      props.sortable?.setNodeRef(element);
-      const stopObserving = viewport.ref(element);
-      if (element === null) return;
-      return () => {
-        stopObserving?.();
-        props.sortable?.setNodeRef(null);
-      };
-    },
-    [props.sortable?.setNodeRef, viewport.ref],
-  );
+  const { rowRef } = props;
   const { gitStatus, visibleBranchPr, badges, prState } = useSidebarChangeRequest({
     thread,
     projectCwd: props.projectCwd,
     poll: props.isActive,
-    enabled: viewport.near,
+    enabled: props.near,
     cached: props.cachedChangeRequest,
     onChangeRequestState,
   });
@@ -2017,6 +2012,53 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         {detailsTooltip}
       </Popover>
     </li>
+  );
+});
+
+// Rows far from the viewport render a placeholder of their last measured size instead of their
+// content, so offscreen history holds no shell, Git, PR, terminal or tooltip subscriptions. The
+// placeholder keeps DOM order and the sortable node; the first screenful, the open thread, and
+// rows being renamed or dragged always render in full.
+const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowProps) {
+  const viewport = useNearViewport();
+  const { sortable } = props;
+  const rowRef = useCallback(
+    (element: HTMLLIElement | null) => {
+      sortable?.setNodeRef(element);
+      const stopObserving = viewport.ref(element);
+      if (element === null) return;
+      return () => {
+        stopObserving?.();
+        sortable?.setNodeRef(null);
+      };
+    },
+    [sortable?.setNodeRef, viewport.ref],
+  );
+  if (
+    viewport.near ||
+    !props.deferRendering ||
+    props.isActive ||
+    props.isRenaming ||
+    sortable?.isDragging
+  ) {
+    return <SidebarThreadRowContent {...props} rowRef={rowRef} near={viewport.near} />;
+  }
+  return (
+    <li
+      ref={rowRef}
+      data-thread-item
+      aria-hidden
+      style={{
+        height: viewport.height || (props.variant === "card" ? 96 : 34),
+        ...(sortable
+          ? {
+              transform: CSS.Translate.toString(sortable.transform),
+              transition: sortable.transition,
+            }
+          : {}),
+      }}
+      className="list-none"
+    />
   );
 });
 

@@ -1,19 +1,20 @@
 import { useCallback, useState } from "react";
 
-const callbacks = new Map<Element, (near: boolean) => void>();
+const callbacks = new Map<Element, (near: boolean, height: number) => void>();
 let observer: IntersectionObserver | null = null;
 
 export function observeNearViewport(
   element: Element,
-  onChange: (near: boolean) => void,
+  onChange: (near: boolean, height: number) => void,
 ): () => void {
   if (typeof IntersectionObserver === "undefined") {
-    onChange(true);
+    onChange(true, 0);
     return () => undefined;
   }
   observer ??= new IntersectionObserver(
     (entries) => {
-      for (const entry of entries) callbacks.get(entry.target)?.(entry.isIntersecting);
+      for (const entry of entries)
+        callbacks.get(entry.target)?.(entry.isIntersecting, entry.boundingClientRect.height);
     },
     { rootMargin: "200px" },
   );
@@ -29,12 +30,21 @@ export function observeNearViewport(
   };
 }
 
-/** One observer serves all rows, including nested scroll containers. */
+/**
+ * One observer serves all rows, including nested scroll containers. `height` is the element's
+ * last observed height, so a row can hold its place with a same-sized placeholder.
+ */
 export function useNearViewport() {
-  const [near, setNear] = useState(false);
+  const [state, setState] = useState({ near: false, height: 0 });
   const ref = useCallback((element: HTMLElement | null) => {
     if (element === null) return;
-    return observeNearViewport(element, setNear);
+    return observeNearViewport(element, (near, height) =>
+      setState((previous) =>
+        previous.near === near && (height === 0 || previous.height === height)
+          ? previous
+          : { near, height: height || previous.height },
+      ),
+    );
   }, []);
-  return { ref, near };
+  return { ref, near: state.near, height: state.height };
 }
