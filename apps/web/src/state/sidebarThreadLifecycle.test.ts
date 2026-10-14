@@ -3,6 +3,7 @@ import { setManagedRelaySession } from "@spiritdevs/client-runtime/relay";
 import { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
 import { AtomRegistry } from "effect/unstable/reactivity";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { type SyncResetStorage } from "../cloud/syncReset";
 import { makeThreadFixture } from "../test-fixtures";
 import { threadChangeRequestSource, type ThreadChangeRequestState } from "./threadPullRequest";
 import {
@@ -245,10 +246,14 @@ function memoryStorage() {
   return {
     store,
     storage: {
+      get length() {
+        return store.size;
+      },
+      key: (index: number) => [...store.keys()][index] ?? null,
       getItem: (item: string) => store.get(item) ?? null,
       setItem: (item: string, value: string) => void store.set(item, value),
       removeItem: (item: string) => void store.delete(item),
-    },
+    } satisfies SyncResetStorage,
   };
 }
 
@@ -298,6 +303,45 @@ it("keeps only the most recently written companies per account", () => {
   clearSidebarChangeRequests("account-a", storage);
   expect([...store.keys()].filter((item) => item.includes("/account-a/"))).toEqual([]);
   expect(readSidebarChangeRequests(JSON.stringify(["account-b", "c1"]), storage).size).toBe(1);
+});
+
+it("evicts and signs out every company another tab stored, even one the index lost", () => {
+  const { store, storage } = memoryStorage();
+  const scopeFor = (company: string) => JSON.stringify(["account-a", company]);
+  const states = new Map([[key, merged]]);
+  const companies = () =>
+    [...store.keys()].filter((item) => item.includes("/account-a/sidebar-change-requests/"));
+  writeSidebarChangeRequests(scopeFor("c1"), states, storage);
+  // Tab B writes c2 between tab A's index read and A's index write, so A's index drops c2.
+  let otherTab = () => writeSidebarChangeRequests(scopeFor("c2"), states, storage);
+  const tabA: SyncResetStorage = {
+    ...storage,
+    get length() {
+      return storage.length;
+    },
+    getItem: (item) => {
+      const value = storage.getItem(item);
+      otherTab();
+      otherTab = () => undefined;
+      return value;
+    },
+  };
+  writeSidebarChangeRequests(scopeFor("c3"), states, tabA);
+  expect(store.get("pathway:cloud-sync/account-a/sidebar-change-requests-recent")).toBe(
+    JSON.stringify(["c3", "c1"]),
+  );
+  expect(companies()).toHaveLength(3);
+  const signedOut = new Map(store);
+  // Later writes still bound the account to the most recent four.
+  for (const company of ["c4", "c5", "c6"])
+    writeSidebarChangeRequests(scopeFor(company), states, storage);
+  expect(companies()).toHaveLength(4);
+  expect(readSidebarChangeRequests(scopeFor("c6"), storage).size).toBe(1);
+  // Sign-out sweeps the unindexed cache too.
+  store.clear();
+  for (const [item, value] of signedOut) store.set(item, value);
+  clearSidebarChangeRequests("account-a", storage);
+  expect([...store.keys()]).toEqual([]);
 });
 
 it("warns once when storage rejects a write and retries on the next one", () => {

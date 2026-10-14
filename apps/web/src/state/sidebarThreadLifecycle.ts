@@ -11,20 +11,14 @@ import * as Schema from "effect/Schema";
 import { Atom } from "effect/unstable/reactivity";
 
 import { activeCompanyIdAtom } from "../cloud/activeCompany";
+import { type SyncResetStorage } from "../cloud/syncReset";
 import { threadChangeRequestSource, type ThreadChangeRequestState } from "./threadPullRequest";
 
 export const sidebarThreadScopeAtom = Atom.make((get) =>
   JSON.stringify([get(managedRelaySessionAtom)?.accountId ?? null, get(activeCompanyIdAtom)]),
 );
 
-/** Storage interface for the persisted classification cache; tests pass a plain object. */
-export interface SidebarChangeRequestStorage {
-  readonly getItem: (key: string) => string | null;
-  readonly setItem: (key: string, value: string) => void;
-  readonly removeItem: (key: string) => void;
-}
-
-function ambientLocalStorage(): SidebarChangeRequestStorage | null {
+function ambientLocalStorage(): SyncResetStorage | null {
   try {
     return typeof window === "undefined" ? null : window.localStorage;
   } catch {
@@ -47,14 +41,29 @@ function scopeParts(
   }
 }
 
-const companyKey = (accountId: string, company: string) =>
-  `pathway:cloud-sync/${accountId}/sidebar-change-requests/${company}`;
-// Most recently written companies first; also the list sign-out removes.
-const recentCompaniesKey = (accountId: string) =>
-  `pathway:cloud-sync/${accountId}/sidebar-change-requests-recent`;
+// Every key the cache owns for an account starts with this prefix, so sign-out can sweep them all.
+const accountPrefix = (accountId: string) =>
+  `pathway:cloud-sync/${accountId}/sidebar-change-requests`;
+const companyKey = (accountId: string, company: string) => `${accountPrefix(accountId)}/${company}`;
+// Most recently written companies first. Tabs update it without a lock, so writes reconcile it
+// against the company caches actually stored.
+const recentCompaniesKey = (accountId: string) => `${accountPrefix(accountId)}-recent`;
 const RECENT_COMPANY_LIMIT = 4;
 
-/** Lives in the account's cloud-sync namespace, next to the account's other local caches. */
+function storedKeys(storage: SyncResetStorage, prefix: string): string[] {
+  // Copy first: mutating a live Storage key list while iterating it skips entries.
+  const keys: string[] = [];
+  for (let index = 0; index < storage.length; index += 1) {
+    const key = storage.key(index);
+    if (key !== null && key.startsWith(prefix)) keys.push(key);
+  }
+  return keys;
+}
+
+/**
+ * Lives in the account's cloud-sync namespace, so the sync runtime's sign-out reset sweeps it with
+ * the rest; sign-out also clears it at once (`clearSidebarChangeRequests`).
+ */
 export function sidebarChangeRequestsStorageKey(scope: string): string | null {
   const parts = scopeParts(scope);
   return parts && companyKey(parts.accountId, parts.company);
@@ -77,21 +86,19 @@ const RecentCompanies = Schema.fromJsonString(Schema.Array(Schema.String));
 const decodeRecentCompanies = Schema.decodeUnknownOption(RecentCompanies);
 const encodeRecentCompanies = Schema.encodeSync(RecentCompanies);
 
-function readRecentCompanies(
-  storage: SidebarChangeRequestStorage,
-  accountId: string,
-): readonly string[] {
+function readRecentCompanies(storage: SyncResetStorage, accountId: string): readonly string[] {
   const raw = storage.getItem(recentCompaniesKey(accountId));
   return (raw ? Option.getOrNull(decodeRecentCompanies(raw)) : null) ?? [];
 }
 
 export function readSidebarChangeRequests(
   scope: string,
-  storage: SidebarChangeRequestStorage | null = ambientLocalStorage(),
+  storage: SyncResetStorage | null = ambientLocalStorage(),
 ): ReadonlyMap<string, ThreadChangeRequestState> {
-  const key = sidebarChangeRequestsStorageKey(scope);
-  if (key === null || storage === null) return new Map();
+  const parts = scopeParts(scope);
+  if (parts === null || storage === null) return new Map();
   try {
+    const key = companyKey(parts.accountId, parts.company);
     const raw = storage.getItem(key);
     const decoded = raw ? Option.getOrNull(decodePersistedChangeRequests(raw)) : null;
     return new Map(decoded ? Object.entries(decoded) : []);
@@ -106,16 +113,24 @@ let warnedWriteFailure = false;
 export function writeSidebarChangeRequests(
   scope: string,
   states: ReadonlyMap<string, ThreadChangeRequestState>,
-  storage: SidebarChangeRequestStorage | null = ambientLocalStorage(),
+  storage: SyncResetStorage | null = ambientLocalStorage(),
 ): void {
   const parts = scopeParts(scope);
   if (parts === null || storage === null) return;
   const { accountId, company } = parts;
   try {
-    // Evict before writing so an inactive company's cache frees room for the active one.
+    // Evict before writing so an inactive company's cache frees room for the active one. Caches
+    // another tab stored but dropped from the index count as least recent, so they still evict.
+    const companyPrefix = companyKey(accountId, "");
+    const stored = storedKeys(storage, companyPrefix).map((item) =>
+      item.slice(companyPrefix.length),
+    );
     const recent = [
-      company,
-      ...readRecentCompanies(storage, accountId).filter((item) => item !== company),
+      ...new Set([
+        company,
+        ...readRecentCompanies(storage, accountId).filter((item) => stored.includes(item)),
+        ...stored,
+      ]),
     ];
     for (const evicted of recent.slice(RECENT_COMPANY_LIMIT))
       storage.removeItem(companyKey(accountId, evicted));
@@ -174,7 +189,7 @@ function persistSoon(scope: string, states: ReadonlyMap<string, ThreadChangeRequ
  */
 export function clearSidebarChangeRequests(
   accountId: string,
-  storage: SidebarChangeRequestStorage | null = ambientLocalStorage(),
+  storage: SyncResetStorage | null = ambientLocalStorage(),
 ): void {
   const account = accountId.trim();
   for (const [scope, queued] of queuedWrites) {
@@ -184,9 +199,8 @@ export function clearSidebarChangeRequests(
   }
   if (storage === null || account === "") return;
   try {
-    for (const company of readRecentCompanies(storage, account))
-      storage.removeItem(companyKey(account, company));
-    storage.removeItem(recentCompaniesKey(account));
+    // Sweep by prefix, not the index: another tab may have stored a company the index misses.
+    for (const key of storedKeys(storage, accountPrefix(account))) storage.removeItem(key);
   } catch {
     // Whatever remains is this account's own classification, rechecked in the background.
   }
