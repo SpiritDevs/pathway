@@ -202,6 +202,7 @@ import {
   hasUnseenCompletion,
   isTrailingDoubleClick,
   mergeActiveThreadOrderPreference,
+  mountSidebarRowOnPlaceholderFocus,
   orderItemsByPreferredIds,
   planPinnedReorder,
   resolveAdjacentThreadId,
@@ -1992,8 +1993,11 @@ const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
 // replaces dnd-kit's node (its resize observer remeasures the rows below when the height changes
 // mid-drag). The first screenful, the open thread, and rows that are focused, being renamed or
 // dragged always render in full. A placeholder holds one plain button named by the thread title,
-// so assistive tech can find and open offscreen threads; focusing it mounts the row and hands
-// focus to the row's first control, or its last when entered with Shift+Tab.
+// so assistive tech can find and open offscreen threads. Its clicks open, select and open menus
+// like the row's. Keyboard and assistive-tech focus on it mounts the row once any activation
+// dispatched with that focus has landed (mountSidebarRowOnPlaceholderFocus); whenever the row
+// mounts under a focused placeholder, focus moves to the row's first control, or its last when
+// entered with Shift+Tab.
 const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowProps) {
   const viewport = useNearViewport();
   const { sortable } = props;
@@ -2037,11 +2041,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       ref={rowRef}
       data-thread-item
       data-active-thread={props.isActive || undefined}
+      // Placeholder focus is handled by the placeholder: mounting here would remove it mid-click.
       onFocus={() => {
+        if (!rendered) return;
         clearTimeout(blurTimer.current);
         setFocusWithin(true);
       }}
       onBlur={() => {
+        if (!rendered) return;
         blurTimer.current = setTimeout(() => setFocusWithin(false));
       }}
       style={{
@@ -2072,10 +2079,22 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           className="block size-full"
           onFocus={(event) => {
             focusOnMount.current = { from: event.relatedTarget };
+            mountSidebarRowOnPlaceholderFocus(event.currentTarget, () => setFocusWithin(true));
+          }}
+          onBlur={(event) => {
+            // Focus moved on. A placeholder removed by the mount keeps its entry for the row.
+            if (event.currentTarget.isConnected) focusOnMount.current = null;
           }}
           onClick={(event) =>
             props.onThreadClick(event, scopeThreadRef(props.thread.environmentId, props.thread.id))
           }
+          onContextMenu={(event) => {
+            event.preventDefault();
+            props.onContextMenu(scopeThreadRef(props.thread.environmentId, props.thread.id), {
+              x: event.clientX,
+              y: event.clientY,
+            });
+          }}
         >
           <span className="sr-only">{props.thread.title}</span>
         </button>

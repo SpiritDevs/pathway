@@ -23,6 +23,7 @@ import {
   isSidebarSubagentThread,
   isTrailingDoubleClick,
   mergeActiveThreadOrderPreference,
+  mountSidebarRowOnPlaceholderFocus,
   orderItemsByPreferredIds,
   pinOrderKeyBetween,
   planPinnedReorder,
@@ -2202,5 +2203,66 @@ describe("focusSidebarRowEntry", () => {
     focusSidebarRowEntry(backward.target, from(FOLLOWING));
     expect(backward.attempts).toEqual(["hidden", "settle"]);
     expect(backward.focused()).toBe("settle");
+  });
+});
+
+describe("mountSidebarRowOnPlaceholderFocus", () => {
+  // One task's worth of events: focus, then whatever activation the browser or assistive tech
+  // dispatches with it. The placeholder handles activation only while it is still mounted.
+  function placeholder(focusVisible: boolean) {
+    const ownerDocument = { activeElement: null as unknown };
+    const element = {
+      ownerDocument,
+      matches: (selector: string) => selector === ":focus-visible" && focusVisible,
+    };
+    const tasks: Array<() => void> = [];
+    const log: string[] = [];
+    let mounted = false;
+    const focus = () => {
+      ownerDocument.activeElement = element;
+      mountSidebarRowOnPlaceholderFocus(
+        element as unknown as Parameters<typeof mountSidebarRowOnPlaceholderFocus>[0],
+        () => {
+          mounted = true;
+          log.push("mount");
+        },
+        (task) => tasks.push(task),
+      );
+    };
+    const activate = () => log.push(mounted ? "lost" : "opened");
+    const nextTask = () => {
+      for (const task of tasks.splice(0)) task();
+    };
+    const blur = () => (ownerDocument.activeElement = null);
+    return { focus, activate, nextTask, blur, log };
+  }
+
+  it("never mounts on pointer focus, so the press's click reaches the placeholder", () => {
+    const press = placeholder(false);
+    press.focus();
+    press.nextTask();
+    press.activate();
+    press.nextTask();
+    expect(press.log).toEqual(["opened"]);
+  });
+
+  it("mounts after an activation dispatched with keyboard or assistive-tech focus", () => {
+    const assistive = placeholder(true);
+    assistive.focus();
+    assistive.activate();
+    assistive.nextTask();
+    expect(assistive.log).toEqual(["opened", "mount"]);
+  });
+
+  it("mounts once keyboard focus settles, and not after focus has moved on", () => {
+    const tab = placeholder(true);
+    tab.focus();
+    tab.nextTask();
+    expect(tab.log).toEqual(["mount"]);
+    const passing = placeholder(true);
+    passing.focus();
+    passing.blur();
+    passing.nextTask();
+    expect(passing.log).toEqual([]);
   });
 });
