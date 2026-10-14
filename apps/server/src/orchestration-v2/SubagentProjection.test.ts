@@ -7,6 +7,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   ProviderThreadId,
+  RunId,
   ThreadId,
 } from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
@@ -63,6 +64,42 @@ function makeParentThread(): OrchestrationV2AppThread {
       requestId: CommandId.make("command:subagent-parent-title"),
       startedAt: parentCreatedAt,
     },
+    workspaceMove: {
+      id: CommandId.make("command:subagent-parent-move"),
+      status: "running",
+      phase: "creating_worktree",
+      sourceCwd: "/tmp/project",
+      sourceHead: null,
+      fileCount: 0,
+      terminalCount: 0,
+      transferStashOid: null,
+      targetWorktreePath: null,
+      targetBranch: null,
+      setup: "pending",
+      detail: null,
+      startedAt: parentCreatedAt,
+      updatedAt: parentCreatedAt,
+      completedAt: null,
+    },
+    browserTakeover: {
+      id: CommandId.make("command:subagent-parent-takeover"),
+      status: "active",
+      runId: RunId.make("run:subagent-parent"),
+      providerSessionId: "provider-session:subagent-parent",
+      tabId: "tab:subagent-parent",
+      hostClientId: "client:subagent-parent",
+      hostConnectionId: "connection:subagent-parent",
+      failure: null,
+      requestedAt: parentCreatedAt,
+      updatedAt: parentCreatedAt,
+    },
+    previewActivity: {
+      runId: RunId.make("run:subagent-parent"),
+      providerSessionId: "provider-session:subagent-parent",
+      tabId: "tab:subagent-parent",
+      hostClientId: "client:subagent-parent",
+      lastActivityAt: parentCreatedAt,
+    },
     deletedAt: null,
   };
 }
@@ -86,8 +123,11 @@ it("keeps a subagent child awake when its parent thread is snoozed", () => {
 
   assert.isNull(childThread.snoozedUntil);
   assert.isNull(childThread.snoozedAt);
-  // Only the parent's title effect can clear the parent's marker.
+  // The parent's in-flight operations settle only on the parent.
   assert.isNull(childThread.titleRegeneration);
+  assert.isNull(childThread.workspaceMove);
+  assert.isNull(childThread.browserTakeover);
+  assert.isNull(childThread.previewActivity);
   assert.isFalse(childThread.settleAfterCompletion);
   assert.equal(childThread.projectId, parentThread.projectId);
   assert.equal(childThread.runtimeMode, parentThread.runtimeMode);

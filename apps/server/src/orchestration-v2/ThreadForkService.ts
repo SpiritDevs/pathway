@@ -87,8 +87,12 @@ export function forkTargetThread(input: {
     snoozedUntil: null,
     snoozedAt: null,
     lastVisitedAt: null,
-    // The source's in-flight title effect only ever clears the source's own marker.
+    // In-flight operations (and the preview host/tab they act on) settle only on the source, so a
+    // copy would never be cleared here: a running workspace move would block messages forever.
     titleRegeneration: null,
+    workspaceMove: null,
+    browserTakeover: null,
+    previewActivity: null,
     deletedAt: null,
   };
 }
