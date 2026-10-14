@@ -16,7 +16,7 @@ The slide animation follows your system's reduced-motion preference.
 
 When the sidebar has a blue header background, its toggle icon turns white while the panel is visible and returns to its normal color when the panel hides.
 
-Each thread row shows an icon for its agent. When a thread has switched between providers, their icons stack with the most recent in front. Hover a thread to see its details card, including every model it has used, with the current model last. With the keyboard, focus a thread and press I to open the card and move onto it, even if hovering already opened it; press Escape to close it and return to the thread.
+Each thread row shows an icon for its agent. When a thread has switched between providers, their icons stack with the most recent in front. Hover a thread to see its details card, including every model it has used, with the current model last. With the keyboard, focus a thread and press I to open the card and move onto it, even if hovering already opened it; press Escape to close it and return to the thread. The key is listed as Sidebar: Thread Details and can be changed or removed in **Settings → Keybindings**.
 
 Use the search icon in the thread list header to find threads by title. Search shows up to 100 matches; enter a more specific title to narrow the results.
 

@@ -32,6 +32,8 @@ export interface ShortcutMatchContext {
   agentThreadsView: boolean;
   /** True on `/calendar`, which is what lets that surface's bare-key defaults fire at all. */
   calendarView: boolean;
+  /** True only for the key handler of a focused sidebar thread row. */
+  sidebarThreadFocus: boolean;
   terminalFocus: boolean;
   terminalOpen: boolean;
   previewFocus: boolean;
@@ -139,6 +141,7 @@ function resolveContext(options: ShortcutMatchOptions | undefined): ShortcutMatc
   return {
     agentThreadsView: false,
     calendarView: false,
+    sidebarThreadFocus: false,
     terminalFocus: false,
     terminalOpen: false,
     previewFocus: false,
@@ -314,6 +317,33 @@ export function shortcutLabelForCommand(
   const platform = resolvePlatform(resolvedOptions);
   const shortcut = findEffectiveShortcutForCommand(keybindings, command, resolvedOptions);
   return shortcut ? formatShortcutLabel(shortcut, platform) : null;
+}
+
+const ARIA_KEY_NAMES: Readonly<Record<string, string>> = {
+  " ": "Space",
+  escape: "Escape",
+  arrowup: "ArrowUp",
+  arrowdown: "ArrowDown",
+  arrowleft: "ArrowLeft",
+  arrowright: "ArrowRight",
+};
+
+/** The command's effective shortcut in `aria-keyshortcuts` syntax, or null when nothing binds it. */
+export function ariaKeyShortcutsForCommand(
+  keybindings: ResolvedKeybindingsConfig,
+  command: KeybindingCommand,
+  options?: ShortcutMatchOptions,
+): string | null {
+  const shortcut = findEffectiveShortcutForCommand(keybindings, command, options);
+  if (!shortcut) return null;
+  const useMetaForMod = isMacPlatform(resolvePlatform(options));
+  const parts: string[] = [];
+  if (shortcut.ctrlKey || (shortcut.modKey && !useMetaForMod)) parts.push("Control");
+  if (shortcut.altKey) parts.push("Alt");
+  if (shortcut.shiftKey) parts.push("Shift");
+  if (shortcut.metaKey || (shortcut.modKey && useMetaForMod)) parts.push("Meta");
+  parts.push(ARIA_KEY_NAMES[shortcut.key] ?? formatShortcutKeyLabel(shortcut.key));
+  return parts.join("+");
 }
 
 export function threadJumpCommandForIndex(index: number): ThreadJumpKeybindingCommand | null {

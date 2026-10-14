@@ -1,5 +1,6 @@
 import type { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import type { ResolvedKeybindingsConfig } from "@spiritdevs/contracts";
 import {
   useCallback,
   useEffect,
@@ -11,6 +12,7 @@ import {
 } from "react";
 
 import { useNearViewport } from "../../hooks/useNearViewport";
+import { resolveShortcutCommand } from "../../keybindings";
 import { cn } from "../../lib/utils";
 
 // Subset of useSortable applied to a card's root <li> (pinned and active
@@ -40,8 +42,10 @@ function pressedRow(event: ReactMouseEvent<HTMLElement>): boolean {
  * is open, and while focus is inside the body or its popups. Until then the primary element holds
  * just the thread title with no subscriptions. The <li> carries the row's height in rem, so both
  * states take the same space at any interface font size. Focusing a bodiless row mounts nothing:
- * the browser scrolls focus into view and the body follows the viewport. The focused row's I key
- * asks for the details card (`onShowDetails`), the keyboard path to what hover shows.
+ * the browser scrolls focus into view and the body follows the viewport. On the focused row, the
+ * `sidebar.threadDetails` binding (I by default, `when: sidebarThreadFocus`) asks for the details
+ * card (`onShowDetails`), the keyboard path to what hover shows. Any other binding on that key,
+ * such as a user's global `i`, wins by the usual last-rule-wins order and is left to its handler.
  */
 export function SidebarThreadRowShell(props: {
   variant: "card" | "slim";
@@ -49,6 +53,9 @@ export function SidebarThreadRowShell(props: {
   active: boolean;
   renaming: boolean;
   detailsOpen: boolean;
+  keybindings: ResolvedKeybindingsConfig;
+  /** `aria-keyshortcuts` for the details binding, or null when nothing binds it. */
+  detailsKeyShortcuts: string | null;
   primaryRef?: Ref<HTMLDivElement> | undefined;
   deferRendering: boolean;
   sortable?: SortableThreadRowBag | undefined;
@@ -112,7 +119,7 @@ export function SidebarThreadRowShell(props: {
         role="button"
         tabIndex={0}
         data-testid={card ? "sidebar-row-card" : "sidebar-row-slim"}
-        aria-keyshortcuts="I"
+        aria-keyshortcuts={props.detailsKeyShortcuts ?? undefined}
         className="group/sidebar-row block size-full cursor-pointer text-left outline-none select-none"
         onFocus={(event) => {
           clearTimeout(blurTimer.current);
@@ -143,10 +150,10 @@ export function SidebarThreadRowShell(props: {
             return;
           }
           if (
-            event.key.toLowerCase() === "i" &&
-            !event.metaKey &&
-            !event.ctrlKey &&
-            !event.altKey
+            !event.defaultPrevented &&
+            resolveShortcutCommand(event, props.keybindings, {
+              context: { sidebarThreadFocus: true },
+            }) === "sidebar.threadDetails"
           ) {
             event.preventDefault();
             props.onShowDetails();

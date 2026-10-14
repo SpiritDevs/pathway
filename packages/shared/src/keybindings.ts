@@ -89,6 +89,9 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "[", command: "calendar.previous", when: CALENDAR_VIEW },
   { key: "]", command: "calendar.next", when: CALENDAR_VIEW },
   { key: "c", command: "calendar.newEvent", when: CALENDAR_VIEW },
+  // Opens the focused sidebar row's details card. Bare for the same reason as the calendar keys;
+  // `sidebarThreadFocus` is only true while a row itself (not its rename field) has focus.
+  { key: "i", command: "sidebar.threadDetails", when: "sidebarThreadFocus" },
 ];
 
 function normalizeKeyToken(token: string): string {

@@ -1,5 +1,7 @@
 import { act } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
+import type { ResolvedKeybindingsConfig } from "@spiritdevs/contracts";
+import { DEFAULT_RESOLVED_KEYBINDINGS } from "@spiritdevs/shared/keybindings";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { SidebarThreadRowShell } from "./SidebarThreadRowShell";
@@ -38,7 +40,9 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function renderRow(options: { detailsOpen?: boolean } = {}) {
+function renderRow(
+  options: { detailsOpen?: boolean; keybindings?: ResolvedKeybindingsConfig } = {},
+) {
   const element = (detailsOpen: boolean) => (
     <SidebarThreadRowShell
       variant="card"
@@ -46,6 +50,8 @@ function renderRow(options: { detailsOpen?: boolean } = {}) {
       active={false}
       renaming={false}
       detailsOpen={detailsOpen}
+      keybindings={options.keybindings ?? DEFAULT_RESOLVED_KEYBINDINGS}
+      detailsKeyShortcuts="I"
       deferRendering
       {...handlers}
     >
@@ -81,12 +87,17 @@ function renderRow(options: { detailsOpen?: boolean } = {}) {
 
 // A synthetic event as React would deliver it to the primary element. `inside` is false for events
 // bubbling out of a portaled popup, whose DOM target is outside the row.
-function rowEvent(init: { inside?: boolean; key?: string } = {}) {
+function rowEvent(init: { inside?: boolean; key?: string; shiftKey?: boolean } = {}) {
   const currentTarget = {
     contains: () => init.inside ?? true,
     getBoundingClientRect: () => ({ left: 10, bottom: 40 }),
   };
   return {
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    defaultPrevented: false,
     ...init,
     currentTarget,
     target: currentTarget,
@@ -136,6 +147,57 @@ describe("SidebarThreadRowShell", () => {
     expect(row.bodyMounted()).toBe(true);
     row.setDetailsOpen(false);
     expect(row.bodyMounted()).toBe(false);
+    expect(row.primary().props["aria-keyshortcuts"]).toBe("I");
+  });
+
+  it("leaves the details key to another binding the user put on it", () => {
+    // A user's global `i` comes after the defaults, so it wins over the row's default.
+    const row = renderRow({
+      keybindings: [
+        ...DEFAULT_RESOLVED_KEYBINDINGS,
+        {
+          command: "thread.next",
+          shortcut: {
+            key: "i",
+            metaKey: false,
+            ctrlKey: false,
+            shiftKey: false,
+            altKey: false,
+            modKey: false,
+          },
+        },
+      ],
+    });
+    const event = rowEvent({ key: "i" });
+    act(() => row.primary().props.onKeyDown(event));
+    expect(handlers.onShowDetails).not.toHaveBeenCalled();
+    expect(event.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("follows a rebound details key", () => {
+    const row = renderRow({
+      keybindings: [
+        ...DEFAULT_RESOLVED_KEYBINDINGS.filter(
+          (binding) => binding.command !== "sidebar.threadDetails",
+        ),
+        {
+          command: "sidebar.threadDetails",
+          shortcut: {
+            key: "i",
+            metaKey: false,
+            ctrlKey: false,
+            shiftKey: true,
+            altKey: false,
+            modKey: false,
+          },
+          whenAst: { type: "identifier", name: "sidebarThreadFocus" },
+        },
+      ],
+    });
+    act(() => row.primary().props.onKeyDown(rowEvent({ key: "i" })));
+    expect(handlers.onShowDetails).not.toHaveBeenCalled();
+    act(() => row.primary().props.onKeyDown(rowEvent({ key: "I", shiftKey: true })));
+    expect(handlers.onShowDetails).toHaveBeenCalledOnce();
   });
 
   it("leaves nothing behind when a press is cancelled", () => {

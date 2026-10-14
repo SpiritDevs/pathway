@@ -76,6 +76,7 @@ export type PaneKeybindingCommand = (typeof PANE_KEYBINDING_COMMANDS)[number];
 
 export const BUILT_IN_KEYBINDING_COMMANDS = [
   "sidebar.toggle",
+  "sidebar.threadDetails",
   "orchestrator.toggle",
   "terminal.toggle",
   "terminal.split",

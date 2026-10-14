@@ -64,6 +64,7 @@ import { useFocusSwipe } from "../hooks/useFocusSwipe";
 import {
   threadIsVisibleAt,
   type Issue,
+  type ResolvedKeybindingsConfig,
   type ScopedThreadRef,
   ThreadId,
   EnvironmentId,
@@ -120,6 +121,7 @@ import {
 } from "@spiritdevs/client-runtime/state/runtime";
 import { isElectron } from "../env";
 import {
+  ariaKeyShortcutsForCommand,
   resolveShortcutCommand,
   shortcutLabelForCommand,
   shouldShowThreadJumpHintsForModifiers,
@@ -1091,6 +1093,9 @@ type SidebarThreadRowProps = {
   providerEntryByInstanceId: ReadonlyMap<string, ProviderInstanceEntry>;
   sideChats: ReadonlyArray<SidebarThreadSummary>;
   timestampFormat: TimestampFormat;
+  keybindings: ResolvedKeybindingsConfig;
+  // `aria-keyshortcuts` for the row's details key, computed once for every row.
+  detailsKeyShortcuts: string | null;
   onThreadClick: (event: ReactMouseEvent, threadRef: ScopedThreadRef) => void;
   onThreadActivate: (threadRef: ScopedThreadRef) => void;
   onStartRename: (threadRef: ScopedThreadRef, title: string) => void;
@@ -1958,8 +1963,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     () => scopeThreadRef(thread.environmentId, thread.id),
     [thread.environmentId, thread.id],
   );
-  // Hover and the multi-PR badge open the details card in place; the focused row's I key opens it
-  // with focus so keyboard users can reach its links.
+  // Hover and the multi-PR badge open the details card in place; `sidebar.threadDetails` (I by
+  // default) on the focused row opens it with focus so keyboard users can reach its links.
   const [details, setDetails] = useState<SidebarThreadDetailsState>({
     open: false,
     keyboard: false,
@@ -2009,6 +2014,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       active={props.isActive}
       renaming={isRenaming}
       detailsOpen={details.open}
+      keybindings={props.keybindings}
+      detailsKeyShortcuts={props.detailsKeyShortcuts}
       primaryRef={primaryRef}
       deferRendering={props.deferRendering}
       sortable={props.sortable}
@@ -2211,6 +2218,13 @@ export default function Sidebar() {
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const threadDetailsKeyShortcuts = useMemo(
+    () =>
+      ariaKeyShortcutsForCommand(keybindings, "sidebar.threadDetails", {
+        context: { sidebarThreadFocus: true },
+      }),
+    [keybindings],
+  );
   const autoSettleAfterDays = useClientSettings((s) => s.sidebarAutoSettleAfterDays);
   const collapseWorkingThreads = useClientSettings((s) => s.sidebarCollapseWorkingThreads);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
@@ -5008,6 +5022,8 @@ export default function Sidebar() {
                           EMPTY_PROVIDER_ENTRIES
                         }
                         timestampFormat={timestampFormat}
+                        keybindings={keybindings}
+                        detailsKeyShortcuts={threadDetailsKeyShortcuts}
                         onThreadClick={handleThreadClick}
                         onThreadActivate={navigateToThread}
                         onStartRename={startThreadRename}
