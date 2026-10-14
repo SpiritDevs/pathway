@@ -10,8 +10,8 @@ import type {
 import { threadLastActivityAt } from "./threadSettled.ts";
 import { Atom } from "effect/unstable/reactivity";
 
-import type { EnvironmentThreadShell } from "./models.ts";
-import { presentThreadShell } from "./models.ts";
+import type { EnvironmentThreadShell, PendingUserRequest } from "./models.ts";
+import { pendingUserRequest, presentThreadShell } from "./models.ts";
 import type { EnvironmentCatalogState } from "./connections.ts";
 import {
   arrayElementsEqual,
@@ -25,12 +25,54 @@ import {
 const EMPTY_THREADS: ReadonlyArray<OrchestrationV2ThreadShell> = Object.freeze([]);
 const EMPTY_SCOPED_THREAD_REFS: ReadonlyArray<ScopedThreadRef> = Object.freeze([]);
 const EMPTY_THREAD_INDEX: ReadonlyMap<ThreadId, OrchestrationV2ThreadShell> = new Map();
+const EMPTY_SUBAGENT_REQUESTS: ReadonlyMap<ThreadId, PendingUserRequest> = new Map();
 const EMPTY_THREAD_REFS_BY_PROJECT: ReadonlyMap<
   ProjectId,
   ReadonlyArray<ScopedThreadRef>
 > = new Map();
 
 const EMPTY_THREAD_SHELLS: ReadonlyArray<EnvironmentThreadShell> = Object.freeze([]);
+
+// A question can outlive the subagent's run; once the run ends nothing waits on it.
+// Older servers omit the activity run, so fall back to the latest run's status.
+const isSubagentRunLive = (
+  thread: Pick<OrchestrationV2ThreadShell, "activityRunStatus" | "status">,
+) =>
+  thread.activityRunStatus !== undefined
+    ? thread.activityRunStatus !== null
+    : thread.status === "preparing" ||
+      thread.status === "queued" ||
+      thread.status === "starting" ||
+      thread.status === "running" ||
+      thread.status === "waiting";
+
+/**
+ * Threads above a subagent that waits on the user, by what it waits on. Subagent
+ * rows are hidden, so every thread up the parent chain carries the request until
+ * the chain leaves the environment. An approval outranks a question.
+ */
+export function pendingSubagentRequestsByThread(
+  threads: ReadonlyArray<OrchestrationV2ThreadShell>,
+): ReadonlyMap<ThreadId, PendingUserRequest> {
+  const requests = new Map<ThreadId, PendingUserRequest>();
+  let byId: ReadonlyMap<ThreadId, OrchestrationV2ThreadShell> | undefined;
+  for (const child of threads) {
+    if (child.lineage.relationshipToParent !== "subagent") continue;
+    const request = pendingUserRequest(child.pendingRuntimeRequest);
+    if (request === null || !isSubagentRunLive(child)) continue;
+    byId ??= new Map(threads.map((thread) => [thread.id, thread] as const));
+    const seen = new Set<ThreadId>([child.id]);
+    let current: OrchestrationV2ThreadShell | undefined = child;
+    while (current !== undefined && current.lineage.parentEnvironmentId === undefined) {
+      const parentId: ThreadId | null = current.lineage.parentThreadId;
+      if (parentId === null || seen.has(parentId)) break;
+      seen.add(parentId);
+      if (requests.get(parentId) !== "approval") requests.set(parentId, request);
+      current = byId.get(parentId);
+    }
+  }
+  return requests.size === 0 ? EMPTY_SUBAGENT_REQUESTS : requests;
+}
 
 /** Fields used to group, classify and order the sidebar; row display fields stay per-thread. */
 function threadRosterKey(thread: EnvironmentThreadShell) {
@@ -59,12 +101,14 @@ function threadRosterKey(thread: EnvironmentThreadShell) {
     thread.pinOrderKey,
     thread.hasPendingApprovals,
     thread.hasPendingUserInput,
+    thread.pendingSubagentRequest,
     thread.runtime?.status,
     thread.runtime?.allowanceHold,
     thread.snoozedUntil != null &&
     (thread.runtime?.status === "failed" ||
       thread.hasPendingApprovals ||
-      thread.hasPendingUserInput)
+      thread.hasPendingUserInput ||
+      thread.pendingSubagentRequest != null)
       ? thread.runtime?.updatedAt
       : null,
     thread.latestRun,
@@ -118,21 +162,32 @@ export function createEnvironmentThreadShellAtoms(input: {
   ) => Atom.Atom<ReadonlyArray<OrchestrationV2ThreadShell>>;
 }) {
   // Shell sources are immutable and keep their identity until they change, so
-  // one presentation per source is shared by the list and per-thread atoms.
+  // one presentation per source and subagent request is shared by the list and
+  // per-thread atoms.
   const presentedByEnvironment = new Map<
     EnvironmentId,
-    WeakMap<OrchestrationV2ThreadShell, EnvironmentThreadShell>
+    WeakMap<OrchestrationV2ThreadShell, Map<PendingUserRequest | null, EnvironmentThreadShell>>
   >();
-  const present = (environmentId: EnvironmentId, source: OrchestrationV2ThreadShell) => {
+  const present = (
+    environmentId: EnvironmentId,
+    source: OrchestrationV2ThreadShell,
+    subagentRequests: ReadonlyMap<ThreadId, PendingUserRequest>,
+  ) => {
     let cache = presentedByEnvironment.get(environmentId);
     if (cache === undefined) {
       cache = new WeakMap();
       presentedByEnvironment.set(environmentId, cache);
     }
-    let value = cache.get(source);
+    let byRequest = cache.get(source);
+    if (byRequest === undefined) {
+      byRequest = new Map();
+      cache.set(source, byRequest);
+    }
+    const request = subagentRequests.get(source.id) ?? null;
+    let value = byRequest.get(request);
     if (value === undefined) {
-      value = presentThreadShell(environmentId, source);
-      cache.set(source, value);
+      value = presentThreadShell(environmentId, source, request);
+      byRequest.set(request, value);
     }
     return value;
   };
@@ -156,6 +211,23 @@ export function createEnvironmentThreadShellAtoms(input: {
       return new Map(threads.map((thread) => [thread.id, thread] as const));
     }).pipe(Atom.withLabel(`environment-thread-index:${environmentId}`)),
   );
+
+  // Derived from shell summaries, so no child transcript is subscribed. Keeps its
+  // identity while the requests are unchanged, so threads keep theirs too.
+  const pendingSubagentRequestsAtom = Atom.family((environmentId: EnvironmentId) => {
+    let previous = EMPTY_SUBAGENT_REQUESTS;
+    return Atom.make((get) => {
+      const next = pendingSubagentRequestsByThread(get(environmentThreadsAtom(environmentId)));
+      if (
+        next.size === previous.size &&
+        [...next].every(([threadId, request]) => previous.get(threadId) === request)
+      ) {
+        return previous;
+      }
+      previous = next;
+      return next;
+    }).pipe(Atom.withLabel(`environment-pending-subagent-requests:${environmentId}`));
+  });
 
   const environmentThreadRefsAtom = Atom.family((environmentId: EnvironmentId) => {
     let previous: ReadonlyArray<ScopedThreadRef> = [];
@@ -211,15 +283,18 @@ export function createEnvironmentThreadShellAtoms(input: {
     const ref = parseThreadKey(key);
     return Atom.make((get) => {
       const source = get(environmentThreadIndexAtom(ref.environmentId)).get(ref.threadId);
-      return source === undefined ? null : present(ref.environmentId, source);
+      return source === undefined
+        ? null
+        : present(ref.environmentId, source, get(pendingSubagentRequestsAtom(ref.environmentId)));
     }).pipe(Atom.withLabel(`environment-thread-shell:${key}`));
   });
 
   const environmentThreadShellsAtom = Atom.family((environmentId: EnvironmentId) => {
     let previous = EMPTY_THREAD_SHELLS;
     return Atom.make((get) => {
+      const subagentRequests = get(pendingSubagentRequestsAtom(environmentId));
       const next = get(environmentThreadsAtom(environmentId)).map((thread) =>
-        present(environmentId, thread),
+        present(environmentId, thread, subagentRequests),
       );
       if (arrayElementsEqual(previous, next)) {
         return previous;

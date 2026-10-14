@@ -925,6 +925,27 @@ describe("resolveSidebarThreadStatus", () => {
     ).toBe("approval");
   });
 
+  it("leaves Working while a hidden subagent below waits on the user, approvals first", () => {
+    const waiting = { ...idle, runtime: { ...runtime, status: "idle" as const } };
+    expect(resolveSidebarThreadStatus({ ...idle, runtime })).toBe("working");
+    expect(resolveSidebarThreadStatus({ ...waiting, pendingSubagentRequest: null })).toBe(
+      "waiting",
+    );
+    expect(
+      resolveSidebarThreadStatus({ ...idle, runtime, pendingSubagentRequest: "approval" as const }),
+    ).toBe("approval");
+    expect(
+      resolveSidebarThreadStatus({ ...waiting, pendingSubagentRequest: "user_input" as const }),
+    ).toBe("input");
+    expect(
+      resolveSidebarThreadStatus({
+        ...waiting,
+        hasPendingUserInput: true,
+        pendingSubagentRequest: "approval" as const,
+      }),
+    ).toBe("approval");
+  });
+
   it("reports working for running and starting runtimes", () => {
     expect(resolveSidebarThreadStatus({ ...idle, runtime })).toBe("working");
     expect(
@@ -1292,6 +1313,19 @@ describe("resolveThreadStatusPill", () => {
           ...baseThread,
           hasPendingUserInput: true,
         },
+      }),
+    ).toMatchObject({ label: "Awaiting Input", pulse: false });
+  });
+
+  it("shows what a hidden subagent below waits on", () => {
+    expect(
+      resolveThreadStatusPill({
+        thread: { ...baseThread, pendingSubagentRequest: "approval" as const },
+      }),
+    ).toMatchObject({ label: "Pending Approval", pulse: false });
+    expect(
+      resolveThreadStatusPill({
+        thread: { ...baseThread, pendingSubagentRequest: "user_input" as const },
       }),
     ).toMatchObject({ label: "Awaiting Input", pulse: false });
   });

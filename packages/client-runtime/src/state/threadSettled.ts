@@ -1,5 +1,7 @@
 import * as DateTime from "effect/DateTime";
 
+import type { PendingUserRequest } from "./models.ts";
+
 interface SettlementRunLike {
   readonly turnId?: unknown;
   readonly assistantMessageId?: unknown;
@@ -37,6 +39,19 @@ interface SettlementThreadShell extends QueuedThreadShell {
   readonly settledAt: string | null;
   readonly hasPendingApprovals: boolean;
   readonly hasPendingUserInput: boolean;
+  readonly pendingSubagentRequest?: PendingUserRequest | null;
+}
+
+/** The agent, or a subagent below it, waits on the user's approval or answer. */
+function isBlockedOnUser(
+  shell: Pick<
+    SettlementThreadShell,
+    "hasPendingApprovals" | "hasPendingUserInput" | "pendingSubagentRequest"
+  >,
+): boolean {
+  return (
+    shell.hasPendingApprovals || shell.hasPendingUserInput || shell.pendingSubagentRequest != null
+  );
 }
 
 export type ChangeRequestStateLike = "open" | "closed" | "merged";
@@ -126,7 +141,7 @@ export function canSettle(
   shell: SettlementThreadShell,
   options: { readonly now: string },
 ): boolean {
-  if (shell.hasPendingApprovals || shell.hasPendingUserInput) return false;
+  if (isBlockedOnUser(shell)) return false;
   if (shell.session?.status === "starting" || shell.session?.status === "running") return false;
   if (
     shell.runtime !== null &&
@@ -152,19 +167,21 @@ export interface ThreadSnoozeShell extends QueuedThreadShell {
   readonly snoozedAt?: string | null;
   readonly hasPendingApprovals: boolean;
   readonly hasPendingUserInput: boolean;
+  readonly pendingSubagentRequest?: PendingUserRequest | null;
 }
 
 /**
  * A snoozed thread "raises its hand" when something happens that outranks
- * the user's snooze: the agent is blocked on them (approval / user input),
- * the session failed, or a run completed after the snooze was set — the
- * v1 taste of event-based snooze ("something happened" wakes early).
+ * the user's snooze: the agent or a subagent below it is blocked on them
+ * (approval / user input), the session failed, or a run completed after the
+ * snooze was set — the v1 taste of event-based snooze ("something happened"
+ * wakes early).
  * Raising a hand never clears the server-side snooze fields; it only stops
  * the thread from CLASSIFYING as snoozed, exactly like blocked work and
  * effectiveSettled.
  */
 export function threadRaisedHandWhileSnoozed(shell: ThreadSnoozeShell): boolean {
-  if (shell.hasPendingApprovals || shell.hasPendingUserInput) return true;
+  if (isBlockedOnUser(shell)) return true;
   const runtime = shell.runtime ?? shell.session ?? null;
   const latestRun = shell.latestRun ?? shell.latestTurn ?? null;
   // Only a FRESH failure raises the hand: a thread snoozed while already
@@ -190,18 +207,19 @@ export function threadRaisedHandWhileSnoozed(shell: ThreadSnoozeShell): boolean 
 }
 
 /**
- * A thread may be snoozed unless the agent is blocked on the user: hiding a
- * pending approval or user-input request defeats the request, and a queued
- * turn start (a message no turn has adopted yet) is invisible pending work
- * the same way it is for settle. A running session IS snoozable — snooze
- * only affects visibility, never the agent. Client-side twin of the server
- * invariants so the UI can reject before a round trip.
+ * A thread may be snoozed unless the agent or a subagent below it is blocked
+ * on the user: hiding a pending approval or user-input request defeats the
+ * request, and a queued turn start (a message no turn has adopted yet) is
+ * invisible pending work the same way it is for settle. A running session IS
+ * snoozable — snooze only affects visibility, never the agent. Client-side
+ * twin of the server invariants so the UI can reject before a round trip.
  */
 export function canSnooze(
   shell: Pick<
     ThreadSnoozeShell,
     | "hasPendingApprovals"
     | "hasPendingUserInput"
+    | "pendingSubagentRequest"
     | "latestUserMessageAt"
     | "latestTurn"
     | "latestRun"
@@ -210,7 +228,7 @@ export function canSnooze(
   >,
   options: { readonly now: string },
 ): boolean {
-  if (shell.hasPendingApprovals || shell.hasPendingUserInput) return false;
+  if (isBlockedOnUser(shell)) return false;
   if (hasQueuedTurnStart(shell, options)) return false;
   return true;
 }
@@ -275,14 +293,15 @@ export function threadWokeAt(
 
 /**
  * Settled resolution over the server-backed settled lifecycle. Activity
- * blockers (pending approval/user-input, a live session, an unadjudicated
- * queued turn) are checked first and hold a thread active regardless of any
- * override. Past the blockers, the explicit user override (thread.settle /
- * thread.unsettle commands, projected into settledOverride + settledAt)
- * wins in both directions; without one, a thread auto-settles on a merged
- * PR immediately or on inactivity past the window, except that pending
- * background work (subagents, background commands) blocks auto-settle, and an
- * open or closed PR blocks the inactivity path entirely. The server
+ * blockers (pending approval/user-input, its own or a subagent's, a live
+ * session, an unadjudicated queued turn) are checked first and hold a thread
+ * active regardless of any override. Past the blockers, the explicit user
+ * override (thread.settle / thread.unsettle commands, projected into
+ * settledOverride + settledAt) wins in both directions; without one, a
+ * thread auto-settles on a merged PR immediately or on inactivity past the
+ * window, except that pending background work (subagents, background
+ * commands) blocks auto-settle, and an open or closed PR blocks the
+ * inactivity path entirely. The server
  * un-settles on real activity (user message, session start, approval/
  * user-input request), so an override never goes stale silently.
  */
@@ -295,7 +314,7 @@ export function effectiveSettled(
   },
 ): boolean {
   // Blocked work must remain visible even when a user explicitly settled it.
-  if (shell.hasPendingApprovals || shell.hasPendingUserInput) return false;
+  if (isBlockedOnUser(shell)) return false;
   if (shell.session?.status === "starting" || shell.session?.status === "running") return false;
   if (
     shell.runtime !== null &&

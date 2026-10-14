@@ -25,9 +25,14 @@ struct PathwayThreadLifecyclePartition {
         changeRequestStates: [String: PathwayChangeRequestState] = [:],
         autoSettleAfterDays: Int? = 3
     ) {
-        all = threads
+        var all = threads
             .filter { $0.shell.deletedAt == nil }
             .sorted(by: PathwayAgentThread.isOrderedBefore)
+        let subagentRequests = PathwayAgentThread.pendingSubagentRequests(in: all)
+        for index in all.indices {
+            all[index].pendingSubagentRequest = subagentRequests[all[index].lineageKey]
+        }
+        self.all = all
 
         // An attached thread lists under its parent's Lineage, but returns once that parent is gone.
         let listed = Set(all.filter { $0.shell.archivedAt == nil }.map(\.lineageKey))
@@ -89,8 +94,42 @@ extension PathwayAgentThread {
     }
 
     private var hasPendingUserAction: Bool {
+        if pendingSubagentRequest != nil { return true }
         guard let kind = shell.pendingRuntimeRequest?.kind else { return false }
         return kind != "auth_refresh"
+    }
+
+    /// What this subagent's live run waits on the user for. A question can outlive the run,
+    /// and nothing waits on it once the run ends.
+    private var subagentRequest: String? {
+        guard shell.lineage?.relationshipToParent == "subagent", hasLiveWork,
+              let request = shell.pendingRuntimeRequest,
+              !["auth_refresh", "auth_tokens_refresh"].contains(request.kind)
+        else { return nil }
+        guard ["user_input", "tool_user_input"].contains(request.kind) else { return "approval" }
+        return request.isBlocking == false ? nil : "user_input"
+    }
+
+    /// Threads above a subagent that waits on the user, by `lineageKey`. Subagent rows are
+    /// hidden, so every thread up the parent chain carries the request until the chain
+    /// leaves the environment. An approval outranks a question.
+    static func pendingSubagentRequests(in threads: [Self]) -> [String: String] {
+        var requests: [String: String] = [:]
+        var byKey: [String: Self]?
+        for child in threads {
+            guard let request = child.subagentRequest else { continue }
+            if byKey == nil {
+                byKey = Dictionary(threads.map { ($0.lineageKey, $0) }, uniquingKeysWith: { first, _ in first })
+            }
+            var seen: Set<String> = [child.lineageKey]
+            var current: Self? = child
+            while let thread = current, thread.shell.lineage?.parentEnvironmentId == nil,
+                  let parentKey = thread.parentKey, seen.insert(parentKey).inserted {
+                if requests[parentKey] != "approval" { requests[parentKey] = request }
+                current = byKey?[parentKey]
+            }
+        }
+        return requests
     }
 
     private var hasLiveWork: Bool {

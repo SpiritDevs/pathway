@@ -68,14 +68,16 @@ describe("focus view preferences", () => {
         latestRun: { status: "failed", startedAt: null, completedAt: null },
       }),
       thread("input", "2026-09-02T00:00:00Z", { hasPendingUserInput: true }),
+      thread("subagent-approval", "2026-09-03T00:00:00Z", { pendingSubagentRequest: "approval" }),
     ];
     expect(ids(sortActiveThreadsForFocus(threads, "needs_attention"))).toEqual([
+      "subagent-approval",
       "input",
       "failed",
       "quiet",
     ]);
     expect(
       ids(sortActiveThreadsForFocus(threads, "project", (item) => item.project ?? null)),
-    ).toEqual(["failed", "quiet", "input"]);
+    ).toEqual(["failed", "quiet", "subagent-approval", "input"]);
   });
 });

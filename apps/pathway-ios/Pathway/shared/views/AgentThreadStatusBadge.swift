@@ -10,7 +10,8 @@ struct AgentThreadStatusBadge: View {
             hasPlan: thread.shell.hasActionableProposedPlan,
             runStatus: thread.shell.activityRunStatus ?? thread.shell.status,
             hasActiveRun: thread.shell.activeRunId != nil, hasError: thread.shell.lastError != nil,
-            hasAllowanceHold: thread.shell.allowanceHold != nil)
+            hasAllowanceHold: thread.shell.allowanceHold != nil,
+            subagentRequest: thread.pendingSubagentRequest)
     }
 
     private var color: Color {

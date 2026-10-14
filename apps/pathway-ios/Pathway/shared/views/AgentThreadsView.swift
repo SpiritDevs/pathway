@@ -419,7 +419,7 @@ struct AgentThreadsView: View {
         if !projectFilter.isEmpty && "\(thread.companyId):\(thread.cloudProjectId ?? "")" != projectFilter { return false }
         if !providerFilter.isEmpty && thread.shell.providerInstanceId != providerFilter { return false }
         if listFilter == .running && !thread.isRunning { return false }
-        if listFilter == .needsAttention && !thread.needsAction { return false }
+        if listFilter == .needsAttention && !thread.needsAction && thread.pendingSubagentRequest == nil { return false }
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if !text.isEmpty {
             let searchable = [thread.shell.title, thread.shell.branch ?? "", thread.shell.providerInstanceId,
@@ -1630,7 +1630,7 @@ struct AgentThreadConversationView: View {
                     Button("For 3 hours") { snooze(hours: 3) }
                     Button("For 1 day") { snooze(hours: 24) }
                     Button("For 1 week") { snooze(hours: 168) }
-                }.disabled(model.activeRunID != nil || !model.queuedRuns.isEmpty || model.isSending || isUpdatingLifecycle || isThreadSettled || actionThread.shell.pendingRuntimeRequest != nil)
+                }.disabled(model.activeRunID != nil || !model.queuedRuns.isEmpty || model.isSending || isUpdatingLifecycle || isThreadSettled || actionThread.shell.pendingRuntimeRequest != nil || actionThread.pendingSubagentRequest != nil)
             }
         }
         if supportsThreadAction("threadSettleAfterCompletion"), !isThreadSettled {

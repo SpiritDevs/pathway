@@ -15,8 +15,12 @@ import { Atom, AtomRegistry } from "effect/unstable/reactivity";
 import type { EnvironmentCatalogState } from "./connections.ts";
 import { v2ShellSnapshot, v2ThreadShell } from "./orchestrationV2TestFixtures.ts";
 import { applyShellStreamEvent } from "./shellReducer.ts";
-import { createEnvironmentThreadShellAtoms } from "./threadShell.ts";
-import { createThreadRosterProjector } from "./threadShell.ts";
+import {
+  createEnvironmentThreadShellAtoms,
+  createThreadRosterProjector,
+  pendingSubagentRequestsByThread,
+} from "./threadShell.ts";
+import { canSnooze, effectiveSnoozed } from "./threadSettled.ts";
 import { presentThreadShell } from "./models.ts";
 
 const ENVIRONMENT_A = EnvironmentId.make("environment-a");
@@ -249,5 +253,139 @@ describe("sidebar thread roster", () => {
         projectShell({ ...initial, updatedAt: DateTime.makeUnsafe("2026-06-20T00:01:00Z") }),
       ]),
     ).not.toBe(before);
+  });
+});
+
+describe("subagent requests on ancestor threads", () => {
+  const subagentOf = (parent: OrchestrationV2ThreadShell, id: string) => ({
+    ...v2ThreadShell,
+    id: ThreadId.make(id),
+    creationSource: "mcp" as const,
+    status: "running" as const,
+    activityRunStatus: "running" as const,
+    lineage: {
+      rootThreadId: parent.lineage.rootThreadId,
+      parentThreadId: parent.id,
+      relationshipToParent: "subagent" as const,
+    },
+  });
+  const request = (kind: "command" | "user_input", isBlocking?: boolean) => ({
+    id: RuntimeRequestId.make(`request-${kind}`),
+    kind,
+    createdAt: v2ThreadShell.createdAt,
+    ...(isBlocking === undefined ? {} : { isBlocking }),
+  });
+
+  it("lifts a nested subagent's approval to the visible thread and clears once answered", () => {
+    // The parent's turn ended and is snoozed; the delegated review keeps going.
+    const root = {
+      ...v2ThreadShell,
+      latestRunId: RunId.make("root-run"),
+      status: "completed" as const,
+      snoozedAt: v2ThreadShell.createdAt,
+      snoozedUntil: DateTime.makeUnsafe("2099-01-01T00:00:00Z"),
+    };
+    const child = subagentOf(root, "review");
+    const grandchild = subagentOf(child, "review-helper");
+    const unrelated = { ...v2ThreadShell, id: ThreadId.make("unrelated") };
+    const snapshotAtom = Atom.family((environmentId: EnvironmentId) =>
+      Atom.make<OrchestrationV2ShellSnapshot | null>({
+        ...v2ShellSnapshot,
+        threads:
+          environmentId === ENVIRONMENT_A
+            ? [root, child, grandchild, unrelated]
+            : [root, unrelated],
+      }),
+    );
+    const shell = createEnvironmentThreadShellAtoms({
+      catalogValueAtom: Atom.make<EnvironmentCatalogState>({
+        isReady: true,
+        entries: new Map([
+          [ENVIRONMENT_A, {} as never],
+          [ENVIRONMENT_B, {} as never],
+        ]),
+      }),
+      snapshotAtom,
+    });
+    const registry = AtomRegistry.make();
+    const rootRef = { environmentId: ENVIRONMENT_A, threadId: root.id };
+    const now = "2026-06-20T00:00:00.000Z";
+    const parent = registry.get(shell.threadShellAtom(rootRef))!;
+    const roster = registry.get(shell.threadRosterAtom);
+    const other = registry.get(shell.threadShellAtom({ ...rootRef, threadId: unrelated.id }));
+    const listB = registry.get(shell.environmentThreadShellsAtom(ENVIRONMENT_B));
+    expect(parent.pendingSubagentRequest).toBeNull();
+    expect(effectiveSnoozed(parent, { now })).toBe(true);
+
+    registry.set(snapshotAtom(ENVIRONMENT_A), {
+      ...v2ShellSnapshot,
+      threads: [
+        root,
+        child,
+        { ...grandchild, pendingRuntimeRequest: request("command") },
+        unrelated,
+      ],
+    });
+    const asking = registry.get(shell.threadShellAtom(rootRef))!;
+    expect(asking.pendingSubagentRequest).toBe("approval");
+    expect(registry.get(shell.threadShellAtom({ ...rootRef, threadId: child.id }))).toMatchObject({
+      pendingSubagentRequest: "approval",
+    });
+    expect(effectiveSnoozed(asking, { now })).toBe(false);
+    expect(canSnooze(asking, { now })).toBe(false);
+    // The roster regroups the parent, while other threads and environments keep their identity.
+    expect(registry.get(shell.threadRosterAtom)).not.toBe(roster);
+    expect(registry.get(shell.threadRosterAtom)).toContain(asking);
+    expect(registry.get(shell.threadShellAtom({ ...rootRef, threadId: unrelated.id }))).toBe(other);
+    expect(registry.get(shell.environmentThreadShellsAtom(ENVIRONMENT_B))).toBe(listB);
+    expect(
+      registry.get(shell.threadShellAtom({ environmentId: ENVIRONMENT_B, threadId: root.id }))
+        ?.pendingSubagentRequest,
+    ).toBeNull();
+
+    registry.set(snapshotAtom(ENVIRONMENT_A), {
+      ...v2ShellSnapshot,
+      threads: [root, child, grandchild, unrelated],
+    });
+    expect(registry.get(shell.threadShellAtom(rootRef))).toBe(parent);
+    expect(effectiveSnoozed(parent, { now })).toBe(true);
+    registry.dispose();
+  });
+
+  it("ranks approvals over questions and ignores requests nothing waits on", () => {
+    const root = v2ThreadShell;
+    const asks = { ...subagentOf(root, "asks"), pendingRuntimeRequest: request("user_input") };
+    const approves = { ...subagentOf(root, "approves"), pendingRuntimeRequest: request("command") };
+    expect(pendingSubagentRequestsByThread([root, asks]).get(root.id)).toBe("user_input");
+    expect(pendingSubagentRequestsByThread([root, asks, approves]).get(root.id)).toBe("approval");
+    expect(pendingSubagentRequestsByThread([root, approves, asks]).get(root.id)).toBe("approval");
+
+    const ignored = [
+      // An async question does not hold the subagent.
+      { ...subagentOf(root, "async"), pendingRuntimeRequest: request("user_input", false) },
+      // The subagent's run ended, so nothing waits on its leftover question.
+      {
+        ...subagentOf(root, "finished"),
+        status: "completed" as const,
+        activityRunStatus: null,
+        pendingRuntimeRequest: request("user_input"),
+      },
+      // A fork is not a hidden subagent row.
+      {
+        ...subagentOf(root, "fork"),
+        lineage: { ...subagentOf(root, "fork").lineage, relationshipToParent: "fork" as const },
+        pendingRuntimeRequest: request("command"),
+      },
+      // The parent lives on another environment, which carries its own requests.
+      {
+        ...subagentOf(root, "remote"),
+        lineage: {
+          ...subagentOf(root, "remote").lineage,
+          parentEnvironmentId: ENVIRONMENT_B,
+        },
+        pendingRuntimeRequest: request("command"),
+      },
+    ];
+    expect(pendingSubagentRequestsByThread([root, ...ignored]).size).toBe(0);
   });
 });

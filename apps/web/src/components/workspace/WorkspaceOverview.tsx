@@ -23,6 +23,7 @@ export function WorkspaceOverview({ orchestrator = false }: { readonly orchestra
     (thread) =>
       thread.hasPendingApprovals ||
       thread.hasPendingUserInput ||
+      thread.pendingSubagentRequest != null ||
       thread.hasActionableProposedPlan ||
       Boolean(thread.source.lastError),
   );

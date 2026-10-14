@@ -102,6 +102,9 @@ export interface EnvironmentThreadShell {
   > | null;
   readonly hasPendingApprovals: boolean;
   readonly hasPendingUserInput: boolean;
+  /** What a live subagent below this thread waits on the user for. Subagent
+      rows are hidden, so the threads above them carry it. */
+  readonly pendingSubagentRequest?: PendingUserRequest | null;
   readonly hasActionableProposedPlan: boolean;
   readonly pendingBackgroundTasks: ReadonlyArray<
     NonNullable<OrchestrationV2ThreadShell["pendingBackgroundTasks"]>[number]
@@ -176,10 +179,24 @@ export function scopeProject(
   return { ...project, environmentId };
 }
 
+export type PendingUserRequest = "approval" | "user_input";
+
+/** What a thread's pending request asks of the user. Auth refreshes and
+    non-blocking questions do not hold the thread for the user. */
+export function pendingUserRequest(
+  request: OrchestrationV2ThreadShell["pendingRuntimeRequest"],
+): PendingUserRequest | null {
+  if (request === null || request.kind === "auth_refresh") return null;
+  if (request.kind !== "user_input") return "approval";
+  return request.isBlocking === false ? null : "user_input";
+}
+
 export function presentThreadShell(
   environmentId: EnvironmentId,
   thread: OrchestrationV2ThreadShell,
+  pendingSubagentRequest: PendingUserRequest | null = null,
 ): EnvironmentThreadShell {
+  const pendingRequest = pendingUserRequest(thread.pendingRuntimeRequest);
   const updatedAt = iso(thread.updatedAt);
   const latestRun =
     thread.latestRunId === null
@@ -233,13 +250,9 @@ export function presentThreadShell(
     ...(thread.attachedPullRequests === undefined
       ? {}
       : { attachedPullRequests: thread.attachedPullRequests }),
-    hasPendingApprovals:
-      thread.pendingRuntimeRequest !== null &&
-      thread.pendingRuntimeRequest.kind !== "user_input" &&
-      thread.pendingRuntimeRequest.kind !== "auth_refresh",
-    hasPendingUserInput:
-      thread.pendingRuntimeRequest?.kind === "user_input" &&
-      thread.pendingRuntimeRequest.isBlocking !== false,
+    hasPendingApprovals: pendingRequest === "approval",
+    hasPendingUserInput: pendingRequest === "user_input",
+    pendingSubagentRequest,
     hasActionableProposedPlan: thread.hasActionableProposedPlan,
     pendingBackgroundTasks: thread.pendingBackgroundTasks ?? [],
     itemCount: thread.itemCount,

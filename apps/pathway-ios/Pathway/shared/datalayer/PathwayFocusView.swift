@@ -58,9 +58,10 @@ extension PathwayAgentThread {
             .compactMap { $0.flatMap(pathwayDate(from:)) } + [createdDate]).max() ?? createdDate
     }
 
-    /// Approval, input, or a failed last run.
+    /// Approval, input (its own or a subagent's), or a failed last run.
     var needsFocusAttention: Bool {
-        (shell.pendingRuntimeRequest.map { $0.kind != "auth_refresh" } ?? false) || shell.status == "failed"
+        (shell.pendingRuntimeRequest.map { $0.kind != "auth_refresh" } ?? false)
+            || pendingSubagentRequest != nil || shell.status == "failed"
     }
 }
 

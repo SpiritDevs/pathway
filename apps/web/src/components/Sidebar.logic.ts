@@ -236,6 +236,7 @@ type ThreadStatusInput = Pick<
   | "hasActionableProposedPlan"
   | "hasPendingApprovals"
   | "hasPendingUserInput"
+  | "pendingSubagentRequest"
   | "interactionMode"
   | "latestRun"
   | "runtime"
@@ -553,19 +554,20 @@ export function resolveThreadRowClassName(input: {
 // open: not the user's turn yet, so it renders grey like working, not as a
 // false Done.
 // Unread completion is tracked separately: it describes whether a ready
-// thread needs attention, not what the thread is currently doing.
+// thread needs attention, not what the thread is currently doing. Subagent
+// rows are hidden, so a thread also shows what a subagent below it waits on.
 export type SidebarThreadStatus = "approval" | "input" | "working" | "waiting" | "failed" | "ready";
 
 type SidebarThreadStatusInput = Pick<
   SidebarThreadSummary,
-  "hasPendingApprovals" | "hasPendingUserInput" | "runtime"
+  "hasPendingApprovals" | "hasPendingUserInput" | "pendingSubagentRequest" | "runtime"
 >;
 
 export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): SidebarThreadStatus {
-  if (thread.hasPendingApprovals) {
+  if (thread.hasPendingApprovals || thread.pendingSubagentRequest === "approval") {
     return "approval";
   }
-  if (thread.hasPendingUserInput) {
+  if (thread.hasPendingUserInput || thread.pendingSubagentRequest === "user_input") {
     return "input";
   }
   if (thread.runtime?.allowanceHold) return "waiting";
@@ -822,7 +824,7 @@ export function resolveThreadStatusPill(input: {
 }): ThreadStatusPill | null {
   const { thread } = input;
 
-  if (thread.hasPendingApprovals) {
+  if (thread.hasPendingApprovals || thread.pendingSubagentRequest === "approval") {
     return {
       label: "Pending Approval",
       colorClass: "text-amber-600 dark:text-amber-300/90",
@@ -831,7 +833,7 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  if (thread.hasPendingUserInput) {
+  if (thread.hasPendingUserInput || thread.pendingSubagentRequest === "user_input") {
     return {
       label: "Awaiting Input",
       colorClass: "text-indigo-600 dark:text-indigo-300/90",

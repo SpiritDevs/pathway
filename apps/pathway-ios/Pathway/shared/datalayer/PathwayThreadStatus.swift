@@ -6,13 +6,17 @@ enum PathwayThreadStatus: String, Sendable {
     case failed = "Failed", stopped = "Stopped", ready = "Ready"
     case waitingForAllowance = "Waiting for allowance"
 
-    init(requestKind: String?, hasPlan: Bool, runStatus: String, hasActiveRun: Bool, hasError: Bool, hasAllowanceHold: Bool = false) {
+    init(requestKind: String?, hasPlan: Bool, runStatus: String, hasActiveRun: Bool, hasError: Bool, hasAllowanceHold: Bool = false,
+         subagentRequest: String? = nil) {
+        // A hidden subagent's approval outranks the thread's own question.
+        if subagentRequest == "approval" { self = .approval; return }
         switch requestKind {
         case "user_input", "tool_user_input": self = .question; return
         case "command", "file-read", "file-change": self = .approval; return
         case nil, "auth_refresh", "auth_tokens_refresh": break
         default: self = .needsYou; return
         }
+        if subagentRequest == "user_input" { self = .question; return }
         if hasPlan { self = .plan; return }
         if hasAllowanceHold { self = .waitingForAllowance; return }
         switch runStatus {
