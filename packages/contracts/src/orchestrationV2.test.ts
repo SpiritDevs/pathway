@@ -24,6 +24,7 @@ import {
   OrchestrationV2CheckpointScope,
   OrchestrationV2Command,
   OrchestrationV2ContinuationLaunchInput,
+  OrchestrationV2DelegatedCompletionCohort,
   OrchestrationV2DomainEvent,
   OrchestrationV2DomainEventJson,
   OrchestrationV2GetThreadProjectionError,
@@ -92,6 +93,12 @@ describe("orchestration V2 contracts", () => {
     expect(decode({ ...error, reason: "not_found" }).reason).toBe("not_found");
     expect(Schema.decodeUnknownSync(legacy)({ ...error, reason: "not_found" })).toEqual(error);
     expect(() => decode({ ...error, reason: "unknown" })).toThrow();
+  });
+
+  it("decodes delegated completion cohorts persisted with a settled delivery count", () => {
+    const decode = Schema.decodeUnknownSync(OrchestrationV2DelegatedCompletionCohort);
+    const cohort = { disposition: "open", nextGeneration: 3, delivery: null };
+    expect(decode({ ...cohort, settledDeliveryCount: 2 })).toEqual(cohort);
   });
 
   it("keeps thread history windows opt-in and accepts stable paging targets", () => {

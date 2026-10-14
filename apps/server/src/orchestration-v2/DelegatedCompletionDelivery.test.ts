@@ -223,7 +223,6 @@ const seedParentWithTerminalTask = (input: {
             delegatedCompletion: {
               disposition: "open",
               nextGeneration: 2,
-              settledDeliveryCount: 1,
               delivery:
                 input.deliveryTaskIds === undefined
                   ? null
@@ -420,7 +419,6 @@ it.layer(TestLayer)("delegated completion delivery repairs", (it) => {
       assert.deepEqual(parentRun?.delegatedCompletion, {
         disposition: "open",
         nextGeneration: 2,
-        settledDeliveryCount: 1,
         delivery: null,
       });
       assert.isFalse(
