@@ -199,12 +199,8 @@ export function sidebarThreadSection(
   const needsChangeRequest =
     hasChangeRequestSource &&
     (settled(null) !== settled("merged") || settled(null) !== settled("open"));
-  if (!needsChangeRequest) return placed(settled(null) ? "settled" : "active");
-  // Until the background check answers, the age rule alone places the thread: quiet history waits
-  // in Settled instead of flooding Active, and an open PR found later brings it back.
-  const quiet = effectiveSettled(
-    { ...thread, attachedPullRequest: null, attachedPullRequests: [] },
-    { ...settleOptions, changeRequestState: null },
-  );
-  return placed(quiet ? "settled" : "active", true);
+  // Until the background check answers, the shared rule places the thread with no PR state: an
+  // attached PR keeps it Active, and a branch alone falls back to the age rule, so quiet branch
+  // history waits in Settled instead of flooding Active and an open PR found later brings it back.
+  return placed(settled(null) ? "settled" : "active", needsChangeRequest);
 }

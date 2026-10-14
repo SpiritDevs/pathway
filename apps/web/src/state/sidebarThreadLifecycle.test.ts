@@ -81,16 +81,53 @@ describe("sidebar lifecycle placement", () => {
     }
   });
 
-  it("places unclassified threads by age alone, attached PRs included", () => {
+  it("keeps unresolved attached PRs Active and places unclassified branches by age", () => {
     const attached = {
       ...thread,
       branch: null,
       attachedPullRequests: [{ number: 7, url: "https://github.com/example/repo/pull/7" }],
     };
     const old = { latestUserMessageAt: "2026-09-01T00:00:00.000Z" };
-    expect(classify(attached, { autoSettleAfterDays: 3 })).toBe("active");
-    expect(classify({ ...attached, ...old }, { autoSettleAfterDays: 3 })).toBe("settled");
-    expect(provisional({ ...attached, ...old }, { autoSettleAfterDays: 3 })).toBe(true);
+    const quietAttached = { ...attached, ...old };
+    // Offline or not yet checked, a quiet thread with an attached PR must not hide in Settled.
+    expect(classify(quietAttached, { autoSettleAfterDays: 3 })).toBe("active");
+    expect(provisional(quietAttached, { autoSettleAfterDays: 3 })).toBe(true);
+    expect(classify({ ...quietAttached, branch: "work" }, { autoSettleAfterDays: 3 })).toBe(
+      "active",
+    );
+    // Known settlement or an explicit override still decides.
+    const attachedKey = scopedThreadKey(scopeThreadRef(attached.environmentId, attached.id));
+    const attachedMerged = new Map([
+      [attachedKey, { source: threadChangeRequestSource(quietAttached), state: "merged" as const }],
+    ]);
+    expect(
+      classify(quietAttached, { autoSettleAfterDays: 3, changeRequests: attachedMerged }),
+    ).toBe("settled");
+    expect(
+      classify(
+        { ...quietAttached, settledOverride: "settled" as const },
+        { autoSettleAfterDays: 3 },
+      ),
+    ).toBe("settled");
+    // Running work stays protected even when a merged answer is known.
+    expect(
+      classify(
+        { ...quietAttached, hasPendingApprovals: true },
+        { autoSettleAfterDays: 3, changeRequests: attachedMerged },
+      ),
+    ).toBe("active");
+    expect(
+      classify(
+        {
+          ...quietAttached,
+          pendingBackgroundTasks: [{ taskId: "bg-1", description: "sleep 20" }],
+        },
+        { autoSettleAfterDays: 3 },
+      ),
+    ).toBe("active");
+    // A branch with no attachment falls back to the age rule.
+    expect(classify({ ...thread, ...old }, { autoSettleAfterDays: 3 })).toBe("settled");
+    expect(provisional({ ...thread, ...old }, { autoSettleAfterDays: 3 })).toBe(true);
     expect(classify({ ...thread, ...old }, { autoSettleAfterDays: null })).toBe("active");
   });
 
