@@ -11,7 +11,6 @@ import * as Schema from "effect/Schema";
 import { Atom } from "effect/unstable/reactivity";
 
 import { activeCompanyIdAtom } from "../cloud/activeCompany";
-import { readCloudSyncReset } from "../cloud/syncReset";
 import { threadChangeRequestSource, type ThreadChangeRequestState } from "./threadPullRequest";
 
 export const sidebarThreadScopeAtom = Atom.make((get) =>
@@ -22,6 +21,7 @@ export const sidebarThreadScopeAtom = Atom.make((get) =>
 export interface SidebarChangeRequestStorage {
   readonly getItem: (key: string) => string | null;
   readonly setItem: (key: string, value: string) => void;
+  readonly removeItem: (key: string) => void;
 }
 
 function ambientLocalStorage(): SidebarChangeRequestStorage | null {
@@ -32,17 +32,32 @@ function ambientLocalStorage(): SidebarChangeRequestStorage | null {
   }
 }
 
-/** Lives in the account's cloud-sync namespace so sign-out sweeps it with the rest. */
-export function sidebarChangeRequestsStorageKey(scope: string): string | null {
+function scopeParts(
+  scope: string,
+): { readonly accountId: string; readonly company: string } | null {
   try {
     const [accountId, companyId] = JSON.parse(scope) as [unknown, unknown];
     if (typeof accountId !== "string" || accountId.trim() === "") return null;
-    return `pathway:cloud-sync/${accountId.trim()}/sidebar-change-requests/${
-      typeof companyId === "string" ? companyId : "all"
-    }`;
+    return {
+      accountId: accountId.trim(),
+      company: typeof companyId === "string" ? companyId : "all",
+    };
   } catch {
     return null;
   }
+}
+
+const companyKey = (accountId: string, company: string) =>
+  `pathway:cloud-sync/${accountId}/sidebar-change-requests/${company}`;
+// Most recently written companies first; also the list sign-out removes.
+const recentCompaniesKey = (accountId: string) =>
+  `pathway:cloud-sync/${accountId}/sidebar-change-requests-recent`;
+const RECENT_COMPANY_LIMIT = 4;
+
+/** Lives in the account's cloud-sync namespace, next to the account's other local caches. */
+export function sidebarChangeRequestsStorageKey(scope: string): string | null {
+  const parts = scopeParts(scope);
+  return parts && companyKey(parts.accountId, parts.company);
 }
 
 // Only classification is persisted; badge presentation is refetched by visible rows.
@@ -58,6 +73,17 @@ const PersistedChangeRequests = Schema.fromJsonString(
 );
 const decodePersistedChangeRequests = Schema.decodeUnknownOption(PersistedChangeRequests);
 const encodePersistedChangeRequests = Schema.encodeSync(PersistedChangeRequests);
+const RecentCompanies = Schema.fromJsonString(Schema.Array(Schema.String));
+const decodeRecentCompanies = Schema.decodeUnknownOption(RecentCompanies);
+const encodeRecentCompanies = Schema.encodeSync(RecentCompanies);
+
+function readRecentCompanies(
+  storage: SidebarChangeRequestStorage,
+  accountId: string,
+): readonly string[] {
+  const raw = storage.getItem(recentCompaniesKey(accountId));
+  return (raw ? Option.getOrNull(decodeRecentCompanies(raw)) : null) ?? [];
+}
 
 export function readSidebarChangeRequests(
   scope: string,
@@ -66,8 +92,6 @@ export function readSidebarChangeRequests(
   const key = sidebarChangeRequestsStorageKey(scope);
   if (key === null || storage === null) return new Map();
   try {
-    const [accountId] = JSON.parse(scope) as [string];
-    if (readCloudSyncReset(accountId.trim())) return new Map();
     const raw = storage.getItem(key);
     const decoded = raw ? Option.getOrNull(decodePersistedChangeRequests(raw)) : null;
     return new Map(decoded ? Object.entries(decoded) : []);
@@ -76,16 +100,31 @@ export function readSidebarChangeRequests(
   }
 }
 
+let warnedWriteFailure = false;
+
+/** Writes one company's classification; companies beyond the most recent few are evicted. */
 export function writeSidebarChangeRequests(
   scope: string,
   states: ReadonlyMap<string, ThreadChangeRequestState>,
   storage: SidebarChangeRequestStorage | null = ambientLocalStorage(),
 ): void {
-  const key = sidebarChangeRequestsStorageKey(scope);
-  if (key === null || storage === null) return;
+  const parts = scopeParts(scope);
+  if (parts === null || storage === null) return;
+  const { accountId, company } = parts;
   try {
+    // Evict before writing so an inactive company's cache frees room for the active one.
+    const recent = [
+      company,
+      ...readRecentCompanies(storage, accountId).filter((item) => item !== company),
+    ];
+    for (const evicted of recent.slice(RECENT_COMPANY_LIMIT))
+      storage.removeItem(companyKey(accountId, evicted));
     storage.setItem(
-      key,
+      recentCompaniesKey(accountId),
+      encodeRecentCompanies(recent.slice(0, RECENT_COMPANY_LIMIT)),
+    );
+    storage.setItem(
+      companyKey(accountId, company),
       encodePersistedChangeRequests(
         Object.fromEntries(
           [...states].map(([threadKey, { source, state, checkedAt }]) => [
@@ -95,33 +134,76 @@ export function writeSidebarChangeRequests(
         ),
       ),
     );
-  } catch {
-    // Quota or blocked storage only costs a reclassification after the next reload.
+  } catch (error) {
+    // Quota or blocked storage only costs a reclassification after the next reload; the next
+    // write tries again.
+    if (!warnedWriteFailure) {
+      warnedWriteFailure = true;
+      console.warn("Could not save sidebar PR classification.", error);
+    }
   }
 }
 
 // A background pass lands one result per thread; write at most once a second, latest value wins.
-const queuedWrites = new Map<string, ReadonlyMap<string, ThreadChangeRequestState>>();
+const queuedWrites = new Map<
+  string,
+  {
+    states: ReadonlyMap<string, ThreadChangeRequestState>;
+    readonly timer: ReturnType<typeof setTimeout>;
+  }
+>();
 function persistSoon(scope: string, states: ReadonlyMap<string, ThreadChangeRequestState>) {
-  const scheduled = queuedWrites.has(scope);
-  queuedWrites.set(scope, states);
-  if (scheduled) return;
-  setTimeout(() => {
-    const latest = queuedWrites.get(scope);
+  const queued = queuedWrites.get(scope);
+  if (queued) {
+    queued.states = states;
+    return;
+  }
+  queuedWrites.set(scope, {
+    states,
+    timer: setTimeout(() => {
+      const latest = queuedWrites.get(scope);
+      queuedWrites.delete(scope);
+      if (latest) writeSidebarChangeRequests(scope, latest.states);
+    }, 1_000),
+  });
+}
+
+/**
+ * Sign-out: drops the account's queued writes and removes its persisted classification, so a
+ * delayed write cannot land after the account is gone.
+ */
+export function clearSidebarChangeRequests(
+  accountId: string,
+  storage: SidebarChangeRequestStorage | null = ambientLocalStorage(),
+): void {
+  const account = accountId.trim();
+  for (const [scope, queued] of queuedWrites) {
+    if (scopeParts(scope)?.accountId !== account) continue;
+    clearTimeout(queued.timer);
     queuedWrites.delete(scope);
-    if (latest) writeSidebarChangeRequests(scope, latest);
-  }, 1_000);
+  }
+  if (storage === null || account === "") return;
+  try {
+    for (const company of readRecentCompanies(storage, account))
+      storage.removeItem(companyKey(account, company));
+    storage.removeItem(recentCompaniesKey(account));
+  } catch {
+    // Whatever remains is this account's own classification, rechecked in the background.
+  }
 }
 
 // Retain only classification data across navigation and reloads, not row components or VCS
 // subscriptions. Scope by identity and company; idle scopes expire from memory (and reload from
-// storage) and live scopes are pruned against shells.
+// storage) and live scopes are pruned against shells. Only the signed-in account's scope persists:
+// a check that lands after sign-out updates memory alone.
 export const sidebarThreadChangeRequestsAtom = Atom.family((scope: string) =>
   Atom.writable(
     (): ReadonlyMap<string, ThreadChangeRequestState> => readSidebarChangeRequests(scope),
     (ctx, value: ReadonlyMap<string, ThreadChangeRequestState>) => {
       ctx.setSelf(value);
-      persistSoon(scope, value);
+      const accountId = ctx.get(managedRelaySessionAtom)?.accountId.trim();
+      if (accountId !== undefined && accountId === scopeParts(scope)?.accountId)
+        persistSoon(scope, value);
     },
   ).pipe(Atom.setIdleTTL("30 minutes")),
 );

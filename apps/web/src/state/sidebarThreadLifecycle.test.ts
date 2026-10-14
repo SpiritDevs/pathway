@@ -1,10 +1,12 @@
 import { scopeThreadRef, scopedThreadKey } from "@spiritdevs/client-runtime/environment";
+import { setManagedRelaySession } from "@spiritdevs/client-runtime/relay";
 import { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
 import { AtomRegistry } from "effect/unstable/reactivity";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { makeThreadFixture } from "../test-fixtures";
 import { threadChangeRequestSource, type ThreadChangeRequestState } from "./threadPullRequest";
 import {
+  clearSidebarChangeRequests,
   readSidebarChangeRequests,
   sidebarChangeRequestsStorageKey,
   sidebarThreadChangeRequestsAtom,
@@ -238,13 +240,21 @@ describe("sidebar lifecycle placement", () => {
   });
 });
 
+function memoryStorage() {
+  const store = new Map<string, string>();
+  return {
+    store,
+    storage: {
+      getItem: (item: string) => store.get(item) ?? null,
+      setItem: (item: string, value: string) => void store.set(item, value),
+      removeItem: (item: string) => void store.delete(item),
+    },
+  };
+}
+
 it("persists classification without badge inputs in the account's sync namespace", () => {
   const scope = JSON.stringify(["account-a", "company-a"]);
-  const store = new Map<string, string>();
-  const storage = {
-    getItem: (item: string) => store.get(item) ?? null,
-    setItem: (item: string, value: string) => void store.set(item, value),
-  };
+  const { store, storage } = memoryStorage();
   expect(sidebarChangeRequestsStorageKey(scope)).toBe(
     "pathway:cloud-sync/account-a/sidebar-change-requests/company-a",
   );
@@ -271,6 +281,79 @@ it("persists classification without badge inputs in the account's sync namespace
   );
   store.set("pathway:cloud-sync/account-a/sidebar-change-requests/company-a", "{corrupt");
   expect(readSidebarChangeRequests(scope, storage).size).toBe(0);
+});
+
+it("keeps only the most recently written companies per account", () => {
+  const { store, storage } = memoryStorage();
+  const scopeFor = (company: string) => JSON.stringify(["account-a", company]);
+  const states = new Map([[key, merged]]);
+  for (const company of ["c1", "c2", "c3", "c4"])
+    writeSidebarChangeRequests(scopeFor(company), states, storage);
+  writeSidebarChangeRequests(scopeFor("c1"), states, storage);
+  writeSidebarChangeRequests(scopeFor("c5"), states, storage);
+  expect(readSidebarChangeRequests(scopeFor("c2"), storage).size).toBe(0);
+  for (const company of ["c1", "c3", "c4", "c5"])
+    expect(readSidebarChangeRequests(scopeFor(company), storage).size).toBe(1);
+  writeSidebarChangeRequests(JSON.stringify(["account-b", "c1"]), states, storage);
+  clearSidebarChangeRequests("account-a", storage);
+  expect([...store.keys()].filter((item) => item.includes("/account-a/"))).toEqual([]);
+  expect(readSidebarChangeRequests(JSON.stringify(["account-b", "c1"]), storage).size).toBe(1);
+});
+
+it("warns once when storage rejects a write and retries on the next one", () => {
+  const scope = JSON.stringify(["account-a", "company-a"]);
+  const { storage } = memoryStorage();
+  let full = true;
+  const quotaStorage = {
+    ...storage,
+    setItem: (item: string, value: string) => {
+      if (full) throw new DOMException("full", "QuotaExceededError");
+      storage.setItem(item, value);
+    },
+  };
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  try {
+    writeSidebarChangeRequests(scope, new Map([[key, merged]]), quotaStorage);
+    writeSidebarChangeRequests(scope, new Map([[key, merged]]), quotaStorage);
+    expect(warn).toHaveBeenCalledOnce();
+    full = false;
+    writeSidebarChangeRequests(scope, new Map([[key, merged]]), quotaStorage);
+    expect(readSidebarChangeRequests(scope, storage).get(key)?.state).toBe("merged");
+  } finally {
+    warn.mockRestore();
+  }
+});
+
+it("drops queued writes on sign-out and never persists a signed-out account's scope", async () => {
+  vi.useFakeTimers();
+  const { store, storage } = memoryStorage();
+  vi.stubGlobal("window", { localStorage: storage });
+  const registry = AtomRegistry.make();
+  const scope = JSON.stringify(["account-a", "sign-out-company"]);
+  const atom = sidebarThreadChangeRequestsAtom(scope);
+  const stop = registry.subscribe(atom, () => {});
+  try {
+    // A check landing while signed out stays in memory.
+    registry.set(atom, new Map([[key, merged]]));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(registry.get(atom).get(key)).toEqual(merged);
+    expect(store.size).toBe(0);
+    setManagedRelaySession(registry, { accountId: "account-a", readClerkToken: async () => null });
+    // Sign-out inside the write delay cancels the queued write.
+    registry.set(atom, new Map([[key, { ...merged, state: "open" }]]));
+    clearSidebarChangeRequests("account-a");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(store.size).toBe(0);
+    registry.set(atom, new Map([[key, merged]]));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(readSidebarChangeRequests(scope).get(key)).toEqual(merged);
+    clearSidebarChangeRequests("account-a");
+    expect(store.size).toBe(0);
+  } finally {
+    stop();
+    registry.dispose();
+    vi.unstubAllGlobals();
+  }
 });
 
 it("retains freshness across cache reads and errors, and advances it on successful revalidation", () => {
