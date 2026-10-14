@@ -442,6 +442,7 @@ function SidebarThreadTooltip({
   sideChats,
   onOpenSideChat,
   onOpenIssue,
+  takeFocus = false,
 }: {
   thread: SidebarThreadSummary;
   branchPullRequest?: ThreadPr;
@@ -460,14 +461,16 @@ function SidebarThreadTooltip({
   sideChats: ReadonlyArray<SidebarThreadSummary>;
   onOpenSideChat: (threadId: ThreadId) => void;
   onOpenIssue: (issueKey: string) => void;
+  // Opened from the keyboard: focus moves into the card and returns to the row when it closes.
+  takeFocus?: boolean;
 }) {
   return (
     <PopoverPopup
       side="right"
       align="start"
       sideOffset={4}
-      initialFocus={false}
-      finalFocus={false}
+      initialFocus={takeFocus}
+      finalFocus={takeFocus}
       viewportClassName="p-0"
       className={cn("max-w-80 text-left whitespace-normal", "pointer-events-auto")}
     >
@@ -1105,7 +1108,11 @@ type SidebarThreadRowProps = {
 };
 
 const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
-  props: SidebarThreadRowProps & { near: boolean },
+  props: SidebarThreadRowProps & {
+    near: boolean;
+    details: SidebarThreadDetailsState;
+    onDetailsOpenChange: (open: boolean) => void;
+  },
 ) {
   const {
     isRenaming,
@@ -1275,6 +1282,7 @@ const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
       sideChats={props.sideChats}
       onOpenSideChat={(sideChatThreadId) => props.onOpenSideChat(threadRef, sideChatThreadId)}
       onOpenIssue={props.onOpenIssue}
+      takeFocus={props.details.keyboard}
     />
   );
 
@@ -1391,13 +1399,13 @@ const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
   useEffect(() => {
     if (!showSnoozeButton) setSnoozeMenuOpen(false);
   }, [showSnoozeButton]);
-  const [detailsOpen, setDetailsOpen] = useState(false);
+  const { details, onDetailsOpenChange } = props;
   const handlePrClick = useCallback(
     (event: ReactMouseEvent<HTMLElement>) => {
       if (badges.length > 1) {
         event.preventDefault();
         event.stopPropagation();
-        setDetailsOpen(true);
+        onDetailsOpenChange(true);
         return;
       }
       if (!displayedPr?.url) return;
@@ -1413,6 +1421,7 @@ const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
     [
       badges.length,
       displayedPr,
+      onDetailsOpenChange,
       onThreadActivate,
       openPrLink,
       openPullRequestsInRightPanel,
@@ -1547,7 +1556,7 @@ const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
     return (
       <>
         {unreadDot}
-        <Popover open={detailsOpen} onOpenChange={setDetailsOpen}>
+        <Popover open={details.open} onOpenChange={onDetailsOpenChange}>
           <PopoverTrigger
             nativeButton={false}
             openOnHover
@@ -1690,7 +1699,7 @@ const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
   return (
     <>
       {unreadDot}
-      <Popover open={detailsOpen} onOpenChange={setDetailsOpen}>
+      <Popover open={details.open} onOpenChange={onDetailsOpenChange}>
         <PopoverTrigger
           nativeButton={false}
           openOnHover
@@ -1925,6 +1934,9 @@ const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
   );
 });
 
+// `keyboard` survives the close, so the card returns focus to the row it took it from.
+type SidebarThreadDetailsState = { readonly open: boolean; readonly keyboard: boolean };
+
 const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowProps) {
   const { isRenaming, onContextMenu, onStartRename, onThreadActivate, onThreadClick, thread } =
     props;
@@ -1932,12 +1944,24 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     () => scopeThreadRef(thread.environmentId, thread.id),
     [thread.environmentId, thread.id],
   );
+  // Hover and the multi-PR badge open the details card in place; the focused row's I key opens it
+  // with focus so keyboard users can reach its links.
+  const [details, setDetails] = useState<SidebarThreadDetailsState>({
+    open: false,
+    keyboard: false,
+  });
+  const handleDetailsOpenChange = useCallback(
+    (open: boolean) =>
+      setDetails((current) => ({ open, keyboard: open ? false : current.keyboard })),
+    [],
+  );
   return (
     <SidebarThreadRowShell
       variant={props.variant}
       title={thread.title}
       active={props.isActive}
       renaming={isRenaming}
+      detailsOpen={details.open}
       deferRendering={props.deferRendering}
       sortable={props.sortable}
       onClick={(event) => onThreadClick(event, threadRef)}
@@ -1949,8 +1973,16 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       }}
       onActivate={() => onThreadActivate(threadRef)}
       onContextMenu={(position) => onContextMenu(threadRef, position)}
+      onShowDetails={() => setDetails({ open: true, keyboard: true })}
     >
-      {(near) => <SidebarThreadRowContent {...props} near={near} />}
+      {(near) => (
+        <SidebarThreadRowContent
+          {...props}
+          near={near}
+          details={details}
+          onDetailsOpenChange={handleDetailsOpenChange}
+        />
+      )}
     </SidebarThreadRowShell>
   );
 });

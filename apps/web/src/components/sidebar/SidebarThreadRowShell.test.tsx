@@ -15,6 +15,7 @@ const handlers = {
   onDoubleClick: vi.fn(),
   onActivate: vi.fn(),
   onContextMenu: vi.fn(),
+  onShowDetails: vi.fn(),
 };
 
 beforeEach(() => {
@@ -37,13 +38,14 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function renderRow() {
-  const element = () => (
+function renderRow(options: { detailsOpen?: boolean } = {}) {
+  const element = (detailsOpen: boolean) => (
     <SidebarThreadRowShell
       variant="card"
       title="Fix the build"
       active={false}
       renaming={false}
+      detailsOpen={detailsOpen}
       deferRendering
       {...handlers}
     >
@@ -56,13 +58,15 @@ function renderRow() {
     </SidebarThreadRowShell>
   );
   act(() => {
-    renderer = create(element(), {
+    renderer = create(element(options.detailsOpen ?? false), {
       createNodeMock: () => listItem,
     });
   });
   // Test instances are cached per host fiber, so the same instance means the same DOM element.
   const primary = () => renderer!.root.findByProps({ role: "button" });
   const listItemClass = () => renderer!.root.findByType("li").props.className as string;
+  const setDetailsOpen = (detailsOpen: boolean) =>
+    act(() => renderer!.update(element(detailsOpen)));
   const bodyMounted = () =>
     primary().findAll((node) => node.props["aria-label"] === "Settle thread").length > 0;
   const setNear = (isIntersecting: boolean) =>
@@ -72,7 +76,7 @@ function renderRow() {
         {} as IntersectionObserver,
       ),
     );
-  return { primary, listItemClass, bodyMounted, setNear };
+  return { primary, listItemClass, bodyMounted, setNear, setDetailsOpen };
 }
 
 // A synthetic event as React would deliver it to the primary element. `inside` is false for events
@@ -120,6 +124,18 @@ describe("SidebarThreadRowShell", () => {
     expect(handlers.onActivate).toHaveBeenCalledTimes(2);
     act(() => row.primary().props.onKeyDown(rowEvent({ key: "ContextMenu" })));
     expect(handlers.onContextMenu).toHaveBeenCalledWith({ x: 10, y: 40 });
+    expect(handlers.onShowDetails).not.toHaveBeenCalled();
+  });
+
+  it("asks for the details card from the keyboard and keeps the body while it is open", () => {
+    const row = renderRow();
+    act(() => row.primary().props.onKeyDown(rowEvent({ key: "i" })));
+    expect(handlers.onShowDetails).toHaveBeenCalledOnce();
+    expect(handlers.onActivate).not.toHaveBeenCalled();
+    row.setDetailsOpen(true);
+    expect(row.bodyMounted()).toBe(true);
+    row.setDetailsOpen(false);
+    expect(row.bodyMounted()).toBe(false);
   });
 
   it("leaves nothing behind when a press is cancelled", () => {

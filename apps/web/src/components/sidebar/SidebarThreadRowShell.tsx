@@ -35,23 +35,26 @@ function pressedRow(event: ReactMouseEvent<HTMLElement>): boolean {
  * is far offscreen therefore lands on the same element after the body mounts inside it.
  *
  * The body (`children`, given whether the row is near the viewport) mounts only near the viewport,
- * for the first screenful, the open thread, a row being renamed or dragged, and while focus is
- * inside the body or its popups. Until then the primary element holds just the thread title with no
- * subscriptions. The <li> carries the row's height in rem, so both states take the same space at any
- * interface font size. Focusing a bodiless row mounts nothing: the browser scrolls focus into view
- * and the body follows the viewport.
+ * for the first screenful, the open thread, a row being renamed or dragged, while its details card
+ * is open, and while focus is inside the body or its popups. Until then the primary element holds
+ * just the thread title with no subscriptions. The <li> carries the row's height in rem, so both
+ * states take the same space at any interface font size. Focusing a bodiless row mounts nothing:
+ * the browser scrolls focus into view and the body follows the viewport. The focused row's I key
+ * asks for the details card (`onShowDetails`), the keyboard path to what hover shows.
  */
 export function SidebarThreadRowShell(props: {
   variant: "card" | "slim";
   title: string;
   active: boolean;
   renaming: boolean;
+  detailsOpen: boolean;
   deferRendering: boolean;
   sortable?: SortableThreadRowBag | undefined;
   onClick: (event: ReactMouseEvent) => void;
   onDoubleClick: (event: ReactMouseEvent) => void;
   onActivate: () => void;
   onContextMenu: (position: { x: number; y: number }) => void;
+  onShowDetails: () => void;
   children: (near: boolean) => ReactNode;
 }) {
   const { sortable } = props;
@@ -79,6 +82,7 @@ export function SidebarThreadRowShell(props: {
     !props.deferRendering ||
     props.active ||
     props.renaming ||
+    props.detailsOpen ||
     sortable?.isDragging;
   const card = props.variant === "card";
   return (
@@ -105,6 +109,7 @@ export function SidebarThreadRowShell(props: {
         role="button"
         tabIndex={0}
         data-testid={card ? "sidebar-row-card" : "sidebar-row-slim"}
+        aria-keyshortcuts="I"
         className="group/sidebar-row block size-full cursor-pointer text-left outline-none select-none"
         onFocus={(event) => {
           clearTimeout(blurTimer.current);
@@ -132,6 +137,16 @@ export function SidebarThreadRowShell(props: {
             event.preventDefault();
             const bounds = event.currentTarget.getBoundingClientRect();
             props.onContextMenu({ x: bounds.left, y: bounds.bottom });
+            return;
+          }
+          if (
+            event.key.toLowerCase() === "i" &&
+            !event.metaKey &&
+            !event.ctrlKey &&
+            !event.altKey
+          ) {
+            event.preventDefault();
+            props.onShowDetails();
             return;
           }
           if (event.key !== "Enter" && event.key !== " ") return;
