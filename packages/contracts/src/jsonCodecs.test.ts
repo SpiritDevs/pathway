@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SchemaAST from "effect/SchemaAST";
 
@@ -189,6 +190,7 @@ const { text: _text, ...cloudLatestVisibleMessage } = populatedThreadShell.lates
 const cloudShell = { ...populatedThreadShell, latestVisibleMessage: cloudLatestVisibleMessage };
 const encodeCloudShell = Schema.encodeSync(CloudAgentThreadShell);
 const decodeCloudShell = Schema.decodeUnknownSync(CloudAgentThreadShell);
+const decodeCloudShellOption = Schema.decodeUnknownOption(CloudAgentThreadShell);
 
 function jsonRoundTrip<S extends Schema.Codec<unknown, unknown>>(schema: S, value: S["Type"]) {
   const encoded = JSON.parse(JSON.stringify(Schema.encodeSync(schema)(value)));
@@ -203,21 +205,40 @@ describe("persisted JSON codecs", () => {
     ).toEqual([]);
   });
 
-  it("flags non-JSON leaves, including inside recursive schemas", () => {
+  it("flags non-JSON leaves, including behind suspended and recursive schemas", () => {
     interface Node {
-      readonly at: DateTime.Utc;
-      readonly size: bigint;
+      readonly name: string;
+      readonly leaf: Leaf;
       readonly children: ReadonlyArray<Node>;
     }
-    const Node: Schema.Codec<Node> = Schema.Struct({
+    interface Leaf {
+      readonly at: DateTime.Utc;
+      readonly size: bigint;
+      readonly version: 1n;
+      readonly tag: symbol;
+      readonly brand: typeof brand;
+    }
+    const brand = Symbol.for("pathway/test-brand");
+    const Leaf: Schema.Codec<Leaf> = Schema.Struct({
       at: Schema.DateTimeUtc,
       size: Schema.BigInt,
+      version: Schema.Literal(1n),
+      tag: Schema.Symbol,
+      brand: Schema.UniqueSymbol(brand),
+    });
+    // The root holds only JSON-safe leaves, so every finding comes from walking a suspension.
+    const Node: Schema.Codec<Node> = Schema.Struct({
+      name: Schema.String,
+      leaf: Schema.suspend(() => Leaf),
       children: Schema.Array(Schema.suspend(() => Node)),
     });
 
     expect(nonJsonPaths(SchemaAST.toEncoded(Node.ast), "Node")).toEqual([
-      "Node.at (DateTime.Utc)",
-      "Node.size (BigInt)",
+      "Node.leaf.at (DateTime.Utc)",
+      "Node.leaf.size (BigInt)",
+      "Node.leaf.version (bigint literal)",
+      "Node.leaf.tag (Symbol)",
+      "Node.leaf.brand (UniqueSymbol)",
     ]);
   });
 
@@ -237,6 +258,18 @@ describe("persisted JSON codecs", () => {
       requestId: "command-title",
       startedAt: "2026-04-20T00:00:00.000Z",
     });
+  });
+
+  it("rejects a legacy title regeneration date outside the DateTime range instead of throwing", () => {
+    const outOfRange = {
+      ...encodeCloudShell(cloudShell),
+      titleRegeneration: {
+        requestId: "command-title",
+        startedAt: { epochMilliseconds: 8_640_000_000_000_001 },
+      },
+    };
+
+    expect(Option.isNone(decodeCloudShellOption(outOfRange))).toBe(true);
   });
 
   it("round-trips a fully populated shell snapshot through JSON", () => {
