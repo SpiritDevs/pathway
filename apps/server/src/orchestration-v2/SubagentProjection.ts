@@ -105,6 +105,8 @@ export function makeSubagentChildThread(input: {
     snoozedUntil: null,
     snoozedAt: null,
     lastVisitedAt: null,
+    // The source's in-flight title effect only ever clears the source's own marker.
+    titleRegeneration: null,
     deletedAt: null,
   };
 }

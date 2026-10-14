@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import {
+  CommandId,
   type ModelSelection,
   NodeId,
   type OrchestrationV2AppThread,
@@ -58,6 +59,10 @@ function makeParentThread(): OrchestrationV2AppThread {
     lastVisitedAt: null,
     snoozedUntil,
     snoozedAt,
+    titleRegeneration: {
+      requestId: CommandId.make("command:subagent-parent-title"),
+      startedAt: parentCreatedAt,
+    },
     deletedAt: null,
   };
 }
@@ -81,6 +86,8 @@ it("keeps a subagent child awake when its parent thread is snoozed", () => {
 
   assert.isNull(childThread.snoozedUntil);
   assert.isNull(childThread.snoozedAt);
+  // Only the parent's title effect can clear the parent's marker.
+  assert.isNull(childThread.titleRegeneration);
   assert.isFalse(childThread.settleAfterCompletion);
   assert.equal(childThread.projectId, parentThread.projectId);
   assert.equal(childThread.runtimeMode, parentThread.runtimeMode);

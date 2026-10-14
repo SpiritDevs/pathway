@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import {
+  CommandId,
   ContextTransferId,
   MessageId,
   type ModelSelection,
@@ -59,6 +60,10 @@ function makeSourceThread(): OrchestrationV2AppThread {
     lastVisitedAt: null,
     snoozedUntil,
     snoozedAt,
+    titleRegeneration: {
+      requestId: CommandId.make("command:fork-source-title"),
+      startedAt: snoozedAt,
+    },
     deletedAt: null,
   };
 }
@@ -130,6 +135,8 @@ it.effect("keeps a fork awake when its source thread is snoozed", () =>
     assert.isNull(result.targetThread.snoozedUntil);
     assert.isTrue(result.transfer.compactContext);
     assert.isNull(result.targetThread.snoozedAt);
+    // Only the source's title effect can clear the source's marker.
+    assert.isNull(result.targetThread.titleRegeneration);
     assert.isFalse(result.targetThread.settleAfterCompletion);
     assert.equal(result.targetThread.projectId, sourceThread.projectId);
     assert.equal(result.targetThread.providerInstanceId, sourceThread.providerInstanceId);
