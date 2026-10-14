@@ -7,6 +7,7 @@ import {
   buildBulkTitleRegenerationContextMenuItem,
   buildMultiSelectThreadContextMenuItems,
   createThreadJumpHintVisibilityController,
+  detailsCardReturnFocus,
   filterSidebarV2VisibleThreads,
   formatWorkingDurationLabel,
   getFallbackThreadIdAfterDelete,
@@ -2153,5 +2154,26 @@ describe("bounded sidebar search", () => {
     expect(results).toHaveLength(100);
     expect(results).toEqual(threads.slice(0, 100));
     expect(searchSidebarThreadsByTitle(threads, "thread 149")).toEqual([threads[149]]);
+  });
+});
+
+describe("detailsCardReturnFocus", () => {
+  const body = {} as Element;
+  const inCard = {} as Element;
+  const elsewhere = {} as Element;
+  const card = { contains: (node: Node | null) => node === (inCard as unknown as Node) };
+  const row = "row";
+  const target = (activeElement: Element | null) =>
+    detailsCardReturnFocus({ row, card, activeElement, body });
+
+  it("returns focus to the row while it is still in the card or has dropped to the body", () => {
+    expect(target(inCard)).toBe(row);
+    expect(target(body)).toBe(row);
+    expect(target(null)).toBe(row);
+  });
+
+  it("leaves focus the user moved elsewhere, and needs a mounted row", () => {
+    expect(target(elsewhere)).toBeNull();
+    expect(detailsCardReturnFocus({ row: null, card, activeElement: inCard, body })).toBeNull();
   });
 });

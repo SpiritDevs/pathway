@@ -7,6 +7,7 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
+  type Ref,
 } from "react";
 
 import { useNearViewport } from "../../hooks/useNearViewport";
@@ -48,6 +49,7 @@ export function SidebarThreadRowShell(props: {
   active: boolean;
   renaming: boolean;
   detailsOpen: boolean;
+  primaryRef?: Ref<HTMLDivElement> | undefined;
   deferRendering: boolean;
   sortable?: SortableThreadRowBag | undefined;
   onClick: (event: ReactMouseEvent) => void;
@@ -106,6 +108,7 @@ export function SidebarThreadRowShell(props: {
       )}
     >
       <div
+        ref={props.primaryRef}
         role="button"
         tabIndex={0}
         data-testid={card ? "sidebar-row-card" : "sidebar-row-slim"}

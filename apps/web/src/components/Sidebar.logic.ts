@@ -1146,3 +1146,19 @@ export function sortScopedProjectsForSidebar<
       left.id.localeCompare(right.id),
   );
 }
+
+/**
+ * Where focus goes when a details card that took focus from its row closes: back to the row while
+ * focus is still inside the card (or has fallen to the body), and nowhere when the user already
+ * moved it elsewhere, such as tabbing out or clicking another control.
+ */
+export function detailsCardReturnFocus<Row>(input: {
+  readonly row: Row | null;
+  readonly card: { contains(node: Node | null): boolean } | null;
+  readonly activeElement: Element | null;
+  readonly body: Element;
+}): Row | null {
+  const { activeElement, body, card, row } = input;
+  if (activeElement === null || activeElement === body) return row;
+  return card?.contains(activeElement) ? row : null;
+}

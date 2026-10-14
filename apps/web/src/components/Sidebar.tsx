@@ -109,6 +109,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { useParams, useRouter } from "@tanstack/react-router";
 
@@ -218,6 +219,7 @@ import {
   intersectSidebarProjectScopes,
   resolveSidebarThreadModels,
   useThreadJumpHintVisibility,
+  detailsCardReturnFocus,
 } from "./Sidebar.logic";
 import { useRightPanelStore } from "../rightPanelStore";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
@@ -442,7 +444,9 @@ function SidebarThreadTooltip({
   sideChats,
   onOpenSideChat,
   onOpenIssue,
+  cardRef,
   takeFocus = false,
+  returnFocus = false,
 }: {
   thread: SidebarThreadSummary;
   branchPullRequest?: ThreadPr;
@@ -461,16 +465,22 @@ function SidebarThreadTooltip({
   sideChats: ReadonlyArray<SidebarThreadSummary>;
   onOpenSideChat: (threadId: ThreadId) => void;
   onOpenIssue: (issueKey: string) => void;
-  // Opened from the keyboard: focus moves into the card and returns to the row when it closes.
+  // Thread rows only (search results keep focus in the search input).
+  cardRef?: RefObject<HTMLDivElement | null>;
+  // Opened from the keyboard: focus moves onto the card, and `returnFocus` picks where it goes when
+  // the card closes.
   takeFocus?: boolean;
+  returnFocus?: false | (() => HTMLElement | false);
 }) {
   return (
     <PopoverPopup
+      ref={cardRef}
       side="right"
       align="start"
       sideOffset={4}
-      initialFocus={takeFocus}
-      finalFocus={takeFocus}
+      initialFocus={takeFocus && cardRef ? cardRef : false}
+      finalFocus={takeFocus ? returnFocus : false}
+      aria-label={`Details for ${thread.title}`}
       viewportClassName="p-0"
       className={cn("max-w-80 text-left whitespace-normal", "pointer-events-auto")}
     >
@@ -1112,6 +1122,8 @@ const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
     near: boolean;
     details: SidebarThreadDetailsState;
     onDetailsOpenChange: (open: boolean) => void;
+    detailsCardRef: RefObject<HTMLDivElement | null>;
+    returnDetailsFocus: () => HTMLElement | false;
   },
 ) {
   const {
@@ -1282,7 +1294,9 @@ const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
       sideChats={props.sideChats}
       onOpenSideChat={(sideChatThreadId) => props.onOpenSideChat(threadRef, sideChatThreadId)}
       onOpenIssue={props.onOpenIssue}
+      cardRef={props.detailsCardRef}
       takeFocus={props.details.keyboard}
+      returnFocus={props.returnDetailsFocus}
     />
   );
 
@@ -1950,11 +1964,44 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     open: false,
     keyboard: false,
   });
-  const handleDetailsOpenChange = useCallback(
-    (open: boolean) =>
-      setDetails((current) => ({ open, keyboard: open ? false : current.keyboard })),
+  const primaryRef = useRef<HTMLDivElement>(null);
+  const detailsCardRef = useRef<HTMLDivElement>(null);
+  // Set when the key lands on a card that is already open. Base UI's focus manager stays off for a
+  // hover-opened card, so neither its initial nor its final focus runs; the row moves focus in and
+  // back out itself.
+  const focusedOpenCard = useRef(false);
+  // The card's `finalFocus`. It names the row's primary element because Base UI's default target,
+  // the hover trigger, has no tab stop, so Base UI would focus its first tabbable child (Unpin or
+  // Snooze). It is a function rather than the bare ref because Base UI returns focus to an explicit
+  // ref even after the user tabbed or clicked elsewhere.
+  const returnDetailsFocus = useCallback(
+    () =>
+      detailsCardReturnFocus({
+        row: primaryRef.current,
+        card: detailsCardRef.current,
+        activeElement: document.activeElement,
+        body: document.body,
+      }) ?? false,
     [],
   );
+  const handleDetailsOpenChange = useCallback(
+    (open: boolean) => {
+      if (!open && focusedOpenCard.current) {
+        focusedOpenCard.current = false;
+        const target = returnDetailsFocus();
+        if (target) target.focus({ preventScroll: true });
+      }
+      setDetails((current) => ({ open, keyboard: open ? false : current.keyboard }));
+    },
+    [returnDetailsFocus],
+  );
+  const showDetails = useCallback(() => {
+    if (details.open) {
+      focusedOpenCard.current = true;
+      detailsCardRef.current?.focus({ preventScroll: true });
+    }
+    setDetails({ open: true, keyboard: true });
+  }, [details.open]);
   return (
     <SidebarThreadRowShell
       variant={props.variant}
@@ -1962,6 +2009,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       active={props.isActive}
       renaming={isRenaming}
       detailsOpen={details.open}
+      primaryRef={primaryRef}
       deferRendering={props.deferRendering}
       sortable={props.sortable}
       onClick={(event) => onThreadClick(event, threadRef)}
@@ -1973,7 +2021,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       }}
       onActivate={() => onThreadActivate(threadRef)}
       onContextMenu={(position) => onContextMenu(threadRef, position)}
-      onShowDetails={() => setDetails({ open: true, keyboard: true })}
+      onShowDetails={showDetails}
     >
       {(near) => (
         <SidebarThreadRowContent
@@ -1981,6 +2029,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           near={near}
           details={details}
           onDetailsOpenChange={handleDetailsOpenChange}
+          detailsCardRef={detailsCardRef}
+          returnDetailsFocus={returnDetailsFocus}
         />
       )}
     </SidebarThreadRowShell>
