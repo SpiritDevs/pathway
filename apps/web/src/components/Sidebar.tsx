@@ -104,6 +104,8 @@ import {
   memo,
   useCallback,
   useEffect,
+  useId,
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
@@ -267,7 +269,7 @@ import {
 } from "./ui/menu";
 import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
 import { SidebarChromeHeader } from "./sidebar/SidebarChrome";
-import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
+import { Popover, PopoverCreateHandle, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import {
   composerDraftHasUserContent,
@@ -1122,12 +1124,16 @@ type SidebarThreadRowProps = {
   onOpenSideChat: (parentRef: ScopedThreadRef, sideChatThreadId: ThreadId) => void;
 };
 
+type DetailsCardHandle = ReturnType<typeof PopoverCreateHandle>;
+
 const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
   props: SidebarThreadRowProps & {
     near: boolean;
     details: SidebarThreadDetailsState;
     onDetailsOpenChange: (open: boolean) => void;
     detailsCardRef: RefObject<HTMLDivElement | null>;
+    detailsHandleRef: RefObject<DetailsCardHandle | null>;
+    detailsTriggerId: string;
     returnDetailsFocus: () => HTMLElement | false;
   },
 ) {
@@ -1419,6 +1425,9 @@ const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
     if (!showSnoozeButton) setSnoozeMenuOpen(false);
   }, [showSnoozeButton]);
   const { details, onDetailsOpenChange } = props;
+  // Made with the row's body rather than per row, since offscreen rows never render a card.
+  const [detailsHandle] = useState(PopoverCreateHandle);
+  useImperativeHandle(props.detailsHandleRef, () => detailsHandle, [detailsHandle]);
   const handlePrClick = useCallback(
     (event: ReactMouseEvent<HTMLElement>) => {
       if (badges.length > 1) {
@@ -1575,8 +1584,9 @@ const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
     return (
       <>
         {unreadDot}
-        <Popover open={details.open} onOpenChange={onDetailsOpenChange}>
+        <Popover handle={detailsHandle} open={details.open} onOpenChange={onDetailsOpenChange}>
           <PopoverTrigger
+            id={props.detailsTriggerId}
             nativeButton={false}
             openOnHover
             delay={400}
@@ -1718,8 +1728,9 @@ const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
   return (
     <>
       {unreadDot}
-      <Popover open={details.open} onOpenChange={onDetailsOpenChange}>
+      <Popover handle={detailsHandle} open={details.open} onOpenChange={onDetailsOpenChange}>
         <PopoverTrigger
+          id={props.detailsTriggerId}
           nativeButton={false}
           openOnHover
           delay={400}
@@ -1971,10 +1982,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   });
   const primaryRef = useRef<HTMLDivElement>(null);
   const detailsCardRef = useRef<HTMLDivElement>(null);
-  // Set when the key lands on a card that is already open. Base UI's focus manager stays off for a
-  // hover-opened card, so neither its initial nor its final focus runs; the row moves focus in and
-  // back out itself.
-  const focusedOpenCard = useRef(false);
+  const detailsHandleRef = useRef<DetailsCardHandle>(null);
+  const detailsTriggerId = useId();
   // The card's `finalFocus`. It names the row's primary element because Base UI's default target,
   // the hover trigger, has no tab stop, so Base UI would focus its first tabbable child (Unpin or
   // Snooze). It is a function rather than the bare ref because Base UI returns focus to an explicit
@@ -1990,23 +1999,18 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     [],
   );
   const handleDetailsOpenChange = useCallback(
-    (open: boolean) => {
-      if (!open && focusedOpenCard.current) {
-        focusedOpenCard.current = false;
-        const target = returnDetailsFocus();
-        if (target) target.focus({ preventScroll: true });
-      }
-      setDetails((current) => ({ open, keyboard: open ? false : current.keyboard }));
-    },
-    [returnDetailsFocus],
+    (open: boolean) =>
+      setDetails((current) => ({ open, keyboard: open ? false : current.keyboard })),
+    [],
   );
   const showDetails = useCallback(() => {
-    if (details.open) {
-      focusedOpenCard.current = true;
-      detailsCardRef.current?.focus({ preventScroll: true });
-    }
+    // Base UI keeps its focus manager off for a card hover opened. Reopening it through the handle
+    // replaces the hover reason, so the card takes focus, keeps Tab order, and returns focus to the
+    // row as a keyboard open does.
+    const handle = detailsHandleRef.current;
+    if (handle?.isOpen) handle.open(detailsTriggerId);
     setDetails({ open: true, keyboard: true });
-  }, [details.open]);
+  }, [detailsTriggerId]);
   return (
     <SidebarThreadRowShell
       variant={props.variant}
@@ -2037,6 +2041,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           details={details}
           onDetailsOpenChange={handleDetailsOpenChange}
           detailsCardRef={detailsCardRef}
+          detailsHandleRef={detailsHandleRef}
+          detailsTriggerId={detailsTriggerId}
           returnDetailsFocus={returnDetailsFocus}
         />
       )}
