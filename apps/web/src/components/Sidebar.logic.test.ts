@@ -8,6 +8,7 @@ import {
   buildMultiSelectThreadContextMenuItems,
   createThreadJumpHintVisibilityController,
   detailsCardReturnFocus,
+  nextSidebarThreadDetailsState,
   filterSidebarV2VisibleThreads,
   formatWorkingDurationLabel,
   getFallbackThreadIdAfterDelete,
@@ -2175,5 +2176,53 @@ describe("detailsCardReturnFocus", () => {
   it("leaves focus the user moved elsewhere, and needs a mounted row", () => {
     expect(target(elsewhere)).toBeNull();
     expect(detailsCardReturnFocus({ row: null, card, activeElement: inCard, body })).toBeNull();
+  });
+});
+
+describe("nextSidebarThreadDetailsState", () => {
+  const closed = { open: false, keyboard: false };
+  // Applies Base UI changes in order; a canceled change leaves the state as it was.
+  const run = (...changes: ReadonlyArray<readonly [boolean, string | undefined]>) =>
+    changes.reduce(
+      (state, [open, reason]) => nextSidebarThreadDetailsState(state, open, reason) ?? state,
+      closed,
+    );
+
+  it("opens and closes on hover without taking focus", () => {
+    const hovered = run([true, "trigger-hover"]);
+    expect(hovered).toEqual({ open: true, keyboard: false });
+    expect(nextSidebarThreadDetailsState(hovered, false, "trigger-hover")).toEqual(closed);
+  });
+
+  it("cancels a hover open still pending when the key opened the card", () => {
+    const keyboard = run([true, "imperative-action"]);
+    expect(nextSidebarThreadDetailsState(keyboard, true, "trigger-hover")).toBeNull();
+  });
+
+  it("cancels the hover close of a card the key took over from hover", () => {
+    const promoted = run([true, "trigger-hover"], [true, "imperative-action"]);
+    expect(promoted).toEqual({ open: true, keyboard: true });
+    expect(nextSidebarThreadDetailsState(promoted, false, "trigger-hover")).toBeNull();
+  });
+
+  it("closes a keyboard card on any other reason and keeps keyboard so focus returns", () => {
+    for (const reason of ["escape-key", "focus-out", "outside-press", "imperative-action"]) {
+      expect(run([true, "imperative-action"], [false, reason])).toEqual({
+        open: false,
+        keyboard: true,
+      });
+    }
+  });
+
+  it("lets hover and the badge open a closed card without focus again", () => {
+    const afterKeyboard = run([true, "imperative-action"], [false, "escape-key"]);
+    expect(nextSidebarThreadDetailsState(afterKeyboard, true, "trigger-hover")).toEqual({
+      open: true,
+      keyboard: false,
+    });
+    expect(nextSidebarThreadDetailsState(afterKeyboard, true, undefined)).toEqual({
+      open: true,
+      keyboard: false,
+    });
   });
 });

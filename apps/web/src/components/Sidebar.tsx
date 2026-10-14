@@ -224,6 +224,8 @@ import {
   resolveSidebarThreadModels,
   useThreadJumpHintVisibility,
   detailsCardReturnFocus,
+  nextSidebarThreadDetailsState,
+  type SidebarThreadDetailsState,
 } from "./Sidebar.logic";
 import { useRightPanelStore } from "../rightPanelStore";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
@@ -1125,12 +1127,14 @@ type SidebarThreadRowProps = {
 };
 
 type DetailsCardHandle = ReturnType<typeof PopoverCreateHandle>;
+// Base UI's change details, absent when the multi-PR badge opens the card.
+type DetailsChangeDetails = { readonly reason: string; cancel(): void };
 
 const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
   props: SidebarThreadRowProps & {
     near: boolean;
     details: SidebarThreadDetailsState;
-    onDetailsOpenChange: (open: boolean) => void;
+    onDetailsOpenChange: (open: boolean, eventDetails?: DetailsChangeDetails) => void;
     detailsCardRef: RefObject<HTMLDivElement | null>;
     detailsHandleRef: RefObject<DetailsCardHandle | null>;
     detailsTriggerId: string;
@@ -1964,9 +1968,6 @@ const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
   );
 });
 
-// `keyboard` survives the close, so the card returns focus to the row it took it from.
-type SidebarThreadDetailsState = { readonly open: boolean; readonly keyboard: boolean };
-
 const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowProps) {
   const { isRenaming, onContextMenu, onStartRename, onThreadActivate, onThreadClick, thread } =
     props;
@@ -1980,6 +1981,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     open: false,
     keyboard: false,
   });
+  // Read synchronously by Base UI's change callback, which must cancel before React re-renders.
+  const detailsRef = useRef(details);
   const primaryRef = useRef<HTMLDivElement>(null);
   const detailsCardRef = useRef<HTMLDivElement>(null);
   const detailsHandleRef = useRef<DetailsCardHandle>(null);
@@ -1999,17 +2002,28 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     [],
   );
   const handleDetailsOpenChange = useCallback(
-    (open: boolean) =>
-      setDetails((current) => ({ open, keyboard: open ? false : current.keyboard })),
+    (open: boolean, eventDetails?: DetailsChangeDetails) => {
+      const next = nextSidebarThreadDetailsState(detailsRef.current, open, eventDetails?.reason);
+      if (next === null) {
+        eventDetails?.cancel();
+        return;
+      }
+      detailsRef.current = next;
+      setDetails(next);
+    },
     [],
   );
   const showDetails = useCallback(() => {
-    // Base UI keeps its focus manager off for a card hover opened. Reopening it through the handle
-    // replaces the hover reason, so the card takes focus, keeps Tab order, and returns focus to the
-    // row as a keyboard open does.
+    // The handle opens with Base UI's imperative reason even over a hover-opened or hover-closing
+    // card, so its focus manager runs: the card takes focus, keeps Tab order, and returns focus to
+    // the row. Rows whose body has not rendered have no card or handle yet.
     const handle = detailsHandleRef.current;
-    if (handle?.isOpen) handle.open(detailsTriggerId);
-    setDetails({ open: true, keyboard: true });
+    if (handle) {
+      handle.open(detailsTriggerId);
+      return;
+    }
+    detailsRef.current = { open: true, keyboard: true };
+    setDetails(detailsRef.current);
   }, [detailsTriggerId]);
   return (
     <SidebarThreadRowShell
