@@ -38,31 +38,31 @@ afterEach(() => {
 });
 
 function renderRow() {
+  const element = () => (
+    <SidebarThreadRowShell
+      variant="card"
+      title="Fix the build"
+      active={false}
+      renaming={false}
+      deferRendering
+      {...handlers}
+    >
+      {() => (
+        <>
+          <span>Fix the build</span>
+          <button type="button" aria-label="Settle thread" />
+        </>
+      )}
+    </SidebarThreadRowShell>
+  );
   act(() => {
-    renderer = create(
-      <SidebarThreadRowShell
-        variant="slim"
-        title="Fix the build"
-        active={false}
-        renaming={false}
-        deferRendering
-        {...handlers}
-      >
-        {() => (
-          <>
-            <span>Fix the build</span>
-            <button type="button" aria-label="Settle thread" />
-          </>
-        )}
-      </SidebarThreadRowShell>,
-      { createNodeMock: () => listItem },
-    );
+    renderer = create(element(), {
+      createNodeMock: () => listItem,
+    });
   });
+  // Test instances are cached per host fiber, so the same instance means the same DOM element.
   const primary = () => renderer!.root.findByProps({ role: "button" });
-  // The renderer's host node behind the primary element. `.instance` re-runs createNodeMock on
-  // every read, so it cannot tell a remount apart; the fiber's stateNode can.
-  const primaryNode = () =>
-    (primary() as unknown as { _fiber: { stateNode: object } })._fiber.stateNode;
+  const listItemClass = () => renderer!.root.findByType("li").props.className as string;
   const bodyMounted = () =>
     primary().findAll((node) => node.props["aria-label"] === "Settle thread").length > 0;
   const setNear = (isIntersecting: boolean) =>
@@ -72,7 +72,7 @@ function renderRow() {
         {} as IntersectionObserver,
       ),
     );
-  return { primary, primaryNode, bodyMounted, setNear };
+  return { primary, listItemClass, bodyMounted, setNear };
 }
 
 // A synthetic event as React would deliver it to the primary element. `inside` is false for events
@@ -96,12 +96,16 @@ describe("SidebarThreadRowShell", () => {
   it("keeps one primary element while the body mounts under a held press", () => {
     const row = renderRow();
     expect(row.bodyMounted()).toBe(false);
-    const pressed = row.primaryNode();
+    const pressed = row.primary();
+    const bodilessClass = row.listItemClass();
     // The press starts on the bodiless row; the observer reports it near before the release.
     act(() => row.primary().props.onFocus(rowEvent()));
     row.setNear(true);
     expect(row.bodyMounted()).toBe(true);
-    expect(row.primaryNode()).toBe(pressed);
+    expect(row.primary()).toBe(pressed);
+    // The <li> holds the row's rem height in both states, so mounting moves nothing below it.
+    expect(row.listItemClass()).toBe(bodilessClass);
+    expect(bodilessClass).toContain("h-[5.125rem]");
     act(() => row.primary().props.onClick(rowEvent()));
     expect(handlers.onClick).toHaveBeenCalledOnce();
   });
@@ -120,7 +124,7 @@ describe("SidebarThreadRowShell", () => {
 
   it("leaves nothing behind when a press is cancelled", () => {
     const row = renderRow();
-    const pressed = row.primaryNode();
+    const pressed = row.primary();
     act(() => row.primary().props.onFocus(rowEvent()));
     row.setNear(true);
     row.setNear(false);
@@ -131,7 +135,7 @@ describe("SidebarThreadRowShell", () => {
     });
     expect(handlers.onClick).not.toHaveBeenCalled();
     expect(row.bodyMounted()).toBe(false);
-    expect(row.primaryNode()).toBe(pressed);
+    expect(row.primary()).toBe(pressed);
     act(() => row.primary().props.onClick(rowEvent()));
     expect(handlers.onClick).toHaveBeenCalledOnce();
   });

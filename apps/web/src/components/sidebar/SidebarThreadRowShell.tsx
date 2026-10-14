@@ -36,9 +36,10 @@ function pressedRow(event: ReactMouseEvent<HTMLElement>): boolean {
  *
  * The body (`children`, given whether the row is near the viewport) mounts only near the viewport,
  * for the first screenful, the open thread, a row being renamed or dragged, and while focus is
- * inside the body or its popups. Until then the primary element holds just the thread title, at the
- * row's fixed height, with no subscriptions. Focusing a bodiless row mounts nothing: the browser
- * scrolls focus into view and the body follows the viewport.
+ * inside the body or its popups. Until then the primary element holds just the thread title with no
+ * subscriptions. The <li> carries the row's height in rem, so both states take the same space at any
+ * interface font size. Focusing a bodiless row mounts nothing: the browser scrolls focus into view
+ * and the body follows the viewport.
  */
 export function SidebarThreadRowShell(props: {
   variant: "card" | "slim";
@@ -96,11 +97,7 @@ export function SidebarThreadRowShell(props: {
       {...(card ? sortable?.listeners : {})}
       className={cn(
         "relative -ml-[3px] list-none pl-[3px]",
-        card && "py-0.5",
-        props.deferRendering &&
-          (card
-            ? "[content-visibility:auto] [contain-intrinsic-size:auto_82px]"
-            : "[content-visibility:auto] [contain-intrinsic-size:auto_36px]"),
+        card ? "h-[5.125rem] py-0.5" : "h-9",
         card && sortable?.isDragging && "z-20 opacity-80",
       )}
     >
@@ -108,10 +105,7 @@ export function SidebarThreadRowShell(props: {
         role="button"
         tabIndex={0}
         data-testid={card ? "sidebar-row-card" : "sidebar-row-slim"}
-        className={cn(
-          "group/sidebar-row block w-full cursor-pointer text-left outline-none select-none",
-          card ? "h-[4.875rem]" : "h-9",
-        )}
+        className="group/sidebar-row block size-full cursor-pointer text-left outline-none select-none"
         onFocus={(event) => {
           clearTimeout(blurTimer.current);
           // The primary element survives the body unmounting; only focus inside the body pins it.
