@@ -2208,20 +2208,24 @@ describe("focusSidebarRowEntry", () => {
 
 describe("mountSidebarRowOnPlaceholderFocus", () => {
   // One task's worth of events: focus, then whatever activation the browser or assistive tech
-  // dispatches with it. The placeholder handles activation only while it is still mounted.
-  function placeholder(focusVisible: boolean) {
+  // dispatches with it. The placeholder handles activation only while it is still mounted. The
+  // press record follows the placeholder's handlers: set on pointerdown, cleared on
+  // pointerup/pointercancel/pointerleave and blur.
+  function placeholder() {
     const ownerDocument = { activeElement: null as unknown };
-    const element = {
-      ownerDocument,
-      matches: (selector: string) => selector === ":focus-visible" && focusVisible,
-    };
+    // Chrome's Quick Focus Highlight matches :focus-visible on every focus, pointer included.
+    const element = { ownerDocument, matches: (selector: string) => selector === ":focus-visible" };
     const tasks: Array<() => void> = [];
     const log: string[] = [];
+    let pressed = false;
     let mounted = false;
+    const pointerDown = () => (pressed = true);
+    const pointerRelease = () => (pressed = false);
     const focus = () => {
       ownerDocument.activeElement = element;
       mountSidebarRowOnPlaceholderFocus(
         element as unknown as Parameters<typeof mountSidebarRowOnPlaceholderFocus>[0],
+        pressed,
         () => {
           mounted = true;
           log.push("mount");
@@ -2233,21 +2237,27 @@ describe("mountSidebarRowOnPlaceholderFocus", () => {
     const nextTask = () => {
       for (const task of tasks.splice(0)) task();
     };
-    const blur = () => (ownerDocument.activeElement = null);
-    return { focus, activate, nextTask, blur, log };
+    const blur = () => {
+      ownerDocument.activeElement = null;
+      pressed = false;
+    };
+    return { pointerDown, pointerRelease, focus, activate, nextTask, blur, log };
   }
 
-  it("never mounts on pointer focus, so the press's click reaches the placeholder", () => {
-    const press = placeholder(false);
+  it("never mounts on pointer focus, even when it matches :focus-visible", () => {
+    const press = placeholder();
+    press.pointerDown();
     press.focus();
+    // The press is held while the next task runs; the click follows its pointerup.
     press.nextTask();
+    press.pointerRelease();
     press.activate();
     press.nextTask();
     expect(press.log).toEqual(["opened"]);
   });
 
   it("mounts after an activation dispatched with keyboard or assistive-tech focus", () => {
-    const assistive = placeholder(true);
+    const assistive = placeholder();
     assistive.focus();
     assistive.activate();
     assistive.nextTask();
@@ -2255,14 +2265,34 @@ describe("mountSidebarRowOnPlaceholderFocus", () => {
   });
 
   it("mounts once keyboard focus settles, and not after focus has moved on", () => {
-    const tab = placeholder(true);
+    const tab = placeholder();
     tab.focus();
     tab.nextTask();
     expect(tab.log).toEqual(["mount"]);
-    const passing = placeholder(true);
+    const passing = placeholder();
     passing.focus();
     passing.blur();
     passing.nextTask();
     expect(passing.log).toEqual([]);
+  });
+
+  it("mounts on keyboard focus after a cancelled pointer gesture", () => {
+    // A press that never focused (Safari) and was cancelled.
+    const unfocused = placeholder();
+    unfocused.pointerDown();
+    unfocused.pointerRelease();
+    unfocused.focus();
+    unfocused.nextTask();
+    expect(unfocused.log).toEqual(["mount"]);
+    // A press that focused, was dragged off, and the user tabbed away and back.
+    const focused = placeholder();
+    focused.pointerDown();
+    focused.focus();
+    focused.pointerRelease();
+    focused.nextTask();
+    focused.blur();
+    focused.focus();
+    focused.nextTask();
+    expect(focused.log).toEqual(["mount"]);
   });
 });

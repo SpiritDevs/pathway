@@ -1994,10 +1994,10 @@ const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
 // mid-drag). The first screenful, the open thread, and rows that are focused, being renamed or
 // dragged always render in full. A placeholder holds one plain button named by the thread title,
 // so assistive tech can find and open offscreen threads. Its clicks open, select and open menus
-// like the row's. Keyboard and assistive-tech focus on it mounts the row once any activation
-// dispatched with that focus has landed (mountSidebarRowOnPlaceholderFocus); whenever the row
-// mounts under a focused placeholder, focus moves to the row's first control, or its last when
-// entered with Shift+Tab.
+// like the row's. Focus outside a pointer press on it (keyboard, assistive tech) mounts the row
+// once any activation dispatched with that focus has landed (mountSidebarRowOnPlaceholderFocus);
+// whenever the row mounts under a focused placeholder, focus moves to the row's first control, or
+// its last when entered with Shift+Tab.
 const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowProps) {
   const viewport = useNearViewport();
   const { sortable } = props;
@@ -2021,6 +2021,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   const [focusWithin, setFocusWithin] = useState(false);
   const blurTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const focusOnMount = useRef<{ readonly from: Node | null } | null>(null);
+  const placeholderPressed = useRef(false);
+  const releasePlaceholderPress = () => {
+    placeholderPressed.current = false;
+  };
   useEffect(() => () => clearTimeout(blurTimer.current), []);
   const rendered =
     viewport.near ||
@@ -2077,11 +2081,21 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         <button
           type="button"
           className="block size-full"
+          // Record only: the press still opens, selects or drags through its click and listeners.
+          onPointerDown={() => {
+            placeholderPressed.current = true;
+          }}
+          onPointerUp={releasePlaceholderPress}
+          onPointerCancel={releasePlaceholderPress}
+          onPointerLeave={releasePlaceholderPress}
           onFocus={(event) => {
             focusOnMount.current = { from: event.relatedTarget };
-            mountSidebarRowOnPlaceholderFocus(event.currentTarget, () => setFocusWithin(true));
+            mountSidebarRowOnPlaceholderFocus(event.currentTarget, placeholderPressed.current, () =>
+              setFocusWithin(true),
+            );
           }}
           onBlur={(event) => {
+            releasePlaceholderPress();
             // Focus moved on. A placeholder removed by the mount keeps its entry for the row.
             if (event.currentTarget.isConnected) focusOnMount.current = null;
           }}

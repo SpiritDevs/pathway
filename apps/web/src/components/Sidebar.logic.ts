@@ -1173,16 +1173,19 @@ export function focusSidebarRowEntry(
 /**
  * Handles focus landing on an offscreen row's placeholder button. Mounting the row removes that
  * button, so an activation still in flight would land on a detached node. A pointer press
- * focuses before its click, so pointer focus (not `:focus-visible`) never mounts; the click opens
- * or selects through the placeholder. Keyboard and assistive-tech focus mount on the next task,
- * after any activation dispatched with the focus, and only while the placeholder still has focus.
+ * focuses before its click, so focus during a press on the placeholder (`pointerPressed`, recorded
+ * by the caller from pointerdown until the press ends) never mounts; the click opens or selects
+ * through the placeholder. `:focus-visible` cannot tell these apart, since browsers may match it on
+ * pointer focus too. Other focus (keyboard, assistive tech) mounts on the next task, after any
+ * activation dispatched with the focus, and only while the placeholder still has focus.
  */
 export function mountSidebarRowOnPlaceholderFocus(
-  placeholder: Pick<Element, "matches" | "ownerDocument">,
+  placeholder: Pick<Element, "ownerDocument">,
+  pointerPressed: boolean,
   mount: () => void,
   schedule: (task: () => void) => void = (task) => void setTimeout(task),
 ): void {
-  if (!placeholder.matches(":focus-visible")) return;
+  if (pointerPressed) return;
   schedule(() => {
     if (placeholder.ownerDocument.activeElement === placeholder) mount();
   });
