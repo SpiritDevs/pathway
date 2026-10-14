@@ -22,25 +22,43 @@ import { CloudAgentThreadShell } from "./cloudProject.ts";
 import { CompanyId } from "./company.ts";
 import { OrchestrationV2ShellSnapshotJson } from "./orchestrationV2.ts";
 
-/** Paths on a codec's encoded side that still hold a non-JSON value such as `DateTime.Utc`. */
-function nonJsonPaths(ast: SchemaAST.AST, path: string): ReadonlyArray<string> {
+/**
+ * Paths on a codec's encoded side that hold a value `JSON.stringify` cannot carry: a declaration
+ * such as `DateTime.Utc`, a bigint, or a symbol. Recursive schemas are walked once per node.
+ */
+function nonJsonPaths(
+  ast: SchemaAST.AST,
+  path: string,
+  visited: Set<SchemaAST.AST> = new Set(),
+): ReadonlyArray<string> {
+  if (visited.has(ast)) return [];
+  visited.add(ast);
   switch (ast._tag) {
     case "Declaration":
       return [`${path} (${String(ast.annotations?.expected ?? "declaration")})`];
+    case "BigInt":
+    case "Symbol":
+    case "UniqueSymbol":
+      return [`${path} (${ast._tag})`];
+    case "Literal":
+      return typeof ast.literal === "bigint" ? [`${path} (bigint literal)`] : [];
     case "Objects":
       return [
         ...ast.propertySignatures.flatMap((property) =>
-          nonJsonPaths(property.type, `${path}.${String(property.name)}`),
+          nonJsonPaths(property.type, `${path}.${String(property.name)}`, visited),
         ),
-        ...ast.indexSignatures.flatMap((index) => nonJsonPaths(index.type, `${path}[key]`)),
+        ...ast.indexSignatures.flatMap((index) =>
+          nonJsonPaths(index.type, `${path}[key]`, visited),
+        ),
       ];
     case "Arrays":
       return [...ast.elements, ...ast.rest].flatMap((element) =>
-        nonJsonPaths(element, `${path}[]`),
+        nonJsonPaths(element, `${path}[]`, visited),
       );
     case "Union":
-      return ast.types.flatMap((member) => nonJsonPaths(member, path));
-    // Recursive schemas (the computer accessibility tree) are not walked.
+      return ast.types.flatMap((member) => nonJsonPaths(member, path, visited));
+    case "Suspend":
+      return nonJsonPaths(ast.thunk(), path, visited);
     default:
       return [];
   }
@@ -167,6 +185,11 @@ const populatedThreadShell: Populated<OrchestrationV2ThreadShell> = {
   deletedAt: now,
 };
 
+const { text: _text, ...cloudLatestVisibleMessage } = populatedThreadShell.latestVisibleMessage;
+const cloudShell = { ...populatedThreadShell, latestVisibleMessage: cloudLatestVisibleMessage };
+const encodeCloudShell = Schema.encodeSync(CloudAgentThreadShell);
+const decodeCloudShell = Schema.decodeUnknownSync(CloudAgentThreadShell);
+
 function jsonRoundTrip<S extends Schema.Codec<unknown, unknown>>(schema: S, value: S["Type"]) {
   const encoded = JSON.parse(JSON.stringify(Schema.encodeSync(schema)(value)));
   return Schema.decodeUnknownSync(schema)(encoded);
@@ -178,6 +201,42 @@ describe("persisted JSON codecs", () => {
     expect(
       persistedCodecs.flatMap(({ name, ast }) => nonJsonPaths(SchemaAST.toEncoded(ast), name)),
     ).toEqual([]);
+  });
+
+  it("flags non-JSON leaves, including inside recursive schemas", () => {
+    interface Node {
+      readonly at: DateTime.Utc;
+      readonly size: bigint;
+      readonly children: ReadonlyArray<Node>;
+    }
+    const Node: Schema.Codec<Node> = Schema.Struct({
+      at: Schema.DateTimeUtc,
+      size: Schema.BigInt,
+      children: Schema.Array(Schema.suspend(() => Node)),
+    });
+
+    expect(nonJsonPaths(SchemaAST.toEncoded(Node.ast), "Node")).toEqual([
+      "Node.at (DateTime.Utc)",
+      "Node.size (BigInt)",
+    ]);
+  });
+
+  it("decodes the legacy Convex title regeneration date and re-encodes it as a string", () => {
+    // What Convex stored for a shell published while the codec left `startedAt` a DateTime.Utc.
+    const legacy = {
+      ...encodeCloudShell(cloudShell),
+      titleRegeneration: {
+        requestId: "command-title",
+        startedAt: { epochMilliseconds: 1776643200000 },
+      },
+    };
+
+    const decoded = decodeCloudShell(legacy);
+    expect(decoded.titleRegeneration?.startedAt).toEqual(now);
+    expect(encodeCloudShell(decoded).titleRegeneration).toEqual({
+      requestId: "command-title",
+      startedAt: "2026-04-20T00:00:00.000Z",
+    });
   });
 
   it("round-trips a fully populated shell snapshot through JSON", () => {
@@ -193,9 +252,6 @@ describe("persisted JSON codecs", () => {
   });
 
   it("round-trips a fully populated cloud thread shell through JSON", () => {
-    const { text: _text, ...latestVisibleMessage } = populatedThreadShell.latestVisibleMessage;
-    const shell = { ...populatedThreadShell, latestVisibleMessage };
-
-    expect(jsonRoundTrip(CloudAgentThreadShell, shell)).toEqual(shell);
+    expect(jsonRoundTrip(CloudAgentThreadShell, cloudShell)).toEqual(cloudShell);
   });
 });
