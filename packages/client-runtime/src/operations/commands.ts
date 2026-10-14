@@ -234,6 +234,8 @@ export interface InterruptThreadTurnInput extends ThreadCommandInput {
   readonly runId?: RunId;
   /** Temporary caller compatibility while UI naming moves from turns to runs. */
   readonly turnId?: string;
+  /** Stop: also stop every task the thread delegated, and drop the wakes it is owed. */
+  readonly stopDelegatedTasks?: boolean;
 }
 
 export interface EditAndRestartMessageInput extends ThreadCommandInput {
@@ -984,6 +986,7 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
     commandId: yield* allocateCommandId(input),
     threadId: input.threadId,
     runId,
+    ...(input.stopDelegatedTasks === true ? { stopDelegatedTasks: true } : {}),
   });
 });
 

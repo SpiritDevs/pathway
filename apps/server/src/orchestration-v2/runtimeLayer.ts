@@ -278,6 +278,7 @@ const effectExecutorProvided = effectExecutorLayer.pipe(
       threadTitleRegenerationProvided,
       threadWorkspaceMoveProvided,
       browserTakeoverProvided,
+      threadManagementProvided,
     ),
   ),
 );

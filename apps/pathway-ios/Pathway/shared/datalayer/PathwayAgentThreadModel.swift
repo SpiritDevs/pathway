@@ -677,7 +677,7 @@ final class PathwayAgentThreadModel {
     }
     func interrupt() async throws {
         guard canInterrupt, let activeRunID else { return }
-        try await dispatch("run.interrupt", fields: ["runId": .string(activeRunID)])
+        try await dispatch("run.interrupt", fields: ["runId": .string(activeRunID), "stopDelegatedTasks": .bool(true)])
     }
     func changeModelSelection(_ selection: PathwayModelSelection) async throws {
         guard !isConfigurationLocked else { throw PathwayThreadConversationError.message("This subagent is managed by its parent thread.") }

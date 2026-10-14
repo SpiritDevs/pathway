@@ -45,6 +45,7 @@ import { layer as providerTurnStartServiceLayer } from "../ProviderTurnStartServ
 import { layer as runExecutionServiceLayer } from "../RunExecutionService.ts";
 import { layer as runFinalizationServiceLayer } from "../RunFinalizationService.ts";
 import { BrowserTakeoverService } from "../BrowserTakeoverService.ts";
+import { layer as threadManagementServiceLayer } from "../ThreadManagementService.ts";
 import { ThreadTitleRegenerationService } from "../ThreadTitleRegenerationService.ts";
 import {
   layer as runtimePolicyLayer,
@@ -423,6 +424,8 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
         runtimeRequestServiceProvided,
         threadTitleRegenerationTestLayer,
         browserTakeoverProvided,
+        // Built against this harness' orchestrator, so a Stop's walk dispatches into it.
+        threadManagementServiceLayer.pipe(Layer.provide(orchestratorProvided)),
       ),
     ),
   );

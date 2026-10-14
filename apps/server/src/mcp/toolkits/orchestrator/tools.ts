@@ -152,7 +152,7 @@ export const TaskAnswerTool = Tool.make("task_answer", {
 
 export const TaskCancelTool = Tool.make("task_cancel", {
   description:
-    "Request interruption of an active Pathway-owned delegated task and dispose its automatic parent delivery. Completed task results remain available.",
+    "Stop a Pathway-owned delegated task and dispose its automatic parent delivery. Its child thread stops like a user Stop: the running turn is interrupted, wakes it is owed are dropped, and the tasks it delegated stop too. This includes later child-thread turns, even after the task finished. Completed task results remain available.",
   parameters: OrchestratorMcpTaskCancelInput,
   success: OrchestratorMcpTaskCancelResult,
   failure: OrchestratorMcpFailure,

@@ -57,6 +57,7 @@ import {
   editQueuedRun,
   dispatchComputerHandBack,
   editAndRestartMessage,
+  interruptThreadTurn,
   promoteQueuedRun,
   reorderQueuedRun,
   revertThreadCheckpoint,
@@ -405,6 +406,38 @@ describe("V2 environment commands", () => {
 
       expect(commands).toEqual([
         { type: "thread.archive", commandId: "queued-command", threadId: "thread-1" },
+      ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("asks the server to stop delegated tasks only on Stop", () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [] });
+      const threadId = ThreadId.make("thread-1");
+      const runId = RunId.make("run-1");
+
+      yield* interruptThreadTurn({
+        commandId: CommandId.make("stop"),
+        threadId,
+        runId,
+        stopDelegatedTasks: true,
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+      yield* interruptThreadTurn({
+        commandId: CommandId.make("interrupt"),
+        threadId,
+        runId,
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(commands).toEqual([
+        {
+          type: "run.interrupt",
+          commandId: "stop",
+          threadId,
+          runId,
+          stopDelegatedTasks: true,
+        },
+        { type: "run.interrupt", commandId: "interrupt", threadId, runId },
       ]);
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );

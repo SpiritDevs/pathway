@@ -15,7 +15,10 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 
-import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
+import {
+  ThreadManagementService,
+  type ThreadManagementStopInput,
+} from "../orchestration-v2/ThreadManagementService.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ScheduledTaskService } from "../scheduledTasks/ScheduledTaskService.ts";
 import { RemoteDispatch } from "../cloud/remoteDispatch.ts";
@@ -351,7 +354,7 @@ describe("OrchestratorMcpService", () => {
     }),
   );
 
-  it.effect("does not dispose delivery when the child interrupt fails", () =>
+  it.effect("does not dispose delivery when stopping the child fails", () =>
     Effect.gen(function* () {
       const parentThreadId = ThreadId.make("thread:mcp-cancel-failed-parent");
       const childThreadId = ThreadId.make("thread:mcp-cancel-failed-child");
@@ -387,9 +390,14 @@ describe("OrchestratorMcpService", () => {
         Layer.mock(ThreadManagementService)({
           getThreadProjection: (threadId) =>
             Effect.succeed(threadId === parentThreadId ? parentProjection : childProjection),
+          stopThread: (input) =>
+            Ref.update(dispatched, (commands) => [
+              ...commands,
+              { type: "stopThread", ...input },
+            ]).pipe(Effect.andThen(Effect.fail(new Error("simulated stop failure") as never))),
           dispatch: (command) =>
             Ref.update(dispatched, (commands) => [...commands, command]).pipe(
-              Effect.andThen(Effect.fail(new Error("simulated interrupt failure") as never)),
+              Effect.as({} as never),
             ),
         }),
         Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([]) }),
@@ -413,7 +421,7 @@ describe("OrchestratorMcpService", () => {
         assert.equal(error.code, "task_not_cancellable");
         assert.deepEqual(
           (yield* Ref.get(dispatched)).map((command) => (command as { type: string }).type),
-          ["run.interrupt"],
+          ["stopThread"],
         );
       }).pipe(Effect.provide(OrchestratorMcpService.layer.pipe(Layer.provide(dependencies))));
     }),
@@ -455,6 +463,8 @@ describe("OrchestratorMcpService", () => {
         Layer.mock(ThreadManagementService)({
           getThreadProjection: (threadId) =>
             Effect.succeed(threadId === parentThreadId ? parentProjection : childProjection),
+          stopThread: (input) =>
+            Ref.update(dispatched, (commands) => [...commands, { type: "stopThread", ...input }]),
           dispatch: (command) =>
             Ref.update(dispatched, (commands) => [...commands, command]).pipe(
               Effect.andThen(
@@ -486,8 +496,98 @@ describe("OrchestratorMcpService", () => {
         assert.equal(result.status, "cancel_requested");
         assert.deepEqual(
           (yield* Ref.get(dispatched)).map((command) => (command as { type: string }).type),
-          ["run.interrupt", "delegated_task.completion-delivery.dispose"],
+          ["stopThread", "delegated_task.completion-delivery.dispose"],
         );
+      }).pipe(Effect.provide(OrchestratorMcpService.layer.pipe(Layer.provide(dependencies))));
+    }),
+  );
+
+  it.effect("stops the child thread of a finished task and keeps its result", () =>
+    Effect.gen(function* () {
+      const parentThreadId = ThreadId.make("thread:mcp-cancel-finished-parent");
+      const childThreadId = ThreadId.make("thread:mcp-cancel-finished-child");
+      const childRunId = RunId.make("run:mcp-cancel-finished-child");
+      const taskId = NodeId.make("node:mcp-cancel-finished-task");
+      const dispatched = yield* Ref.make<ReadonlyArray<{ readonly type: string }>>([]);
+      const stops = yield* Ref.make<ReadonlyArray<ThreadManagementStopInput>>([]);
+      const parentProjection = {
+        thread: { id: parentThreadId },
+        runs: [],
+        contextTransfers: [],
+        subagents: [
+          {
+            id: taskId,
+            threadId: parentThreadId,
+            origin: "app_owned",
+            childThreadId,
+            driver: "codex",
+            model: "gpt-5.6-terra",
+            result: "published result",
+            completionDelivery: { state: "acknowledged" },
+          },
+        ],
+      } as unknown as OrchestrationV2ThreadProjection;
+      // The task's own run finished; a later follow-up run in its thread is still going.
+      const childProjection = {
+        thread: { id: childThreadId },
+        runtimeRequests: [],
+        turnItems: [],
+        runs: [
+          { id: childRunId, ordinal: 1, status: "completed" },
+          { id: RunId.make("run:mcp-cancel-finished-followup"), ordinal: 2, status: "running" },
+        ],
+        contextTransfers: [
+          {
+            type: "subagent_spawn",
+            sourceThreadId: parentThreadId,
+            targetThreadId: childThreadId,
+            targetRunId: childRunId,
+          },
+        ],
+      } as unknown as OrchestrationV2ThreadProjection;
+      const dependencies = Layer.mergeAll(
+        NodeServices.layer,
+        Layer.mock(ThreadManagementService)({
+          getThreadProjection: (threadId) =>
+            Effect.succeed(threadId === parentThreadId ? parentProjection : childProjection),
+          stopThread: (input) => Ref.update(stops, (existing) => [...existing, input]),
+          dispatch: (command) =>
+            Ref.update(dispatched, (commands) => [...commands, command]).pipe(
+              Effect.as({} as never),
+            ),
+        }),
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+        Layer.mock(ScheduledTaskService)({}),
+      );
+      const scope: McpInvocationScope = {
+        environmentId: EnvironmentId.make("environment:mcp-cancel-finished"),
+        threadId: parentThreadId,
+        providerSessionId: "provider-session:mcp-cancel-finished",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        providerDriverKind: ProviderDriverKind.make("codex"),
+        capabilities: new Set(["orchestration"]),
+        issuedAt: 1,
+      };
+
+      yield* Effect.gen(function* () {
+        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+        const cancel = { taskId, clientRequestId: "cancel-finished-task", reason: "Done here." };
+        const result = yield* service.cancelTask(scope, cancel);
+        assert.deepEqual(result, { taskId, status: "completed" });
+        // A retry derives the same stop, so nothing below it stops twice.
+        yield* service.cancelTask(scope, cancel);
+        const [first, second] = yield* Ref.get(stops);
+        assert.equal(first?.threadId, childThreadId);
+        assert.equal(first?.reason, "Done here.");
+        assert.equal(second?.commandId, first?.commandId);
+        assert.deepEqual(
+          (yield* Ref.get(dispatched)).map((command) => command.type),
+          [
+            "delegated_task.completion-delivery.dispose",
+            "delegated_task.completion-delivery.dispose",
+          ],
+        );
+        assert.equal((yield* service.taskStatus(scope, taskId)).summary, "published result");
       }).pipe(Effect.provide(OrchestratorMcpService.layer.pipe(Layer.provide(dependencies))));
     }),
   );

@@ -13,6 +13,7 @@ import type {
   ProviderInstanceId,
   ProviderThreadId,
   ProviderTurnId,
+  RunId,
   ThreadId,
   TurnItemId,
 } from "@spiritdevs/contracts";
@@ -173,6 +174,55 @@ export function makeSubagentConversationArtifacts(input: {
           streaming: false,
         };
   return { message, turnItem };
+}
+
+/**
+ * Runs that a delegated-task wake is still owed to: one is in flight, or a task they delegated
+ * has not delivered its result. Stop drops all of them, so nothing wakes the thread again.
+ */
+export function runsOwingDelegatedWakes(
+  projection: Pick<OrchestrationV2ThreadProjection, "runs" | "subagents">,
+): ReadonlySet<RunId> {
+  const runIds = new Set<RunId>();
+  for (const run of projection.runs) {
+    if (run.delegatedCompletion?.delivery != null) runIds.add(run.id);
+  }
+  for (const task of projection.subagents) {
+    const state = task.completionDelivery?.state;
+    if (
+      task.origin === "app_owned" &&
+      task.runId !== null &&
+      state !== "acknowledged" &&
+      state !== "delivered" &&
+      state !== "disposed"
+    ) {
+      runIds.add(task.runId);
+    }
+  }
+  return runIds;
+}
+
+/**
+ * The run a Stop of a delegated task's thread targets: its live run, else a finished run that is
+ * still owed a wake. Undefined when the thread has nothing of its own left to stop.
+ */
+export function delegatedThreadStopTarget(
+  projection: Pick<OrchestrationV2ThreadProjection, "runs" | "subagents">,
+): OrchestrationV2Run | undefined {
+  const live = projection.runs.findLast(
+    (run) => run.status === "preparing" || run.status === "starting" || run.status === "running",
+  );
+  if (live !== undefined) return live;
+  const owing = runsOwingDelegatedWakes(projection);
+  return projection.runs.findLast(
+    (run) =>
+      owing.has(run.id) &&
+      (run.status === "completed" ||
+        run.status === "interrupted" ||
+        run.status === "failed" ||
+        run.status === "cancelled" ||
+        run.status === "rolled_back"),
+  );
 }
 
 export function subagentResultForRun(

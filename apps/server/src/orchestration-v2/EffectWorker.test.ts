@@ -27,6 +27,7 @@ import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { QuestionAnswerDelivery, QuestionAnswerDeliveryError } from "./QuestionAnswerDelivery.ts";
 
 import { BrowserTakeoverService } from "./BrowserTakeoverService.ts";
+import { ThreadManagementService } from "./ThreadManagementService.ts";
 import { CheckpointRollbackServiceV2 } from "./CheckpointRollbackService.ts";
 import {
   EffectOutboxError,
@@ -171,6 +172,9 @@ function makeExecutorLayer(input: {
         recover: Effect.succeed({ failed: 0, rearmed: 0, completed: 0 }),
       }),
     ),
+    Layer.mock(ThreadManagementService)({
+      stopDelegatedTasks: ({ commandId }) => record(`delegated-tasks:stop:${commandId}`),
+    }),
   );
   return executorLayer.pipe(Layer.provide(dependencies));
 }
