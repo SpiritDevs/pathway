@@ -1,6 +1,5 @@
 import { OrchestratorAssignmentOrigin } from "./aiOrchestrator.ts";
 import { CompanyId } from "./company.ts";
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
@@ -2221,12 +2220,14 @@ export type OrchestrationV2LatestVisibleMessageSummaryJson =
  * fields, `{ epochMilliseconds }`, and offline environments never republish them. Decode that
  * shape as well; encoding always writes the ISO string.
  */
-const LegacyEpochMillisecondsDateTimeUtc = Schema.Struct({ epochMilliseconds: Schema.Int }).pipe(
+const LegacyEpochMillisecondsDateTimeUtc = Schema.Struct({
+  epochMilliseconds: Schema.DateTimeUtcFromMillis,
+}).pipe(
   Schema.decodeTo(
     Schema.DateTimeUtc,
     SchemaTransformation.transform({
-      decode: ({ epochMilliseconds }) => DateTime.makeUnsafe(epochMilliseconds),
-      encode: (dateTime) => ({ epochMilliseconds: dateTime.epochMilliseconds }),
+      decode: ({ epochMilliseconds }) => epochMilliseconds,
+      encode: (epochMilliseconds) => ({ epochMilliseconds }),
     }),
   ),
 );
