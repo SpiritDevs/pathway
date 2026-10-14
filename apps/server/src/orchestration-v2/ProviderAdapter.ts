@@ -510,6 +510,14 @@ export interface ProviderAdapterV2SessionRuntime {
   readonly hasPendingBackgroundWorkForThread?: (
     providerThread: OrchestrationV2ProviderThread,
   ) => Effect.Effect<boolean>;
+  /**
+   * Set when every background task this session lists on its provider threads
+   * runs inside the session's own process and ends when it closes. The session
+   * manager then clears those tasks when it releases the session. Leave unset
+   * when a task can outlive the session, for example on a shared server, so
+   * its thread keeps showing Waiting.
+   */
+  readonly backgroundTasksEndWithProcess?: true;
   readonly ensureThread: (
     input: ProviderAdapterV2EnsureThreadInput,
   ) => Effect.Effect<OrchestrationV2ProviderThread, ProviderAdapterV2Error>;

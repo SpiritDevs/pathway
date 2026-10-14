@@ -16,6 +16,8 @@ While this is scheduled, a blue timer appears beside the thread controls and bes
 
 If a thread is stuck showing work that has already finished, right-click it and choose **Force settle thread**. This cancels current and queued work, dismisses pending requests, stops its provider sessions and terminals, and moves it to Settled. When the agent has replied but the thread is still waiting on background work, open the action palette and find **Background work**. It shows a one-line task summary, including agent-started dev servers, with an inline stop button. Expand the chevron beside Stop to see the full task list and recovery details. **Stop work and settle** performs the same force settlement; it stops all thread work and cancels queued messages, rather than stopping just one listed task. Keep a temporary conversation before using this control. It requires an environment that supports force settlement.
 
+Claude's background tasks, such as a dev server it started, end with its session. When you settle or archive a Claude thread, or its session closes after sitting idle, those tasks are cleared and the thread stops showing that it is waiting on them.
+
 Choose **Un-settle thread** to return it to the active list. Cancelled work does not restart automatically.
 
 [Temporary threads](conversations-and-temporary-threads.md) are deleted when settled and cannot be
