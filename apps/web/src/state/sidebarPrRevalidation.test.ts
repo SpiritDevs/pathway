@@ -98,7 +98,7 @@ it("shares one host read across all 106 threads targeting the same worktree, thr
   expect(mocks.command).toHaveBeenCalledTimes(1);
 });
 
-it("skips history checked within a day on repeated remounts and launches, then rechecks it", async () => {
+it("skips fresh history on repeated remounts and revalidates after five minutes", async () => {
   mocks.command.mockResolvedValue(
     AsyncResult.success({
       refName: "work",
@@ -118,16 +118,53 @@ it("skips history checked within a day on repeated remounts and launches, then r
     pass.stop();
   };
   for (let i = 0; i < 5; i++) await run();
-  // A relaunch an hour later restores the persisted answers and sweeps nothing.
-  vi.mocked(Date.now).mockReturnValue(1_000_000 + 60 * 60_000);
-  await run();
   expect(mocks.command).not.toHaveBeenCalled();
-  vi.mocked(Date.now).mockReturnValue(1_000_000 + 24 * 60 * 60_000);
+  // Even a merged branch answer can be joined by a PR opened outside Pathway.
+  vi.mocked(Date.now).mockReturnValue(1_300_000);
   await run();
   expect(onResult).toHaveBeenCalledTimes(106);
   expect(mocks.command).toHaveBeenCalledTimes(1);
   await run();
   expect(mocks.command).toHaveBeenCalledTimes(1);
+});
+
+it("rechecks a launch's mutable answers after five minutes and final attached answers daily", async () => {
+  const attachment = { number: 7, url: "https://github.com/example/repo/pull/7" };
+  const attached = {
+    ...thread,
+    id: ThreadId.make("attached"),
+    branch: null,
+    attachedPullRequest: attachment,
+  };
+  const noPr = { ...thread, id: ThreadId.make("no-pr") };
+  const openAttached = { ...attached, id: ThreadId.make("open-attached") };
+  const both = { ...attached, id: ThreadId.make("both"), branch: "work" };
+  const threads = [attached, noPr, openAttached, both];
+  const answer = (item: (typeof threads)[number], state: ThreadChangeRequestState["state"]) =>
+    [
+      keyFor(item),
+      { source: threadChangeRequestSource(item), state, checkedAt: 1_000_000 },
+    ] as const;
+  const retainedStates = new Map([
+    answer(attached, "merged"),
+    answer(noPr, null),
+    answer(openAttached, "open"),
+    answer(both, "merged"),
+  ]);
+  const checked = async (now: number) => {
+    vi.mocked(Date.now).mockReturnValue(now);
+    const input = { ...inputFor(threads), retainedStates };
+    const pass = mount();
+    await pass.update(input);
+    pass.stop();
+    return input.onResult.mock.calls.map(([key]) => key).sort();
+  };
+  expect(await checked(1_000_000 + 60_000)).toEqual([]);
+  // A relaunch an hour later finds a PR opened outside Pathway on the quiet branch.
+  expect(await checked(1_000_000 + 60 * 60_000)).toEqual(
+    [noPr, openAttached, both].map(keyFor).sort(),
+  );
+  expect(await checked(1_000_000 + 24 * 60 * 60_000)).toEqual(threads.map(keyFor).sort());
 });
 
 it.each([false, true])(

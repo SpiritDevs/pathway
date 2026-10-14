@@ -18,10 +18,18 @@ import {
 
 const quiet = { reportFailure: false, reportDefect: false };
 const HISTORY_FRESHNESS_MS = 5 * 60_000;
-// A known answer here belongs to a Settled row, persisted across launches. Merged is final, and a
-// quiet branch rarely grows a PR; rows in view refresh themselves, so launches recheck the
-// collapsed tail at most daily instead of sweeping every Settled row.
-const SETTLED_RECHECK_MS = 24 * 60 * 60_000;
+// Answers persist across launches. Only a merged or closed answer for attached PRs alone is final
+// enough to wait a day; a branch can grow a PR opened outside Pathway at any time, so "no PR",
+// open, and branch-derived answers keep the five-minute recheck.
+const FINAL_RECHECK_MS = 24 * 60 * 60_000;
+
+function recheckAfterMs(thread: EnvironmentThreadShell, retained: ThreadChangeRequestState) {
+  const final =
+    thread.branch === null &&
+    threadPullRequestAttachments(thread).length > 0 &&
+    (retained.state === "merged" || retained.state === "closed");
+  return final ? FINAL_RECHECK_MS : HISTORY_FRESHNESS_MS;
+}
 
 interface RevalidationInput {
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
@@ -179,14 +187,14 @@ export function createSidebarPrRevalidation(registry: ContextType<typeof Registr
       );
       for (const token of attempted) if (!eligible.has(token)) attempted.delete(token);
       pending = new Map(
-        [...eligible].filter(([token, { key, source }]) => {
+        [...eligible].filter(([token, { thread, key, source }]) => {
           if (attempted.has(token)) return false;
           const retained = input.retainedStates.get(key);
           // No answer for the current source yet: check it once to confirm its provisional section.
           if (retained?.source !== source) return true;
           return (
             retained.checkedAt === undefined ||
-            Date.now() - retained.checkedAt >= SETTLED_RECHECK_MS
+            Date.now() - retained.checkedAt >= recheckAfterMs(thread, retained)
           );
         }),
       );
