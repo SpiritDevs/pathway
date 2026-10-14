@@ -98,7 +98,7 @@ it("shares one host read across all 106 threads targeting the same worktree, thr
   expect(mocks.command).toHaveBeenCalledTimes(1);
 });
 
-it("skips fresh history on repeated remounts and revalidates after five minutes", async () => {
+it("skips history checked within a day on repeated remounts and launches, then rechecks it", async () => {
   mocks.command.mockResolvedValue(
     AsyncResult.success({
       refName: "work",
@@ -118,8 +118,11 @@ it("skips fresh history on repeated remounts and revalidates after five minutes"
     pass.stop();
   };
   for (let i = 0; i < 5; i++) await run();
+  // A relaunch an hour later restores the persisted answers and sweeps nothing.
+  vi.mocked(Date.now).mockReturnValue(1_000_000 + 60 * 60_000);
+  await run();
   expect(mocks.command).not.toHaveBeenCalled();
-  vi.mocked(Date.now).mockReturnValue(1_300_000);
+  vi.mocked(Date.now).mockReturnValue(1_000_000 + 24 * 60 * 60_000);
   await run();
   expect(onResult).toHaveBeenCalledTimes(106);
   expect(mocks.command).toHaveBeenCalledTimes(1);

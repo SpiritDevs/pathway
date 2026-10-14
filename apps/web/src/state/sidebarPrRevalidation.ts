@@ -18,6 +18,10 @@ import {
 
 const quiet = { reportFailure: false, reportDefect: false };
 const HISTORY_FRESHNESS_MS = 5 * 60_000;
+// A known answer here belongs to a Settled row, persisted across launches. Merged is final, and a
+// quiet branch rarely grows a PR; rows in view refresh themselves, so launches recheck the
+// collapsed tail at most daily instead of sweeping every Settled row.
+const SETTLED_RECHECK_MS = 24 * 60 * 60_000;
 
 interface RevalidationInput {
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
@@ -182,7 +186,7 @@ export function createSidebarPrRevalidation(registry: ContextType<typeof Registr
           if (retained?.source !== source) return true;
           return (
             retained.checkedAt === undefined ||
-            Date.now() - retained.checkedAt >= HISTORY_FRESHNESS_MS
+            Date.now() - retained.checkedAt >= SETTLED_RECHECK_MS
           );
         }),
       );
