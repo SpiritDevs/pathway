@@ -332,7 +332,7 @@ it("evicts and signs out every company another tab stored, even one the index lo
   );
   expect(companies()).toHaveLength(3);
   const signedOut = new Map(store);
-  // Later writes still bound the account to the most recent four.
+  // Best effort across tabs: the next writes evict back down to the most recent four.
   for (const company of ["c4", "c5", "c6"])
     writeSidebarChangeRequests(scopeFor(company), states, storage);
   expect(companies()).toHaveLength(4);

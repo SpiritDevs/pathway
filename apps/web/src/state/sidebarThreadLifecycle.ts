@@ -48,6 +48,8 @@ const companyKey = (accountId: string, company: string) => `${accountPrefix(acco
 // Most recently written companies first. Tabs update it without a lock, so writes reconcile it
 // against the company caches actually stored.
 const recentCompaniesKey = (accountId: string) => `${accountPrefix(accountId)}-recent`;
+// Best effort, not an invariant: concurrent writes from several tabs can briefly leave more
+// caches stored, and the next write evicts the excess.
 const RECENT_COMPANY_LIMIT = 4;
 
 function storedKeys(storage: SyncResetStorage, prefix: string): string[] {
@@ -111,7 +113,10 @@ export function readSidebarChangeRequests(
 
 let warnedWriteFailure = false;
 
-/** Writes one company's classification; companies beyond the most recent few are evicted. */
+/**
+ * Writes one company's classification and evicts companies beyond the most recent few. The bound
+ * is best effort across tabs; a later write corrects any excess concurrent writes leave.
+ */
 export function writeSidebarChangeRequests(
   scope: string,
   states: ReadonlyMap<string, ThreadChangeRequestState>,
