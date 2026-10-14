@@ -16,6 +16,14 @@ Codex task names appear as readable labels. For example, `audit_server` appears 
 
 Only subagents started through Pathway appear in Lineage. If an agent starts another provider's command-line tool itself, for example running `codex exec` in a terminal command, that work shows only as background work, without a provider, model, or child conversation. Claude agents can't do this in Pathway: the command is blocked and the agent is told to delegate the work as a subagent instead. If you have a project note or memory telling an agent to run `codex exec` or `claude -p`, update it to ask for a subagent.
 
+## Give a subagent its own worktree
+
+By default, a subagent works in the same checkout as the agent that started it. When several subagents might edit the same files at once, an agent can give each one its own git worktree instead. You can ask for this, for example "run each fix in its own worktree", or the agent can choose it.
+
+The worktree starts from the last commit of the checkout the agent is working in, and the project's setup script runs before the subagent starts. Uncommitted changes are not copied, so commit anything the subagent needs first. While the worktree is being set up, the subagent's conversation shows its progress. If you stop the subagent before it starts, the worktree is removed. Once it has started, the worktree stays after the subagent finishes, so you can review or merge its work.
+
+This needs a project folder that is a git repository with at least one commit. It isn't available for temporary conversations or for work started on another machine. In those cases the agent is told why and can delegate without a separate worktree.
+
 ## Work on another machine
 
 An agent can also start work on another of your machines. For example, you can ask an agent on your laptop to investigate something on your desktop. The agent sees which machines and projects you can use, and starts a conversation in the project you choose, acting as you. That conversation runs on the other machine, and the agent can read it and send it messages. It is listed in the Lineage section of the agent's conversation rather than in your threads list, and its own Lineage links back to the agent's conversation.

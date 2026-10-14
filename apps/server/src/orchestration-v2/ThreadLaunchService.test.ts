@@ -2,6 +2,7 @@ import { assert, it, vi } from "@effect/vitest";
 import {
   CommandId,
   DEFAULT_SERVER_SETTINGS,
+  GitCommandError,
   MessageId,
   ProjectId,
   ProviderDriverKind,
@@ -78,6 +79,7 @@ interface HarnessOptions {
   readonly removeWorktree?: GitWorkflow.GitWorkflowService["Service"]["removeWorktree"];
   readonly createWorktree?: GitWorkflow.GitWorkflowService["Service"]["createWorktree"];
   readonly renameBranch?: GitWorkflow.GitWorkflowService["Service"]["renameBranch"];
+  readonly resolveCommit?: GitWorkflow.GitWorkflowService["Service"]["resolveCommit"];
   readonly runSetup?: ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]["runForThread"];
   readonly generateTitle?: TextGeneration.TextGeneration["Service"]["generateThreadTitle"];
   readonly generateBranchName?: TextGeneration.TextGeneration["Service"]["generateBranchName"];
@@ -130,6 +132,9 @@ function makeHarness(options: HarnessOptions = {}) {
     GitWorkflow.GitWorkflowService["Service"]["resolveRemoteTrackingCommit"]
   >(() => Effect.succeed({ commitSha: "remote-main-sha", remoteRefName: "origin/main" }));
   const removeWorktree = vi.fn(options.removeWorktree ?? (() => Effect.void));
+  const resolveCommit = vi.fn<GitWorkflow.GitWorkflowService["Service"]["resolveCommit"]>(
+    options.resolveCommit ?? (() => Effect.succeed({ commitSha: "parent-head-sha" })),
+  );
   const closeTerminal = vi.fn(() => Effect.void);
   const externalServices = Layer.mergeAll(
     Layer.mock(TerminalManager)({ close: closeTerminal }),
@@ -150,6 +155,7 @@ function makeHarness(options: HarnessOptions = {}) {
       resolveRemoteNameForRef,
       removeWorktree,
       resolveRemoteTrackingCommit,
+      resolveCommit,
     }),
     Layer.succeed(ProjectSetupScriptRunner.ProjectSetupScriptRunner, {
       runForThread: runSetup,
@@ -202,6 +208,7 @@ function makeHarness(options: HarnessOptions = {}) {
   );
   return {
     removeWorktree,
+    resolveCommit,
     closeTerminal,
     layer: Layer.mergeAll(launch, threadManagement, titleRegeneration, outbox, database),
     createWorktree,
@@ -1685,3 +1692,202 @@ for (const action of ["retry", "work_locally"] as const) {
       }),
   );
 }
+
+// Starts a parent whose run is live, then delegates one child the way delegate_task does.
+const delegateChild = (input: { readonly name: string; readonly isolation?: "worktree" }) =>
+  Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const parent = yield* launches.launch(
+      launchInput({
+        command: `command:${input.name}:parent`,
+        thread: `thread:${input.name}:parent`,
+        message: "Coordinate the work",
+      }),
+    );
+    yield* waitUntil(() =>
+      threads
+        .getThreadProjection(parent.threadId)
+        .pipe(Effect.map((projection) => projection.runs[0]?.status === "starting")),
+    );
+    const parentRun = (yield* threads.getThreadProjection(parent.threadId)).runs[0]!;
+    const commandId = CommandId.make(`command:${input.name}:delegate`);
+    const delegated = yield* threads.dispatch({
+      type: "delegated_task.request",
+      createdBy: "agent",
+      creationSource: "mcp",
+      commandId,
+      parentThreadId: parent.threadId,
+      parentRunId: parentRun.id,
+      parentNodeId: parentRun.rootNodeId!,
+      task: "Fix the flaky test",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      ...(input.isolation === undefined ? {} : { isolation: input.isolation }),
+    });
+    const childRun = delegated.storedEvents.find(
+      (stored) => stored.event.type === "run.created" && stored.event.threadId !== parent.threadId,
+    );
+    if (childRun?.event.type !== "run.created") return yield* Effect.die("No child run.");
+    return {
+      commandId,
+      threadId: childRun.event.threadId,
+      runId: childRun.event.payload.id,
+    };
+  });
+
+it.effect("starts a delegated child in the shared checkout unless isolation is requested", () => {
+  const harness = makeHarness();
+  return Effect.gen(function* () {
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const child = yield* delegateChild({ name: "delegate-shared" });
+    const projection = yield* threads.getThreadProjection(child.threadId);
+    assert.equal(projection.runs[0]?.status, "starting");
+    assert.equal(projection.thread.worktreePath, null);
+    assert.isUndefined(
+      projection.turnItems.find((item) => item.type === "command_execution")?.workspacePreparation,
+    );
+    assert.equal(harness.createWorktree.mock.calls.length, 0);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("prepares an isolated delegated child in its own worktree exactly once", () =>
+  Effect.gen(function* () {
+    const setupEntered = yield* Deferred.make<void>();
+    const allowSetup = yield* Deferred.make<void>();
+    const harness = makeHarness({
+      createWorktree: (input) =>
+        Effect.succeed({
+          worktree: { path: "/repo-worktrees/child", refName: input.newRefName, headSha: "abc" },
+        } as never),
+      runSetup: (input) =>
+        input.worktreePath === "/repo-worktrees/child"
+          ? Deferred.succeed(setupEntered, undefined).pipe(
+              Effect.andThen(Deferred.await(allowSetup)),
+              Effect.as({ status: "no-script" as const }),
+            )
+          : Effect.succeed({ status: "no-script" as const }),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const child = yield* delegateChild({ name: "delegate-isolated", isolation: "worktree" });
+      const before = yield* threads.getThreadProjection(child.threadId);
+      assert.equal(before.runs[0]?.status, "preparing");
+      assert.equal(before.thread.worktreePath, null);
+      assert.equal(before.thread.branch, null);
+
+      const preparation = { ...child, baseRef: "parent-head-sha" };
+      // A retried delegate_task call prepares the same run again while setup is still running.
+      yield* Effect.all([
+        launches.prepareDelegatedRun(preparation),
+        launches.prepareDelegatedRun(preparation),
+      ]);
+      yield* Deferred.await(setupEntered);
+      yield* launches.prepareDelegatedRun(preparation);
+      yield* Deferred.succeed(allowSetup, undefined);
+      yield* waitUntil(() =>
+        threads
+          .getThreadProjection(child.threadId)
+          .pipe(Effect.map((projection) => projection.runs[0]?.status === "starting")),
+      );
+      yield* launches.prepareDelegatedRun(preparation);
+
+      assert.equal(harness.createWorktree.mock.calls.length, 1);
+      assert.deepInclude(harness.createWorktree.mock.calls[0]![0], {
+        cwd: "/repo",
+        refName: "parent-head-sha",
+        baseRefName: "parent-head-sha",
+      });
+      assert.deepEqual(
+        harness.runSetup.mock.calls
+          .map(([setup]) => setup)
+          .filter((setup) => setup.threadId === child.threadId)
+          .map((setup) => setup.worktreePath),
+        ["/repo-worktrees/child"],
+      );
+      const after = yield* threads.getThreadProjection(child.threadId);
+      assert.equal(after.thread.worktreePath, "/repo-worktrees/child");
+      assert.equal(after.runs.length, 1);
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("removes the worktree of an isolated child stopped during checkout", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const allowCheckout = yield* Deferred.make<void>();
+    const harness = makeHarness({
+      createWorktree: () =>
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(allowCheckout)),
+          Effect.as({
+            worktree: { path: "/repo-worktrees/stopped", refName: "pathway/stopped" },
+          } as never),
+        ),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const child = yield* delegateChild({ name: "delegate-stopped", isolation: "worktree" });
+      yield* launches.prepareDelegatedRun({ ...child, baseRef: "parent-head-sha" });
+      yield* Deferred.await(entered);
+      yield* threads.dispatch({
+        type: "run.interrupt",
+        commandId: CommandId.make("command:delegate-stopped:cancel"),
+        threadId: child.threadId,
+        runId: child.runId,
+      });
+      // The checkout in flight finishes, then is removed instead of being used.
+      yield* Deferred.succeed(allowCheckout, undefined);
+      yield* waitUntil(() => Effect.sync(() => harness.removeWorktree.mock.calls.length > 0));
+      assert.deepEqual(harness.removeWorktree.mock.calls, [
+        [{ cwd: "/repo", path: "/repo-worktrees/stopped", force: true }],
+      ]);
+      assert.isFalse(
+        harness.runSetup.mock.calls.some(([setup]) => setup.threadId === child.threadId),
+      );
+      const projection = yield* threads.getThreadProjection(child.threadId);
+      assert.equal(projection.runs[0]?.status, "interrupted");
+      assert.equal(projection.thread.worktreePath, null);
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("resolves a worktree base from the parent checkout and explains a non-git project", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness({
+      resolveCommit: (input) =>
+        input.cwd === "/repo-worktrees/parent"
+          ? Effect.succeed({ commitSha: "parent-head-sha" })
+          : Effect.fail(
+              new GitCommandError({
+                operation: "resolveCommit",
+                command: "git rev-parse",
+                cwd: input.cwd,
+                detail: "fatal: not a git repository",
+              }),
+            ),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const commandId = CommandId.make("command:resolve-base");
+      assert.equal(
+        yield* launches.resolveWorktreeBase({
+          commandId,
+          projectId,
+          worktreePath: "/repo-worktrees/parent",
+        }),
+        "parent-head-sha",
+      );
+      const error = yield* launches
+        .resolveWorktreeBase({ commandId, projectId, worktreePath: null })
+        .pipe(Effect.flip);
+      assert.equal(
+        error.message,
+        "/repo is not a git repository with a commit, so a separate worktree cannot be created.",
+      );
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);

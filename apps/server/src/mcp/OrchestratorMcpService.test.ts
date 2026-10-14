@@ -18,6 +18,7 @@ import * as Ref from "effect/Ref";
 import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ScheduledTaskService } from "../scheduledTasks/ScheduledTaskService.ts";
+import { ThreadLaunchService } from "../orchestration-v2/ThreadLaunchService.ts";
 import { RemoteDispatch } from "../cloud/remoteDispatch.ts";
 import { RemoteThreads } from "../cloud/remoteThreads.ts";
 import {
@@ -53,6 +54,7 @@ describe("OrchestratorMcpService", () => {
             ),
         }),
         Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+        Layer.mock(ThreadLaunchService)({}),
         Layer.mock(ScheduledTaskService)({}),
         Layer.mock(ProviderAllowanceRuntime)({
           inheritThread: (parent, destination, child) =>
@@ -173,6 +175,17 @@ describe("OrchestratorMcpService", () => {
         assert.equal(malformed.code, "invalid_request");
         assert.include(malformed.message, "was not run locally");
 
+        const isolatedRemote = yield* service
+          .delegateTask(scope, {
+            task: "Isolation is local only.",
+            targetEnvironmentId,
+            targetProjectId,
+            isolation: "worktree",
+          })
+          .pipe(Effect.flip);
+        assert.equal(isolatedRemote.code, "invalid_request");
+        assert.include(isolatedRemote.message, "not available with targetEnvironmentId");
+
         const noProject = yield* service
           .delegateTask(scope, { task: "Which project?", targetEnvironmentId })
           .pipe(Effect.flip);
@@ -260,6 +273,7 @@ describe("OrchestratorMcpService", () => {
             ),
         }),
         Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+        Layer.mock(ThreadLaunchService)({}),
         Layer.mock(ScheduledTaskService)({}),
       );
       const scope: McpInvocationScope = {
@@ -328,6 +342,7 @@ describe("OrchestratorMcpService", () => {
             ),
         }),
         Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+        Layer.mock(ThreadLaunchService)({}),
         Layer.mock(ScheduledTaskService)({}),
       );
       const scope: McpInvocationScope = {
@@ -393,6 +408,7 @@ describe("OrchestratorMcpService", () => {
             ),
         }),
         Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+        Layer.mock(ThreadLaunchService)({}),
         Layer.mock(ScheduledTaskService)({}),
       );
       const scope: McpInvocationScope = {
@@ -465,6 +481,7 @@ describe("OrchestratorMcpService", () => {
             ),
         }),
         Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+        Layer.mock(ThreadLaunchService)({}),
         Layer.mock(ScheduledTaskService)({}),
       );
       const scope: McpInvocationScope = {

@@ -63,6 +63,7 @@ import { checkpointWorkspace } from "../orchestration-v2/testkit/ReplayFixtureWo
 import { makeOrchestratorV2ReplayLayerWithRegistry } from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
 import { makeProviderRegistryLayer } from "../provider/testUtils/providerRegistryMock.ts";
 import { ScheduledTaskService } from "../scheduledTasks/ScheduledTaskService.ts";
+import { ThreadLaunchService } from "../orchestration-v2/ThreadLaunchService.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 
@@ -632,6 +633,7 @@ describe("orchestrator MCP toolkit", () => {
           const testDependencies = Layer.mergeAll(
             providerRegistryLayer,
             scheduledTaskStubLayer,
+            Layer.mock(ThreadLaunchService)({}),
             NodeServices.layer,
           );
           const testLayer = orchestrationLayer.pipe(Layer.provideMerge(testDependencies));
