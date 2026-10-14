@@ -1,13 +1,30 @@
 import { projectCursorDynamicToolCall } from "./CursorAdapterV2.ts";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
+  CursorSettings,
   EnvironmentId,
+  MessageId,
   type ModelSelection,
+  NodeId,
+  ProjectId,
   ProviderInstanceId,
+  ProviderSessionId,
+  RunAttemptId,
+  RunId,
   ThreadId,
 } from "@spiritdevs/contracts";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 
+import { layerTest as serverConfigLayerTest, ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { layer as idAllocatorLayer, IdAllocatorV2 } from "../IdAllocator.ts";
+import { ProviderAdapterV2RuntimePolicy } from "../ProviderAdapter.ts";
 import { subagentChildModelSelection } from "../SubagentProjection.ts";
 import {
   CursorProviderCapabilitiesV2,
@@ -15,12 +32,173 @@ import {
   cursorMcpServers,
   cursorRuntimeAgentPolicy,
   cursorSdkModelSelection,
+  makeCursorAdapterV2,
   makeCursorAgentOptions,
   nestedToolCallFromEnvelope,
 } from "./CursorAdapterV2.ts";
 import { isCursorCancellationError, loggedCursorAgentOptions } from "./CursorAgentSdk.ts";
 
+const decodeCursorSettings = Schema.decodeEffect(CursorSettings);
+
 describe("CursorAdapterV2", () => {
+  // Cursor may name a task's model only on a later update of the same call.
+  it.effect.each([
+    { name: "late report", model: undefined, lateModel: "gpt-6-sol", expected: "gpt-6-sol" },
+    { name: "omitted later", model: "gpt-6-sol", lateModel: undefined, expected: "gpt-6-sol" },
+    { name: "blank later", model: "gpt-6-sol", lateModel: " \t ", expected: "gpt-6-sol" },
+    { name: "never reported", model: undefined, lateModel: undefined, expected: "composer-2.5" },
+  ] as const)("projects a Cursor task model: $name", ({ model, lateModel, expected }) =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const workspace = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "cursor-v2-task-model-",
+      });
+      const instanceId = ProviderInstanceId.make("cursor");
+      const threadId = ThreadId.make("cursor-task-model-thread");
+      const modelSelection = {
+        instanceId,
+        model: "composer-2.5",
+        options: [{ id: "fastMode", value: true }],
+      } satisfies ModelSelection;
+      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: workspace,
+      });
+      const adapter = makeCursorAdapterV2({
+        instanceId,
+        settings: yield* decodeCursorSettings({}),
+        environment: { HOME: workspace },
+        fileSystem,
+        idAllocator: yield* IdAllocatorV2,
+        serverConfig: yield* ServerConfig.pipe(
+          Effect.provide(serverConfigLayerTest(workspace, { prefix: "cursor-v2-task-model-" })),
+        ),
+        runner: {
+          assertComplete: Effect.void,
+          open: () =>
+            Effect.succeed({
+              agentId: "native-cursor-task-model",
+              listMessages: Effect.succeed([]),
+              close: Effect.void,
+              send: (input) =>
+                Effect.gen(function* () {
+                  const args = {
+                    description: "Review",
+                    prompt: "Review the code.",
+                    subagentType: { kind: "unspecified" as const },
+                    agentId: "cursor-task-agent",
+                    mode: "unspecified" as const,
+                  };
+                  for (const [type, reported] of [
+                    ["tool-call-started", model],
+                    ["tool-call-completed", lateModel],
+                  ] as const) {
+                    yield* input.onDelta!({
+                      type,
+                      modelCallId: "model-call",
+                      callId: "task-call",
+                      toolCall: {
+                        type: "task",
+                        args: { ...args, ...(reported === undefined ? {} : { model: reported }) },
+                      },
+                    }).pipe(Effect.orDie);
+                  }
+                  return {
+                    agentId: "native-cursor-task-model",
+                    runId: "native-cursor-run",
+                    wait: Effect.succeed({
+                      id: "native-cursor-run",
+                      requestId: "native-request",
+                      status: "finished" as const,
+                      model: { id: "composer-2.5" },
+                      durationMs: 1,
+                    }),
+                    cancel: Effect.void,
+                  };
+                }),
+            }),
+        },
+      });
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("cursor-task-model-session"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      const now = yield* DateTime.now;
+      yield* runtime.startTurn({
+        threadId,
+        providerThread,
+        modelSelection,
+        runtimePolicy,
+        runId: RunId.make("cursor-task-model-run"),
+        runOrdinal: 1,
+        providerTurnOrdinal: 1,
+        attemptId: RunAttemptId.make("cursor-task-model-attempt"),
+        rootNodeId: NodeId.make("cursor-task-model-root"),
+        appThread: {
+          id: threadId,
+          projectId: ProjectId.make("cursor-task-model-project"),
+          createdBy: "user",
+          creationSource: "web",
+          title: "Cursor task model",
+          providerInstanceId: instanceId,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: providerThread.id,
+          lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+        message: {
+          messageId: MessageId.make("cursor-task-model-message"),
+          createdBy: "user",
+          creationSource: "web",
+          text: "Review the code.",
+          attachments: [],
+        },
+      });
+      const events = yield* runtime.events.pipe(
+        Stream.takeUntil((event) => event.type === "turn.terminal"),
+        Stream.runCollect,
+      );
+      const rows = events.filter((event) => event.type === "subagent.updated");
+      const childThreadId = rows[0]?.subagent.childThreadId;
+      const childSelections = events.flatMap((event) =>
+        event.type === "app_thread.created" && event.appThread.id === childThreadId
+          ? [event.appThread.modelSelection]
+          : event.type === "app_thread.model_reported" && event.threadId === childThreadId
+            ? [event.modelSelection]
+            : [],
+      );
+      const expectedSelection = subagentChildModelSelection({
+        parentSelection: modelSelection,
+        reportedModel: expected,
+      });
+      assert.equal(rows[0]?.subagent.model, model ?? "composer-2.5");
+      assert.equal(rows.at(-1)?.subagent.status, "completed");
+      assert.equal(rows.at(-1)?.subagent.model, expected);
+      assert.deepEqual(rows.at(-1)?.subagent.options, expectedSelection.options);
+      assert.deepEqual(childSelections.at(-1), expectedSelection);
+      assert.lengthOf(childSelections, model === undefined && lateModel !== undefined ? 2 : 1);
+    }).pipe(Effect.scoped, Effect.provide(Layer.merge(NodeServices.layer, idAllocatorLayer))),
+  );
+
   it("keeps the project primary while granting the retained conversation folder to Cursor", () => {
     const options = makeCursorAgentOptions({
       threadId: ThreadId.make("conversation"),

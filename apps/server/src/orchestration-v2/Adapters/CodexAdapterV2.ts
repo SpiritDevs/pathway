@@ -146,6 +146,15 @@ const decodeCodexBackgroundTerminalTerminateResponse = Schema.decodeUnknownEffec
 const decodeCodexBackgroundTerminalsListResponse = Schema.decodeUnknownEffect(
   CodexBackgroundTerminalsListResponse,
 );
+// Newer Codex reports a thread's model on `thread/read`; older versions omit it.
+const decodeCodexChildThread = Schema.decodeUnknownEffect(
+  Schema.Struct({
+    thread: Schema.Struct({
+      id: Schema.String,
+      model: Schema.optional(Schema.NullOr(Schema.String)),
+    }),
+  }),
+);
 const CODEX_CLIENT_INFO = {
   name: "pathway_desktop",
   title: "Pathway Desktop",
@@ -2355,6 +2364,36 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           yield* emitSubagentTaskUpdate({ subagent, status: subagent.task.status });
         });
 
+        /**
+         * Fills in a spawned child's unreported model from `thread/read`, which
+         * never resumes the child. Any failure leaves the model unreported, and a
+         * model reported meanwhile by `thread/settings/updated` wins.
+         */
+        const subagentModelLookupScope = yield* Effect.scope;
+        const lookUpSubagentModel = (nativeThreadId: string) =>
+          client.raw.request("thread/read", { threadId: nativeThreadId, includeTurns: false }).pipe(
+            Effect.flatMap(decodeCodexChildThread),
+            Effect.timeout("5 seconds"),
+            Effect.flatMap(({ thread }) => {
+              const model = trimText(thread.model);
+              if (thread.id !== nativeThreadId || model === undefined) return Effect.void;
+              return turnTerminalizationPermit.withPermits(1)(
+                Effect.gen(function* () {
+                  const subagent = (yield* Ref.get(subagentThreads)).get(nativeThreadId);
+                  if (subagent === undefined || subagent.task.model !== null) return;
+                  yield* applySubagentConfiguration(subagent, model, undefined);
+                }),
+              );
+            }),
+            Effect.catch((error) =>
+              Effect.logDebug("orchestration-v2.codex-subagent-model-lookup-failed", {
+                nativeThreadId,
+                error,
+              }),
+            ),
+            Effect.forkIn(subagentModelLookupScope),
+          );
+
         const registerSubagentThread = (input: {
           readonly context: ActiveCodexTurnContext;
           readonly nativeThreadId: string;
@@ -2599,6 +2638,9 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             });
             for (const pendingTurn of pendingTurns) {
               yield* emitSubagentProviderTurnStarted(subagent, pendingTurn);
+            }
+            if (task.model === null) {
+              yield* lookUpSubagentModel(input.nativeThreadId);
             }
           });
 

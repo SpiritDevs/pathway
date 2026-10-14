@@ -22,8 +22,10 @@ import { assert, describe, it } from "@effect/vitest";
 import { HostProcessEnvironment, HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
 import { SpawnExecutableResolution } from "@spiritdevs/shared/shell";
 import * as CodexClient from "effect-codex-app-server/client";
+import * as CodexError from "effect-codex-app-server/errors";
 import * as CodexReplay from "effect-codex-app-server/replay";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
@@ -64,7 +66,7 @@ import {
   resolveCodexRevertBeforeTurnId,
   resolveCodexRollbackTurnCount,
 } from "./CodexAdapterV2.ts";
-import { makeReplayServerConfig } from "./CodexAdapterV2.testkit.ts";
+import { makeReplayServerConfig, withCodexReplayChildMetadata } from "./CodexAdapterV2.testkit.ts";
 
 describe("CodexAdapterV2 assistant message streaming", () => {
   it.effect("makes accumulated assistant text visible after the bounded flush interval", () =>
@@ -1120,7 +1122,10 @@ const awaitUntil = (predicate: () => boolean, label: string): Effect.Effect<void
     return yield* Effect.die(`Timed out waiting for ${label}.`);
   });
 
-const makeCodexReplayRuntime = (transcript: CodexReplay.CodexAppServerReplayTranscript) =>
+const makeCodexReplayRuntime = (
+  transcript: CodexReplay.CodexAppServerReplayTranscript,
+  readChildMetadata?: Parameters<typeof withCodexReplayChildMetadata>[2],
+) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const idAllocator = yield* IdAllocatorV2;
@@ -1139,6 +1144,9 @@ const makeCodexReplayRuntime = (transcript: CodexReplay.CodexAppServerReplayTran
           ),
           Effect.flatMap((context) =>
             Effect.service(CodexClient.CodexAppServerClient).pipe(Effect.provide(context)),
+          ),
+          Effect.map((client) =>
+            withCodexReplayChildMetadata(client, transcript, readChildMetadata),
           ),
         ),
     };
@@ -1167,9 +1175,15 @@ const makeCodexReplayRuntime = (transcript: CodexReplay.CodexAppServerReplayTran
     return { runtime, threadId, continuationRequests };
   });
 
-const makeCodexReplayHarness = (transcript: CodexReplay.CodexAppServerReplayTranscript) =>
+const makeCodexReplayHarness = (
+  transcript: CodexReplay.CodexAppServerReplayTranscript,
+  readChildMetadata?: Parameters<typeof withCodexReplayChildMetadata>[2],
+) =>
   Effect.gen(function* () {
-    const { runtime, threadId, continuationRequests } = yield* makeCodexReplayRuntime(transcript);
+    const { runtime, threadId, continuationRequests } = yield* makeCodexReplayRuntime(
+      transcript,
+      readChildMetadata,
+    );
     const providerThread = yield* runtime.ensureThread({
       threadId,
       modelSelection: CODEX_TEST_MODEL_SELECTION,
@@ -4927,6 +4941,7 @@ describe("CodexAdapterV2 subagent audit regressions", () => {
     entries: ReadonlyArray<CodexReplay.CodexAppServerReplayEntry>,
     modelSelection: ModelSelection = CODEX_TEST_MODEL_SELECTION,
     turnOptions: Readonly<Record<string, string>> = {},
+    readChildMetadata?: Parameters<typeof withCodexReplayChildMetadata>[2],
   ) =>
     Effect.gen(function* () {
       const harness = yield* makeCodexReplayHarness(
@@ -4946,6 +4961,7 @@ describe("CodexAdapterV2 subagent audit regressions", () => {
             }),
           ],
         }),
+        readChildMetadata,
       );
       yield* harness.runtime.startTurn({
         ...makeCodexTestTurnInput({
@@ -4999,6 +5015,128 @@ describe("CodexAdapterV2 subagent audit regressions", () => {
         assert.deepEqual(harness.subagentUpdates().at(-1)!.subagent.options, [
           { id: "serviceTier", value: "fast" },
         ]);
+      }),
+    ),
+  );
+
+  const spawned = (agentThreadId: string) =>
+    notification("item/completed", {
+      threadId: root,
+      turnId: rootTurn,
+      item: {
+        type: "subAgentActivity",
+        id: `spawn-${agentThreadId}`,
+        kind: "started",
+        agentThreadId,
+        agentPath: `/root/${agentThreadId}`,
+      },
+    });
+  const childModel = (
+    harness: Effect.Success<ReturnType<typeof run>>,
+    agentThreadId: string,
+  ): string | null | undefined =>
+    harness
+      .subagentUpdates()
+      .findLast((event) => event.subagent.nativeTaskRef?.nativeId?.endsWith(`:${agentThreadId}`))
+      ?.subagent.model;
+  const childModelReports = (harness: Effect.Success<ReturnType<typeof run>>) => {
+    const childThreadId = harness.subagentUpdates()[0]?.subagent.childThreadId;
+    return harness.events.flatMap((event) =>
+      event.type === "app_thread.model_reported" && event.threadId === childThreadId
+        ? [event.modelSelection]
+        : [],
+    );
+  };
+  // A probe child spawned after `child` looks up its model later, so once the
+  // probe's model lands, `child`'s lookup has settled too.
+  const probe = "audit-probe";
+  const probeMetadata = (threadId: string) =>
+    Effect.succeed({ thread: { id: threadId, model: "gpt-6-sol" } });
+
+  it.effect("reads an unreported child model without resuming the child", () =>
+    provide(
+      Effect.gen(function* () {
+        const reads: Array<string> = [];
+        const harness = yield* run(
+          "audit-child-model-read",
+          [activity("started"), activity("completed")],
+          undefined,
+          undefined,
+          (threadId) =>
+            Effect.sync(() => {
+              reads.push(threadId);
+              return { thread: { id: threadId, model: " gpt-6-sol " } };
+            }),
+        );
+        yield* awaitUntil(() => childModel(harness, child) === "gpt-6-sol", "child model");
+        assert.isNull(harness.subagentUpdates()[0]!.subagent.model);
+        assert.deepEqual(reads, [child]);
+        assert.deepEqual(childModelReports(harness), [
+          { instanceId: CODEX_DEFAULT_INSTANCE_ID, model: "gpt-6-sol", options: [] },
+        ]);
+        assert.equal(harness.subagentUpdates().at(-1)!.subagent.status, "completed");
+      }),
+    ),
+  );
+
+  it.effect.each(["failed", "malformed", "wrong child", "blank model", "unreported"] as const)(
+    "keeps a child model unknown after a %s metadata read",
+    (readResult) =>
+      provide(
+        Effect.gen(function* () {
+          const harness = yield* run(
+            `audit-child-model-${readResult.replace(" ", "-")}`,
+            [activity("started"), spawned(probe)],
+            undefined,
+            undefined,
+            (threadId) => {
+              if (threadId === probe) return probeMetadata(threadId);
+              switch (readResult) {
+                case "failed":
+                  return Effect.fail(
+                    new CodexError.CodexAppServerRequestError({
+                      code: -32000,
+                      errorMessage: "Child metadata unavailable",
+                      method: "thread/read",
+                    }),
+                  );
+                case "malformed":
+                  return Effect.succeed({});
+                case "wrong child":
+                  return Effect.succeed({ thread: { id: "other-child", model: "gpt-6-astra" } });
+                case "blank model":
+                  return Effect.succeed({ thread: { id: threadId, model: " \t " } });
+                case "unreported":
+                  return Effect.succeed({ thread: { id: threadId } });
+              }
+            },
+          );
+          yield* awaitUntil(() => childModel(harness, probe) === "gpt-6-sol", "probe model");
+          assert.isNull(childModel(harness, child));
+          assert.deepEqual(childModelReports(harness), []);
+        }),
+      ),
+  );
+
+  it.effect("keeps a child model reported before the metadata read lands", () =>
+    provide(
+      Effect.gen(function* () {
+        const release = yield* Deferred.make<void>();
+        const harness = yield* run(
+          "audit-child-model-late-read",
+          [activity("started"), settings("gpt-6-astra", "high"), spawned(probe)],
+          undefined,
+          undefined,
+          (threadId) => Deferred.await(release).pipe(Effect.andThen(probeMetadata(threadId))),
+        );
+        yield* awaitUntil(() => childModel(harness, child) === "gpt-6-astra", "settings model");
+        yield* Deferred.succeed(release, undefined);
+        yield* awaitUntil(() => childModel(harness, probe) === "gpt-6-sol", "probe model");
+        assert.equal(childModel(harness, child), "gpt-6-astra");
+        assert.deepEqual(
+          childModelReports(harness).map((selection) => selection.model),
+          ["gpt-6-astra"],
+        );
       }),
     ),
   );

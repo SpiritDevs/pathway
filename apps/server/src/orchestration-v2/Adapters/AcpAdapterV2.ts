@@ -2228,12 +2228,16 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           const turnItemOrdinal =
             existing?.turnItemOrdinal ?? (yield* resolveItemOrdinal(context, nativeTaskId));
           const taskStatus = update.status;
-          // ACP reports the subagent's model but never its options: the child
-          // thread and the task record share one selection so they agree.
+          // ACP reports the subagent's model but never its options, and may
+          // report it only on a later update: the latest report wins, an update
+          // without one keeps what is known (unknown stays null on the task),
+          // and the child thread and the task record share one selection.
+          const model = update.model?.trim() || existing?.task.model || null;
           const childSelection = subagentChildModelSelection({
             parentSelection: context.input.modelSelection,
-            reportedModel: update.model,
+            reportedModel: model,
           });
+          const lateModelReported = existing !== undefined && model !== existing.task.model;
           const task: OrchestrationV2Subagent = {
             ...(existing?.task ?? {
               id: nodeId,
@@ -2249,11 +2253,11 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               nativeTaskRef: nativeItemRef,
               prompt: update.prompt,
               title: update.title,
-              model: update.model,
-              ...(childSelection.options === undefined ? {} : { options: childSelection.options }),
               result: null,
               startedAt: now,
             }),
+            model,
+            options: childSelection.options,
             status: taskStatus,
             result: existing?.assistantText || update.result,
             completedAt: acpSubagentStatusIsTerminal(taskStatus) ? now : null,
@@ -2327,6 +2331,13 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               type: "turn_item.updated",
               driver,
               turnItem: promptArtifacts.turnItem,
+            });
+          } else if (lateModelReported) {
+            yield* emitProviderEvent({
+              type: "app_thread.model_reported",
+              driver,
+              threadId: childThreadId,
+              modelSelection: childSelection,
             });
           }
 

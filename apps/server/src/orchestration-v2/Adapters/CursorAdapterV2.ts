@@ -1506,11 +1506,13 @@ export function makeCursorAdapterV2(
               driver: CURSOR_PROVIDER,
               nativeThreadId: `${input.context.run.runId}:task:${input.callId}`,
             });
-          // Cursor reports the subagent's model but never its options: the
-          // child thread and the task record share one selection so they agree.
+          // Cursor reports the subagent's model but never its options, and may
+          // report it only on a later update: the latest report wins, an update
+          // without one keeps what is known, and the child thread and the task
+          // record share one selection so they agree.
           const childSelection = subagentChildModelSelection({
             parentSelection: input.context.input.modelSelection,
-            reportedModel: args.model,
+            reportedModel: args.model?.trim() || existing?.task.model,
           });
           const task: OrchestrationV2Subagent = {
             ...(existing?.task ?? {
@@ -1531,11 +1533,11 @@ export function makeCursorAdapterV2(
               },
               prompt: args.prompt,
               title: args.description,
-              model: childSelection.model,
-              ...(childSelection.options === undefined ? {} : { options: childSelection.options }),
               result: null,
               startedAt: now,
             }),
+            model: childSelection.model,
+            options: childSelection.options,
             nativeTaskRef: {
               driver: CURSOR_PROVIDER,
               nativeId: input.callId,
@@ -1619,6 +1621,13 @@ export function makeCursorAdapterV2(
               type: "turn_item.updated",
               driver: CURSOR_PROVIDER,
               turnItem: promptArtifacts.turnItem,
+            });
+          } else if (childSelection.model !== existing.task.model) {
+            yield* emitProviderEvent({
+              type: "app_thread.model_reported",
+              driver: CURSOR_PROVIDER,
+              threadId: childThreadId,
+              modelSelection: childSelection,
             });
           }
 
