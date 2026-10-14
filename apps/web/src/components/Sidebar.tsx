@@ -2496,19 +2496,6 @@ export default function Sidebar() {
       return new Map([...current].filter(([key]) => keys.has(key)));
     });
   }, [threads, threadListReadiness, setChangeRequestStateByKey]);
-  const unavailableEnvironmentIds = useMemo(
-    () =>
-      new Set(
-        environments
-          .filter((environment) =>
-            ["available", "offline", "error", "reconnecting"].includes(
-              environment.connection.phase,
-            ),
-          )
-          .map((environment) => environment.environmentId),
-      ),
-    [environments],
-  );
   const lifecycleCapabilities = useMemo(() => {
     const capabilities = new Map(
       environments.map((environment) => [
@@ -2686,7 +2673,7 @@ export default function Sidebar() {
     snoozedThreads,
     settledThreads,
     snoozeNow,
-    loadingThreads,
+    provisionalThreadKeys,
   } = useMemo(() => {
     void nowMinute;
     // Snooze classification uses a REAL clock, not the quantized minute:
@@ -2707,14 +2694,13 @@ export default function Sidebar() {
     const snoozed: EnvironmentThreadShell[] = [];
     const working: EnvironmentThreadShell[] = [];
     const settled: EnvironmentThreadShell[] = [];
-    const loading: EnvironmentThreadShell[] = [];
-    const sections = { active, pinned, working, snoozed, settled, loading };
+    const provisional = new Set<string>();
+    const sections = { active, pinned, working, snoozed, settled };
     for (const thread of visible) {
       const capabilities = lifecycleCapabilities.get(thread.environmentId);
       const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-      const section = sidebarThreadSection(thread, {
+      const placement = sidebarThreadSection(thread, {
         now: preciseNow,
-        unavailable: unavailableEnvironmentIds.has(thread.environmentId),
         autoSettleAfterDays,
         queued: queuedStatusByThreadId.has(threadKey),
         unread: unreadNotificationThreadKeys.has(threadKey),
@@ -2724,6 +2710,8 @@ export default function Sidebar() {
         projectCwd: projectCwdByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null,
         changeRequests: changeRequestStateByKey,
       });
+      const { section } = placement;
+      if (placement.provisional) provisional.add(threadKey);
       // Opt-in: inbox threads with an agent at work (not waiting on approval
       // or input) tuck into the Working shelf until they need the user.
       const isWorking =
@@ -2757,14 +2745,13 @@ export default function Sidebar() {
         .map(({ thread }) => thread),
       settledThreads: sortSettledThreadsForSidebar(settled),
       snoozeNow: preciseNow,
-      loadingThreads: loading,
+      provisionalThreadKeys: provisional,
     };
   }, [
     autoSettleAfterDays,
     changeRequestStateByKey,
     collapseWorkingThreads,
     lifecycleCapabilities,
-    unavailableEnvironmentIds,
     projectCwdByKey,
     nowMinute,
     scopedProjectKeys,
@@ -2776,29 +2763,35 @@ export default function Sidebar() {
     unreadNotificationThreadKeys,
   ]);
 
-  // Background PR checks cover retained Settled rows and threads still waiting on a first answer.
+  // Background PR checks cover provisionally placed threads and retained Settled rows. Input
+  // order is check order: the open thread first, then Active and Settled as the sidebar shows them.
   const revalidatedThreads = useMemo(() => {
-    const connected = (thread: EnvironmentThreadShell) =>
-      environments.some(
-        (environment) =>
-          environment.environmentId === thread.environmentId &&
-          environment.connection.phase === "connected",
-      );
+    const connected = new Set(
+      environments
+        .filter((environment) => environment.connection.phase === "connected")
+        .map((environment) => environment.environmentId),
+    );
+    const keyOf = (thread: EnvironmentThreadShell) =>
+      scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+    const provisional = [...activeThreads, ...settledThreads].filter((thread) =>
+      provisionalThreadKeys.has(keyOf(thread)),
+    );
+    const routeIndex = provisional.findIndex((thread) => keyOf(thread) === routeThreadKey);
+    if (routeIndex > 0) provisional.unshift(...provisional.splice(routeIndex, 1));
     return [
+      ...provisional,
       ...settledThreads.filter(
-        (thread) =>
-          thread.settledOverride == null &&
-          connected(thread) &&
-          retainedStates.has(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
+        (thread) => thread.settledOverride == null && retainedStates.has(keyOf(thread)),
       ),
-      ...loadingThreads.filter((thread) => {
-        const cached = changeRequestStateByKey.get(
-          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-        );
-        return connected(thread) && cached?.source !== threadChangeRequestSource(thread);
-      }),
-    ];
-  }, [settledThreads, loadingThreads, environments, retainedStates, changeRequestStateByKey]);
+    ].filter((thread) => connected.has(thread.environmentId));
+  }, [
+    activeThreads,
+    settledThreads,
+    provisionalThreadKeys,
+    routeThreadKey,
+    environments,
+    retainedStates,
+  ]);
   useSidebarPrRevalidation(
     threadScope,
     revalidatedThreads,
@@ -5318,7 +5311,7 @@ export default function Sidebar() {
               </ul>
             </TooltipProvider>
           ) : null}
-          {threadListReadiness !== "ready" || (!isSearchingThreads && loadingThreads.length > 0) ? (
+          {threadListReadiness !== "ready" ? (
             <p
               role="status"
               className="px-2 py-6 text-center text-xs text-sidebar-muted-foreground"
@@ -5330,7 +5323,6 @@ export default function Sidebar() {
           ) : null}
           {!isSearchingThreads &&
           threadListReadiness === "ready" &&
-          loadingThreads.length === 0 &&
           visibleDraftSessionCount === 0 &&
           visibleQueuedThreadCount === 0 &&
           pinnedThreads.length +

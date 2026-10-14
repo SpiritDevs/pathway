@@ -175,6 +175,32 @@ it("bounds concurrent work and stops queued history reads when the sidebar leave
   expect(mocks.command).toHaveBeenCalledTimes(4);
 });
 
+it("checks a newly prioritized thread next without exceeding four reads", async () => {
+  const reads = new Map<string, ReturnType<typeof deferred<unknown>>>();
+  let readStarted = () => {};
+  mocks.command.mockImplementation((_registry, _command, input: { input: { cwd: string } }) => {
+    const read = deferred<unknown>();
+    reads.set(input.input.cwd, read);
+    readStarted();
+    return read.promise;
+  });
+  const threads = history
+    .slice(0, 8)
+    .map((item, index) => ({ ...item, worktreePath: `/work/${index}` }));
+  const pass = mount();
+  const first = pass.update(inputFor(threads));
+  expect([...reads.keys()]).toEqual(["/work/0", "/work/1", "/work/2", "/work/3"]);
+  const second = pass.update(inputFor([threads[7]!, ...threads.slice(0, 7)]));
+  const fifth = new Promise<void>((resolve) => (readStarted = resolve));
+  reads.get("/work/0")!.resolve(openStatus);
+  await fifth;
+  expect([...reads.keys()]).toEqual(["/work/0", "/work/1", "/work/2", "/work/3", "/work/7"]);
+  mocks.command.mockResolvedValue(openStatus);
+  for (const read of reads.values()) read.resolve(openStatus);
+  await Promise.all([first, second]);
+  expect(mocks.command).toHaveBeenCalledTimes(8);
+});
+
 it("never shares reads between environments or publishes a superseded branch result", async () => {
   const pending = deferred<unknown>();
   mocks.command.mockReturnValueOnce(pending.promise);

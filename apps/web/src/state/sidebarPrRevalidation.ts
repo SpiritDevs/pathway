@@ -178,7 +178,7 @@ export function createSidebarPrRevalidation(registry: ContextType<typeof Registr
         [...eligible].filter(([token, { key, source }]) => {
           if (attempted.has(token)) return false;
           const retained = input.retainedStates.get(key);
-          // No answer for the current source yet: check it once so the thread can leave loading.
+          // No answer for the current source yet: check it once to confirm its provisional section.
           if (retained?.source !== source) return true;
           return (
             retained.checkedAt === undefined ||
