@@ -11,6 +11,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { ProjectionProjectRepository } from "../persistence/Services/ProjectionProjects.ts";
@@ -470,6 +471,115 @@ describe("ThreadTitleRegenerationService", () => {
           liveRequest,
         );
         assert.deepEqual(yield* titleRegeneration.recover, { cleared: 0 });
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect("keeps a live owner's marker while clearing copies that share its request id", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness();
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const titleRegeneration = yield* ThreadTitleRegeneration.ThreadTitleRegenerationService;
+        const parentThreadId = yield* createThread({
+          command: "command:title:shared:parent:create",
+          thread: "thread:title:shared:parent",
+        });
+        const childThreadIds = [
+          yield* createThread({
+            command: "command:title:shared:child-a:create",
+            thread: "thread:title:shared:child-a",
+          }),
+          yield* createThread({
+            command: "command:title:shared:child-b:create",
+            thread: "thread:title:shared:child-b",
+          }),
+        ];
+        const requestId = yield* armRegeneration({
+          command: "command:title:shared:1",
+          threadId: parentThreadId,
+        });
+        // Children created before forks and subagents stopped copying the marker.
+        for (const childThreadId of childThreadIds) {
+          yield* sql`
+            UPDATE orchestration_v2_projection_threads
+            SET payload_json = json_set(
+              payload_json,
+              '$.titleRegeneration',
+              json((
+                SELECT json_extract(payload_json, '$.titleRegeneration')
+                FROM orchestration_v2_projection_threads
+                WHERE thread_id = ${parentThreadId}
+              ))
+            )
+            WHERE thread_id = ${childThreadId}
+          `;
+          assert.equal(
+            (yield* threads.getThreadProjection(childThreadId)).thread.titleRegeneration?.requestId,
+            requestId,
+          );
+        }
+
+        assert.deepEqual(yield* titleRegeneration.recover, { cleared: 2 });
+        assert.equal(
+          (yield* threads.getThreadProjection(parentThreadId)).thread.titleRegeneration?.requestId,
+          requestId,
+        );
+        for (const childThreadId of childThreadIds) {
+          assert.isNotOk(
+            (yield* threads.getThreadProjection(childThreadId)).thread.titleRegeneration,
+          );
+        }
+        assert.deepEqual(yield* titleRegeneration.recover, { cleared: 0 });
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect("keeps a marker whose effect is unreadable and recovers the rest", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness();
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const outbox = yield* EffectOutbox.EffectOutboxV2;
+        const titleRegeneration = yield* ThreadTitleRegeneration.ThreadTitleRegenerationService;
+        // Sorts first, so the pass has to continue past it.
+        const unreadableThreadId = yield* createThread({
+          command: "command:title:unreadable:create",
+          thread: "thread:title:a-unreadable",
+        });
+        const orphanThreadId = yield* createThread({
+          command: "command:title:b-orphan:create",
+          thread: "thread:title:b-orphan",
+        });
+        const unreadableRequest = yield* armRegeneration({
+          command: "command:title:unreadable:1",
+          threadId: unreadableThreadId,
+        });
+        yield* armRegeneration({ command: "command:title:b-orphan:1", threadId: orphanThreadId });
+        for (const threadId of [unreadableThreadId, orphanThreadId]) {
+          yield* outbox.cancelUnsettled({
+            threadId,
+            effectTypes: ["thread-title.generate"],
+            reason: "test",
+          });
+        }
+        yield* sql`
+          UPDATE orchestration_v2_effect_outbox
+          SET payload_json = '{'
+          WHERE command_id = ${unreadableRequest}
+        `;
+
+        assert.deepEqual(yield* titleRegeneration.recover, { cleared: 1 });
+        assert.equal(
+          (yield* threads.getThreadProjection(unreadableThreadId)).thread.titleRegeneration
+            ?.requestId,
+          unreadableRequest,
+        );
+        assert.isNotOk(
+          (yield* threads.getThreadProjection(orphanThreadId)).thread.titleRegeneration,
+        );
       }).pipe(Effect.provide(harness.layer));
     }),
   );
