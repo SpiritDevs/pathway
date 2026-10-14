@@ -375,6 +375,28 @@ export function runOrderedV2StartupPhases<
   });
 }
 
+/**
+ * Clears orphaned title regeneration markers. It runs forked, so failures and defects are logged
+ * rather than lost with the fiber; a shutdown interrupt stays an interrupt and is not logged.
+ */
+export const recoverTitleRegenerationMarkers = <E, R>(
+  recover: Effect.Effect<{ readonly cleared: number }, E, R>,
+) =>
+  recover.pipe(
+    Effect.tap((summary) =>
+      summary.cleared === 0
+        ? Effect.void
+        : Effect.logInfo("Cleared orphaned title regeneration markers", summary),
+    ),
+    Effect.catchCause((cause) =>
+      Cause.hasInterruptsOnly(cause)
+        ? Effect.interrupt
+        : Effect.logWarning("V2 title regeneration recovery failed", {
+            cause: Cause.pretty(cause),
+          }),
+    ),
+  );
+
 export const make = (options?: StartupOptions) =>
   Effect.gen(function* () {
     const serverConfig = yield* ServerConfig.ServerConfig;
@@ -525,17 +547,7 @@ export const make = (options?: StartupOptions) =>
       // no pending or running effect of its own would leave "Regenerate title" disabled forever.
       // Clearing one is a dispatch per marker and nothing waits on it, so it runs off the
       // startup critical path; a marker cleared late only re-enables the action late.
-      yield* threadTitleRegeneration.recover.pipe(
-        Effect.tap((summary) =>
-          summary.cleared === 0
-            ? Effect.void
-            : Effect.logInfo("Cleared orphaned title regeneration markers", summary),
-        ),
-        Effect.catch((cause) =>
-          Effect.logWarning("V2 title regeneration recovery failed", { cause }),
-        ),
-        forkParked,
-      );
+      yield* forkParked(recoverTitleRegenerationMarkers(threadTitleRegeneration.recover));
 
       // Compaction is maintenance-only and can scan a large event history, so
       // it runs off the startup critical path in small yielding delete batches.
