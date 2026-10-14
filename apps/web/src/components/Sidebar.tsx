@@ -100,6 +100,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -1113,10 +1114,7 @@ type SidebarThreadRowProps = {
 };
 
 const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
-  props: SidebarThreadRowProps & {
-    rowRef: (element: HTMLLIElement | null) => (() => void) | undefined;
-    near: boolean;
-  },
+  props: SidebarThreadRowProps & { near: boolean },
 ) {
   const {
     isRenaming,
@@ -1159,7 +1157,6 @@ const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
   const terminalProcessCount = runningTerminalIds.length;
 
-  const { rowRef } = props;
   const { gitStatus, visibleBranchPr, badges, prState } = useSidebarChangeRequest({
     thread,
     projectCwd: props.projectCwd,
@@ -1598,15 +1595,7 @@ const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
 
   if (variant === "slim") {
     return (
-      <li
-        ref={rowRef}
-        data-thread-item
-        data-active-thread={props.isActive || undefined}
-        className={cn(
-          "relative -ml-[3px] list-none pl-[3px]",
-          props.deferRendering && "[content-visibility:auto] [contain-intrinsic-size:auto_34px]",
-        )}
-      >
+      <>
         {unreadDot}
         <Popover open={detailsOpen} onOpenChange={setDetailsOpen}>
           <PopoverTrigger
@@ -1747,33 +1736,14 @@ const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
           </PopoverTrigger>
           {detailsTooltip}
         </Popover>
-      </li>
+      </>
     );
   }
 
   const diff = latestRunDiff(thread);
 
-  const sortable = props.sortable;
   return (
-    <li
-      data-thread-item
-      data-active-thread={props.isActive || undefined}
-      ref={rowRef}
-      style={
-        sortable
-          ? {
-              transform: CSS.Translate.toString(sortable.transform),
-              transition: sortable.transition,
-            }
-          : undefined
-      }
-      {...(sortable?.listeners ?? {})}
-      className={cn(
-        "relative -ml-[3px] list-none py-0.5 pl-[3px]",
-        props.deferRendering && "[content-visibility:auto] [contain-intrinsic-size:auto_96px]",
-        sortable?.isDragging && "z-20 opacity-80",
-      )}
-    >
+    <>
       {unreadDot}
       <Popover open={detailsOpen} onOpenChange={setDetailsOpen}>
         <PopoverTrigger
@@ -2011,54 +1981,91 @@ const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
         </PopoverTrigger>
         {detailsTooltip}
       </Popover>
-    </li>
+    </>
   );
 });
 
 // Rows far from the viewport render a placeholder of their last measured size instead of their
-// content, so offscreen history holds no shell, Git, PR, terminal or tooltip subscriptions. The
-// placeholder keeps DOM order and the sortable node; the first screenful, the open thread, and
-// rows being renamed or dragged always render in full.
+// content, so offscreen history holds no shell, Git, PR, terminal or tooltip subscriptions. One
+// <li> owns the observer, the sortable node and the row chrome in both states, so a swap never
+// replaces dnd-kit's node (its resize observer remeasures the rows below when the height changes
+// mid-drag). The first screenful, the open thread, and rows that are focused, being renamed or
+// dragged always render in full. A placeholder stays in the tab order and mounts its row when
+// focused, then hands focus to the row button.
 const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowProps) {
   const viewport = useNearViewport();
   const { sortable } = props;
+  const element = useRef<HTMLLIElement | null>(null);
   const rowRef = useCallback(
-    (element: HTMLLIElement | null) => {
-      sortable?.setNodeRef(element);
-      const stopObserving = viewport.ref(element);
-      if (element === null) return;
+    (node: HTMLLIElement | null) => {
+      element.current = node;
+      sortable?.setNodeRef(node);
+      const stopObserving = viewport.ref(node);
+      if (node === null) return;
       return () => {
         stopObserving?.();
+        element.current = null;
         sortable?.setNodeRef(null);
       };
     },
     [sortable?.setNodeRef, viewport.ref],
   );
-  if (
+  // React focus events bubble through portals, so this also covers the row's popovers and menus.
+  // Blur clears on the next task, after a focus move inside the row has re-claimed it.
+  const [focusWithin, setFocusWithin] = useState(false);
+  const blurTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const focusRowOnMount = useRef(false);
+  useEffect(() => () => clearTimeout(blurTimer.current), []);
+  const rendered =
     viewport.near ||
+    focusWithin ||
     !props.deferRendering ||
     props.isActive ||
     props.isRenaming ||
-    sortable?.isDragging
-  ) {
-    return <SidebarThreadRowContent {...props} rowRef={rowRef} near={viewport.near} />;
-  }
+    sortable?.isDragging;
+  useLayoutEffect(() => {
+    if (!rendered || !focusRowOnMount.current) return;
+    focusRowOnMount.current = false;
+    element.current?.querySelector<HTMLElement>('[role="button"]')?.focus();
+  }, [rendered]);
+  const card = props.variant === "card";
   return (
     <li
       ref={rowRef}
       data-thread-item
-      aria-hidden
+      data-active-thread={props.isActive || undefined}
+      tabIndex={rendered ? undefined : 0}
+      aria-label={rendered ? undefined : props.thread.title}
+      onFocus={(event) => {
+        clearTimeout(blurTimer.current);
+        if (!rendered && event.target === event.currentTarget) focusRowOnMount.current = true;
+        setFocusWithin(true);
+      }}
+      onBlur={() => {
+        blurTimer.current = setTimeout(() => setFocusWithin(false));
+      }}
       style={{
-        height: viewport.height || (props.variant === "card" ? 96 : 34),
-        ...(sortable
+        ...(rendered ? {} : { height: viewport.height || (card ? 96 : 34) }),
+        ...(card && sortable
           ? {
               transform: CSS.Translate.toString(sortable.transform),
               transition: sortable.transition,
             }
           : {}),
       }}
-      className="list-none"
-    />
+      {...(card ? sortable?.listeners : {})}
+      className={cn(
+        "relative -ml-[3px] list-none pl-[3px]",
+        card && "py-0.5",
+        props.deferRendering &&
+          (card
+            ? "[content-visibility:auto] [contain-intrinsic-size:auto_96px]"
+            : "[content-visibility:auto] [contain-intrinsic-size:auto_34px]"),
+        card && sortable?.isDragging && "z-20 opacity-80",
+      )}
+    >
+      {rendered ? <SidebarThreadRowContent {...props} near={viewport.near} /> : null}
+    </li>
   );
 });
 
