@@ -4,7 +4,10 @@ import { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
 import { AsyncResult, AtomRegistry } from "effect/unstable/reactivity";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import { makeThreadFixture } from "../test-fixtures";
-import { createSidebarPrRevalidation } from "./sidebarPrRevalidation";
+import {
+  createSidebarPrRevalidation,
+  sidebarPrRevalidationCandidates,
+} from "./sidebarPrRevalidation";
 import { threadChangeRequestSource, type ThreadChangeRequestState } from "./threadPullRequest";
 import { updateSidebarChangeRequest } from "./sidebarThreadLifecycle";
 
@@ -165,6 +168,56 @@ it("rechecks a launch's mutable answers after five minutes and final attached an
     [noPr, openAttached, both].map(keyFor).sort(),
   );
   expect(await checked(1_000_000 + 24 * 60 * 60_000)).toEqual(threads.map(keyFor).sort());
+});
+
+it("rechecks a relaunch's retained Active answers, so an externally merged PR can settle", async () => {
+  const row = (id: string, overrides: Partial<(typeof history)[number]> = {}) => ({
+    ...history[0]!,
+    id: ThreadId.make(id),
+    ...overrides,
+  });
+  const active = row("active-open");
+  const fresh = row("active-fresh");
+  const kept = row("active-kept", { settledOverride: "active" });
+  const unchecked = row("active-no-answer");
+  const provisional = row("provisional");
+  const route = row("route-provisional");
+  const settled = row("settled");
+  const remote = row("remote", { environmentId: EnvironmentId.make("disconnected") });
+  const answer = (item: typeof active, checkedAt: number) =>
+    [
+      keyFor(item),
+      { source: threadChangeRequestSource(item), state: "open" as const, checkedAt },
+    ] as const;
+  const retainedStates = new Map([
+    answer(active, 0),
+    answer(fresh, 1_000_000),
+    answer(kept, 0),
+    answer(settled, 0),
+    answer(remote, 0),
+  ]);
+  const candidates = sidebarPrRevalidationCandidates({
+    activeThreads: [active, fresh, kept, unchecked, provisional, remote, route],
+    settledThreads: [settled],
+    provisionalThreadKeys: new Set([keyFor(provisional), keyFor(route)]),
+    retainedStates,
+    routeThreadKey: keyFor(route),
+    connectedEnvironmentIds: new Set([row("connected").environmentId]),
+  });
+  expect(candidates.map(keyFor)).toEqual([route, provisional, active, fresh, settled].map(keyFor));
+  // The pass leaves the answer checked a minute ago alone and finds the merge on the other.
+  mocks.command.mockResolvedValue(
+    AsyncResult.success({
+      refName: "work",
+      pr: { state: "merged", url: "https://github.com/example/repo/pull/2" },
+    }),
+  );
+  vi.mocked(Date.now).mockReturnValue(1_060_000);
+  const input = { ...inputFor(candidates), retainedStates };
+  await mount().update(input);
+  const results = new Map(input.onResult.mock.calls.map(([key, value]) => [key, value.state]));
+  expect(results.get(keyFor(active))).toBe("merged");
+  expect(results.has(keyFor(fresh))).toBe(false);
 });
 
 it.each([false, true])(

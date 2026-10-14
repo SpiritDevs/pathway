@@ -1,4 +1,7 @@
-import { useSidebarPrRevalidation } from "../state/sidebarPrRevalidation";
+import {
+  sidebarPrRevalidationCandidates,
+  useSidebarPrRevalidation,
+} from "../state/sidebarPrRevalidation";
 import { QueuedThreadSidebar } from "./QueuedThreadSidebar";
 import { sortActiveThreadsForFocus, useFocusViews } from "./focus/focusViewPreferences";
 import {
@@ -2695,35 +2698,29 @@ export default function Sidebar() {
     unreadNotificationThreadKeys,
   ]);
 
-  // Background PR checks cover provisionally placed threads and retained Settled rows. Input
-  // order is check order: the open thread first, then Active and Settled as the sidebar shows them.
-  const revalidatedThreads = useMemo(() => {
-    const connected = new Set(
-      environments
-        .filter((environment) => environment.connection.phase === "connected")
-        .map((environment) => environment.environmentId),
-    );
-    const keyOf = (thread: EnvironmentThreadShell) =>
-      scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-    const provisional = [...activeThreads, ...settledThreads].filter((thread) =>
-      provisionalThreadKeys.has(keyOf(thread)),
-    );
-    const routeIndex = provisional.findIndex((thread) => keyOf(thread) === routeThreadKey);
-    if (routeIndex > 0) provisional.unshift(...provisional.splice(routeIndex, 1));
-    return [
-      ...provisional,
-      ...settledThreads.filter(
-        (thread) => thread.settledOverride == null && retainedStates.has(keyOf(thread)),
-      ),
-    ].filter((thread) => connected.has(thread.environmentId));
-  }, [
-    activeThreads,
-    settledThreads,
-    provisionalThreadKeys,
-    routeThreadKey,
-    environments,
-    retainedStates,
-  ]);
+  const revalidatedThreads = useMemo(
+    () =>
+      sidebarPrRevalidationCandidates({
+        activeThreads,
+        settledThreads,
+        provisionalThreadKeys,
+        retainedStates,
+        routeThreadKey,
+        connectedEnvironmentIds: new Set(
+          environments
+            .filter((environment) => environment.connection.phase === "connected")
+            .map((environment) => environment.environmentId),
+        ),
+      }),
+    [
+      activeThreads,
+      settledThreads,
+      provisionalThreadKeys,
+      routeThreadKey,
+      environments,
+      retainedStates,
+    ],
+  );
   useSidebarPrRevalidation(
     threadScope,
     revalidatedThreads,

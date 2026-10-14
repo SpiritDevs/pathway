@@ -31,6 +31,39 @@ function recheckAfterMs(thread: EnvironmentThreadShell, retained: ThreadChangeRe
   return final ? FINAL_RECHECK_MS : HISTORY_FRESHNESS_MS;
 }
 
+/**
+ * Threads the background PR pass checks: provisionally placed threads, then every Active and
+ * Settled row whose section rests on a retained answer (an offscreen row has no live status to
+ * correct it, so an Active "open" answer could otherwise outlive its PR). The pass skips answers
+ * still within their recheck window. Order is check order: the open thread first, then Active and
+ * Settled as the sidebar shows them.
+ */
+export function sidebarPrRevalidationCandidates(input: {
+  readonly activeThreads: ReadonlyArray<EnvironmentThreadShell>;
+  readonly settledThreads: ReadonlyArray<EnvironmentThreadShell>;
+  readonly provisionalThreadKeys: ReadonlySet<string>;
+  readonly retainedStates: ReadonlyMap<string, ThreadChangeRequestState>;
+  readonly routeThreadKey: string | null;
+  readonly connectedEnvironmentIds: ReadonlySet<string>;
+}): EnvironmentThreadShell[] {
+  const keyOf = (thread: EnvironmentThreadShell) =>
+    scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+  const provisional = [...input.activeThreads, ...input.settledThreads].filter((thread) =>
+    input.provisionalThreadKeys.has(keyOf(thread)),
+  );
+  const routeIndex = provisional.findIndex((thread) => keyOf(thread) === input.routeThreadKey);
+  if (routeIndex > 0) provisional.unshift(...provisional.splice(routeIndex, 1));
+  const retained = (thread: EnvironmentThreadShell) =>
+    thread.settledOverride == null &&
+    !input.provisionalThreadKeys.has(keyOf(thread)) &&
+    input.retainedStates.has(keyOf(thread));
+  return [
+    ...provisional,
+    ...input.activeThreads.filter(retained),
+    ...input.settledThreads.filter(retained),
+  ].filter((thread) => input.connectedEnvironmentIds.has(thread.environmentId));
+}
+
 interface RevalidationInput {
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
   readonly projects: ReadonlyArray<EnvironmentProject>;
