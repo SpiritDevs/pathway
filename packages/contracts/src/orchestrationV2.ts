@@ -1,5 +1,6 @@
 import { OrchestratorAssignmentOrigin } from "./aiOrchestrator.ts";
 import { CompanyId } from "./company.ts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
@@ -2215,6 +2216,21 @@ export const OrchestrationV2LatestVisibleMessageSummaryJson =
 export type OrchestrationV2LatestVisibleMessageSummaryJson =
   typeof OrchestrationV2LatestVisibleMessageSummaryJson.Type;
 
+/**
+ * Shells published before this codec mapped `startedAt` reached Convex as the bare `DateTime.Utc`
+ * fields, `{ epochMilliseconds }`, and offline environments never republish them. Decode that
+ * shape as well; encoding always writes the ISO string.
+ */
+const LegacyEpochMillisecondsDateTimeUtc = Schema.Struct({ epochMilliseconds: Schema.Int }).pipe(
+  Schema.decodeTo(
+    Schema.DateTimeUtc,
+    SchemaTransformation.transform({
+      decode: ({ epochMilliseconds }) => DateTime.makeUnsafe(epochMilliseconds),
+      encode: (dateTime) => ({ epochMilliseconds: dateTime.epochMilliseconds }),
+    }),
+  ),
+);
+
 export const OrchestrationV2ThreadShellJson = OrchestrationV2ThreadShell.mapFields((fields) => ({
   ...fields,
   workspaceMove: Schema.optional(Schema.NullOr(OrchestrationV2WorkspaceMoveJson)),
@@ -2233,7 +2249,14 @@ export const OrchestrationV2ThreadShellJson = OrchestrationV2ThreadShell.mapFiel
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   lastVisitedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
-  titleRegeneration: OrchestrationV2AppThreadJson.fields.titleRegeneration,
+  titleRegeneration: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        requestId: CommandId,
+        startedAt: Schema.Union([Schema.DateTimeUtcFromString, LegacyEpochMillisecondsDateTimeUtc]),
+      }),
+    ),
+  ),
   deletedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
 }));
 export type OrchestrationV2ThreadShellJson = typeof OrchestrationV2ThreadShellJson.Type;

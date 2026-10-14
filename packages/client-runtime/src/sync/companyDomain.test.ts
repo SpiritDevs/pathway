@@ -345,6 +345,29 @@ describe("company entity codecs", () => {
     expect(codec?.encode(Option.getOrThrow(decoded ?? Option.none()))).toEqual(payload);
   });
 
+  it("decodes an agent thread Convex stored with a bare `{ epochMilliseconds }` date", () => {
+    const codec = companyEntityCodec("agentThread");
+    const agentThread = ENTITY_PAYLOADS["agentThread"] as { shell: object };
+    const titleRegeneration = { requestId: "command-title", startedAt: "2026-04-20T00:00:00.000Z" };
+    const legacy = {
+      ...agentThread,
+      shell: {
+        ...agentThread.shell,
+        titleRegeneration: {
+          ...titleRegeneration,
+          startedAt: { epochMilliseconds: 1776643200000 },
+        },
+      },
+    };
+
+    const decoded = codec?.decode(legacy);
+    expect(decoded !== undefined && Option.isSome(decoded)).toBe(true);
+    expect(codec?.encode(Option.getOrThrow(decoded ?? Option.none()))).toEqual({
+      ...agentThread,
+      shell: { ...agentThread.shell, titleRegeneration },
+    });
+  });
+
   it("refuses a team-scoped assignment with no team, the way the tagged scope promises", () => {
     const codec = companyEntityCodec("roleAssignment");
     expect(
