@@ -19,6 +19,7 @@ import {
   type AlertPolicyRow,
 } from "@spiritdevs/contracts/threadAlerts";
 import { ThreadAlertBell } from "./ThreadAlertBell";
+import { SidebarThreadRowShell, type SortableThreadRowBag } from "./sidebar/SidebarThreadRowShell";
 import { threadAlertPoliciesAtom } from "../threadAlerts/state";
 import { useAtom, useAtomValue } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
@@ -37,7 +38,6 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-kit/modifiers";
-import { CSS } from "@dnd-kit/utilities";
 import {
   canSettle,
   canSnooze,
@@ -100,7 +100,6 @@ import {
   memo,
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -148,7 +147,6 @@ import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
-import { useNearViewport } from "../hooks/useNearViewport";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useEnvironment, useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { pendingDraftSendHold } from "../lib/pendingDraftSend";
@@ -197,12 +195,10 @@ import {
   buildBulkTitleRegenerationContextMenuItem,
   formatWorkingDurationLabel,
   firstValidTimestampMs,
-  focusSidebarRowEntry,
   getVisibleThreadsForCollapsibleShelf,
   hasUnseenCompletion,
   isTrailingDoubleClick,
   mergeActiveThreadOrderPreference,
-  mountSidebarRowOnPlaceholderFocus,
   orderItemsByPreferredIds,
   planPinnedReorder,
   resolveAdjacentThreadId,
@@ -644,16 +640,6 @@ function SnoozePopoverButton(props: {
     </Popover>
   );
 }
-
-// Subset of useSortable applied to a card's root <li> (pinned and active
-// sections). Listeners go on the whole card (no dedicated handle): the
-// pointer sensor's distance constraint keeps plain clicks working, and we
-// skip dnd-kit's aria attributes since there is no keyboard sensor and the
-// card body already carries its own button semantics.
-type SortableThreadRowBag = Pick<
-  ReturnType<typeof useSortable>,
-  "listeners" | "setNodeRef" | "transform" | "transition" | "isDragging"
->;
 
 function SortableThreadRow(props: {
   id: string;
@@ -1123,15 +1109,12 @@ const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
     onChangeRequestState,
     onCancelRename,
     onCommitRename,
-    onContextMenu,
     onAcknowledgeWoke,
     onRenameTitleChange,
     onSettle,
     onSettleAfterCompletionChange,
     onSnooze,
-    onStartRename,
     onThreadActivate,
-    onThreadClick,
     onUnsettle,
     onUnsnooze,
     onUnpin,
@@ -1292,12 +1275,6 @@ const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
     />
   );
 
-  const handleClick = useCallback(
-    (event: ReactMouseEvent) => {
-      onThreadClick(event, threadRef);
-    },
-    [onThreadClick, threadRef],
-  );
   const handleIssueClick = useCallback(
     (event: ReactMouseEvent) => {
       event.preventDefault();
@@ -1314,40 +1291,6 @@ const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
       onAcknowledgeWoke(threadRef, props.wokeAt);
     },
     [onAcknowledgeWoke, props.wokeAt, threadRef],
-  );
-  const handleContextMenu = useCallback(
-    (event: ReactMouseEvent) => {
-      event.preventDefault();
-      onContextMenu(threadRef, { x: event.clientX, y: event.clientY });
-    },
-    [onContextMenu, threadRef],
-  );
-  const handleKeyDown = useCallback(
-    (event: ReactKeyboardEvent) => {
-      if (event.target !== event.currentTarget) return;
-      // Keyboard equivalent of right-click: the row has no visible actions button.
-      if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
-        event.preventDefault();
-        const bounds = event.currentTarget.getBoundingClientRect();
-        onContextMenu(threadRef, { x: bounds.left, y: bounds.bottom });
-        return;
-      }
-      if (event.key !== "Enter" && event.key !== " ") return;
-      event.preventDefault();
-      onThreadActivate(threadRef);
-    },
-    [onThreadActivate, threadRef],
-  );
-  const handleDoubleClick = useCallback(
-    (event: ReactMouseEvent) => {
-      if (isRenaming || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
-        return;
-      }
-      if ((event.target as HTMLElement).closest("button, a, input")) return;
-      event.preventDefault();
-      onStartRename(threadRef, thread.title);
-    },
-    [isRenaming, onStartRename, thread.title, threadRef],
   );
   const renameCommittedRef = useRef(false);
   useEffect(() => {
@@ -1479,8 +1422,10 @@ const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
   // like elevated cards while settled threads were plain rows, leaving neither
   // a useful hierarchy nor a reliable hover cue. Status now lives in the row
   // content; surface is reserved for interaction (hover, multi-select, route).
+  // The surface is the details card's hover trigger only: the row shell's primary element owns
+  // focus and button semantics, so the trigger drops the role and tab stop Base UI would add.
   const rowSurfaceClassName = cn(
-    "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left outline-none select-none",
+    "relative w-full overflow-hidden rounded-md",
     props.isActive
       ? "bg-sidebar-row-active text-sidebar-foreground"
       : isSelected
@@ -1607,15 +1552,10 @@ const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
             closeDelay={200}
             render={
               <div
-                role="button"
-                tabIndex={0}
-                data-testid="sidebar-row-slim"
+                role={undefined}
+                tabIndex={undefined}
                 aria-busy={isRegeneratingTitle || undefined}
                 className={cn(rowSurfaceClassName, "flex h-9 items-center gap-2.5 px-2.5")}
-                onClick={handleClick}
-                onDoubleClick={handleDoubleClick}
-                onKeyDown={handleKeyDown}
-                onContextMenu={handleContextMenu}
               />
             }
           >
@@ -1755,15 +1695,10 @@ const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
           closeDelay={200}
           render={
             <div
-              role="button"
-              tabIndex={0}
-              data-testid="sidebar-row-card"
+              role={undefined}
+              tabIndex={undefined}
               aria-busy={isRegeneratingTitle || undefined}
               className={rowSurfaceClassName}
-              onClick={handleClick}
-              onDoubleClick={handleDoubleClick}
-              onKeyDown={handleKeyDown}
-              onContextMenu={handleContextMenu}
             />
           }
         >
@@ -1987,133 +1922,33 @@ const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
   );
 });
 
-// Rows far from the viewport render a placeholder of their last measured size instead of their
-// content, so offscreen history holds no shell, Git, PR, terminal or tooltip subscriptions. One
-// <li> owns the observer, the sortable node and the row chrome in both states, so a swap never
-// replaces dnd-kit's node (its resize observer remeasures the rows below when the height changes
-// mid-drag). The first screenful, the open thread, and rows that are focused, being renamed or
-// dragged always render in full. A placeholder holds one plain button named by the thread title,
-// so assistive tech can find and open offscreen threads. Its clicks open, select and open menus
-// like the row's. Focus outside a pointer press on it (keyboard, assistive tech) mounts the row
-// once any activation dispatched with that focus has landed (mountSidebarRowOnPlaceholderFocus);
-// whenever the row mounts under a focused placeholder, focus moves to the row's first control, or
-// its last when entered with Shift+Tab.
 const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowProps) {
-  const viewport = useNearViewport();
-  const { sortable } = props;
-  const element = useRef<HTMLLIElement | null>(null);
-  const rowRef = useCallback(
-    (node: HTMLLIElement | null) => {
-      element.current = node;
-      sortable?.setNodeRef(node);
-      const stopObserving = viewport.ref(node);
-      if (node === null) return;
-      return () => {
-        stopObserving?.();
-        element.current = null;
-        sortable?.setNodeRef(null);
-      };
-    },
-    [sortable?.setNodeRef, viewport.ref],
+  const { isRenaming, onContextMenu, onStartRename, onThreadActivate, onThreadClick, thread } =
+    props;
+  const threadRef = useMemo(
+    () => scopeThreadRef(thread.environmentId, thread.id),
+    [thread.environmentId, thread.id],
   );
-  // React focus events bubble through portals, so this also covers the row's popovers and menus.
-  // Blur clears on the next task, after a focus move inside the row has re-claimed it.
-  const [focusWithin, setFocusWithin] = useState(false);
-  const blurTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const focusOnMount = useRef<{ readonly from: Node | null } | null>(null);
-  const placeholderPressed = useRef(false);
-  const releasePlaceholderPress = () => {
-    placeholderPressed.current = false;
-  };
-  useEffect(() => () => clearTimeout(blurTimer.current), []);
-  const rendered =
-    viewport.near ||
-    focusWithin ||
-    !props.deferRendering ||
-    props.isActive ||
-    props.isRenaming ||
-    sortable?.isDragging;
-  useLayoutEffect(() => {
-    const entry = focusOnMount.current;
-    if (!rendered || entry === null) return;
-    focusOnMount.current = null;
-    if (element.current) focusSidebarRowEntry(element.current, entry.from);
-  }, [rendered]);
-  const card = props.variant === "card";
   return (
-    <li
-      ref={rowRef}
-      data-thread-item
-      data-active-thread={props.isActive || undefined}
-      // Placeholder focus is handled by the placeholder: mounting here would remove it mid-click.
-      onFocus={() => {
-        if (!rendered) return;
-        clearTimeout(blurTimer.current);
-        setFocusWithin(true);
+    <SidebarThreadRowShell
+      variant={props.variant}
+      title={thread.title}
+      active={props.isActive}
+      renaming={isRenaming}
+      deferRendering={props.deferRendering}
+      sortable={props.sortable}
+      onClick={(event) => onThreadClick(event, threadRef)}
+      onDoubleClick={(event) => {
+        if (isRenaming || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        if ((event.target as HTMLElement).closest("button, a, input")) return;
+        event.preventDefault();
+        onStartRename(threadRef, thread.title);
       }}
-      onBlur={() => {
-        if (!rendered) return;
-        blurTimer.current = setTimeout(() => setFocusWithin(false));
-      }}
-      style={{
-        ...(rendered ? {} : { height: viewport.height || (card ? 96 : 34) }),
-        ...(card && sortable
-          ? {
-              transform: CSS.Translate.toString(sortable.transform),
-              transition: sortable.transition,
-            }
-          : {}),
-      }}
-      {...(card ? sortable?.listeners : {})}
-      className={cn(
-        "relative -ml-[3px] list-none pl-[3px]",
-        card && "py-0.5",
-        props.deferRendering &&
-          (card
-            ? "[content-visibility:auto] [contain-intrinsic-size:auto_96px]"
-            : "[content-visibility:auto] [contain-intrinsic-size:auto_34px]"),
-        card && sortable?.isDragging && "z-20 opacity-80",
-      )}
+      onActivate={() => onThreadActivate(threadRef)}
+      onContextMenu={(position) => onContextMenu(threadRef, position)}
     >
-      {rendered ? (
-        <SidebarThreadRowContent {...props} near={viewport.near} />
-      ) : (
-        <button
-          type="button"
-          className="block size-full"
-          // Record only: the press still opens, selects or drags through its click and listeners.
-          onPointerDown={() => {
-            placeholderPressed.current = true;
-          }}
-          onPointerUp={releasePlaceholderPress}
-          onPointerCancel={releasePlaceholderPress}
-          onPointerLeave={releasePlaceholderPress}
-          onFocus={(event) => {
-            focusOnMount.current = { from: event.relatedTarget };
-            mountSidebarRowOnPlaceholderFocus(event.currentTarget, placeholderPressed.current, () =>
-              setFocusWithin(true),
-            );
-          }}
-          onBlur={(event) => {
-            releasePlaceholderPress();
-            // Focus moved on. A placeholder removed by the mount keeps its entry for the row.
-            if (event.currentTarget.isConnected) focusOnMount.current = null;
-          }}
-          onClick={(event) =>
-            props.onThreadClick(event, scopeThreadRef(props.thread.environmentId, props.thread.id))
-          }
-          onContextMenu={(event) => {
-            event.preventDefault();
-            props.onContextMenu(scopeThreadRef(props.thread.environmentId, props.thread.id), {
-              x: event.clientX,
-              y: event.clientY,
-            });
-          }}
-        >
-          <span className="sr-only">{props.thread.title}</span>
-        </button>
-      )}
-    </li>
+      {(near) => <SidebarThreadRowContent {...props} near={near} />}
+    </SidebarThreadRowShell>
   );
 });
 

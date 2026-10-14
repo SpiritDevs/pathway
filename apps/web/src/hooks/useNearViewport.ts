@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 
-type NearViewportCallback = (near: boolean, height: number) => void;
+type NearViewportCallback = (near: boolean) => void;
 
 // rootMargin only grows the root's own box. A clipping ancestor below the root still clips at its
 // edge, so rows inside a nested scroll area must observe against that area, not the page.
@@ -16,7 +16,7 @@ const observers = new Map<
 
 export function observeNearViewport(element: Element, onChange: NearViewportCallback): () => void {
   if (typeof IntersectionObserver === "undefined") {
-    onChange(true, 0);
+    onChange(true);
     return () => undefined;
   }
   const root = element.closest(SCROLL_VIEWPORT_SELECTOR);
@@ -25,8 +25,7 @@ export function observeNearViewport(element: Element, onChange: NearViewportCall
     const callbacks = new Map<Element, NearViewportCallback>();
     const observer = new IntersectionObserver(
       (entries) => {
-        for (const entry of entries)
-          callbacks.get(entry.target)?.(entry.isIntersecting, entry.boundingClientRect.height);
+        for (const entry of entries) callbacks.get(entry.target)?.(entry.isIntersecting);
       },
       { root, rootMargin: "200px" },
     );
@@ -48,20 +47,13 @@ export function observeNearViewport(element: Element, onChange: NearViewportCall
 
 /**
  * One observer per scroll viewport serves all its rows; elements outside a scroll area observe
- * the page. `height` is the element's last observed height, so a row can hold its place with a
- * same-sized placeholder.
+ * the page.
  */
 export function useNearViewport() {
-  const [state, setState] = useState({ near: false, height: 0 });
+  const [near, setNear] = useState(false);
   const ref = useCallback((element: HTMLElement | null) => {
     if (element === null) return;
-    return observeNearViewport(element, (near, height) =>
-      setState((previous) =>
-        previous.near === near && (height === 0 || previous.height === height)
-          ? previous
-          : { near, height: height || previous.height },
-      ),
-    );
+    return observeNearViewport(element, setNear);
   }, []);
-  return { ref, near: state.near, height: state.height };
+  return { ref, near };
 }
