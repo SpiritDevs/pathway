@@ -8,6 +8,7 @@ import {
   buildMultiSelectThreadContextMenuItems,
   createThreadJumpHintVisibilityController,
   filterSidebarV2VisibleThreads,
+  focusSidebarRowEntry,
   formatWorkingDurationLabel,
   getFallbackThreadIdAfterDelete,
   getProjectSortTimestamp,
@@ -2153,5 +2154,53 @@ describe("bounded sidebar search", () => {
     expect(results).toHaveLength(100);
     expect(results).toEqual(threads.slice(0, 100));
     expect(searchSidebarThreadsByTitle(threads, "thread 149")).toEqual([threads[149]]);
+  });
+});
+
+describe("focusSidebarRowEntry", () => {
+  const PRECEDING = 2;
+  const FOLLOWING = 4;
+  function row(controls: string[], refusing: string[] = []) {
+    const ownerDocument = { activeElement: null as unknown };
+    const attempts: string[] = [];
+    const elements = controls.map((name) => {
+      const element = {
+        focus: () => {
+          attempts.push(name);
+          if (!refusing.includes(name)) ownerDocument.activeElement = element;
+        },
+      };
+      return element;
+    });
+    const focused = () => controls[elements.indexOf(ownerDocument.activeElement as never)];
+    const target = {
+      ownerDocument,
+      querySelectorAll: () => elements,
+      compareDocumentPosition: (other: { position: number }) => other.position,
+    } as unknown as Parameters<typeof focusSidebarRowEntry>[0];
+    return { target, attempts, focused };
+  }
+  const from = (position: number) => ({ position }) as unknown as Node;
+  beforeEach(() => vi.stubGlobal("Node", { DOCUMENT_POSITION_FOLLOWING: FOLLOWING }));
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("enters at the first control on Tab and the last on Shift+Tab", () => {
+    const controls = ["row", "settle", "snooze"];
+    const forward = row(controls);
+    focusSidebarRowEntry(forward.target, from(PRECEDING));
+    expect(forward.focused()).toBe("row");
+    const backward = row(controls);
+    focusSidebarRowEntry(backward.target, from(FOLLOWING));
+    expect(backward.focused()).toBe("snooze");
+    const programmatic = row(controls);
+    focusSidebarRowEntry(programmatic.target, null);
+    expect(programmatic.focused()).toBe("row");
+  });
+
+  it("skips controls that refuse focus", () => {
+    const backward = row(["row", "settle", "hidden"], ["hidden"]);
+    focusSidebarRowEntry(backward.target, from(FOLLOWING));
+    expect(backward.attempts).toEqual(["hidden", "settle"]);
+    expect(backward.focused()).toBe("settle");
   });
 });

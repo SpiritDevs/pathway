@@ -197,6 +197,7 @@ import {
   buildBulkTitleRegenerationContextMenuItem,
   formatWorkingDurationLabel,
   firstValidTimestampMs,
+  focusSidebarRowEntry,
   getVisibleThreadsForCollapsibleShelf,
   hasUnseenCompletion,
   isTrailingDoubleClick,
@@ -1990,8 +1991,9 @@ const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
 // <li> owns the observer, the sortable node and the row chrome in both states, so a swap never
 // replaces dnd-kit's node (its resize observer remeasures the rows below when the height changes
 // mid-drag). The first screenful, the open thread, and rows that are focused, being renamed or
-// dragged always render in full. A placeholder stays in the tab order and mounts its row when
-// focused, then hands focus to the row button.
+// dragged always render in full. A placeholder holds one plain button named by the thread title,
+// so assistive tech can find and open offscreen threads; focusing it mounts the row and hands
+// focus to the row's first control, or its last when entered with Shift+Tab.
 const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowProps) {
   const viewport = useNearViewport();
   const { sortable } = props;
@@ -2014,7 +2016,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   // Blur clears on the next task, after a focus move inside the row has re-claimed it.
   const [focusWithin, setFocusWithin] = useState(false);
   const blurTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const focusRowOnMount = useRef(false);
+  const focusOnMount = useRef<{ readonly from: Node | null } | null>(null);
   useEffect(() => () => clearTimeout(blurTimer.current), []);
   const rendered =
     viewport.near ||
@@ -2024,9 +2026,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     props.isRenaming ||
     sortable?.isDragging;
   useLayoutEffect(() => {
-    if (!rendered || !focusRowOnMount.current) return;
-    focusRowOnMount.current = false;
-    element.current?.querySelector<HTMLElement>('[role="button"]')?.focus();
+    const entry = focusOnMount.current;
+    if (!rendered || entry === null) return;
+    focusOnMount.current = null;
+    if (element.current) focusSidebarRowEntry(element.current, entry.from);
   }, [rendered]);
   const card = props.variant === "card";
   return (
@@ -2034,11 +2037,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       ref={rowRef}
       data-thread-item
       data-active-thread={props.isActive || undefined}
-      tabIndex={rendered ? undefined : 0}
-      aria-label={rendered ? undefined : props.thread.title}
-      onFocus={(event) => {
+      onFocus={() => {
         clearTimeout(blurTimer.current);
-        if (!rendered && event.target === event.currentTarget) focusRowOnMount.current = true;
         setFocusWithin(true);
       }}
       onBlur={() => {
@@ -2064,7 +2064,22 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         card && sortable?.isDragging && "z-20 opacity-80",
       )}
     >
-      {rendered ? <SidebarThreadRowContent {...props} near={viewport.near} /> : null}
+      {rendered ? (
+        <SidebarThreadRowContent {...props} near={viewport.near} />
+      ) : (
+        <button
+          type="button"
+          className="block size-full"
+          onFocus={(event) => {
+            focusOnMount.current = { from: event.relatedTarget };
+          }}
+          onClick={(event) =>
+            props.onThreadClick(event, scopeThreadRef(props.thread.environmentId, props.thread.id))
+          }
+        >
+          <span className="sr-only">{props.thread.title}</span>
+        </button>
+      )}
     </li>
   );
 });

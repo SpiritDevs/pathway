@@ -1146,3 +1146,26 @@ export function sortScopedProjectsForSidebar<
       left.id.localeCompare(right.id),
   );
 }
+
+const SIDEBAR_ROW_CONTROL_SELECTOR =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/**
+ * Moves focus into a row that just replaced its offscreen placeholder. `from` is where focus came
+ * from (the focus event's relatedTarget): Shift+Tab from below enters at the row's last control,
+ * anything else at its first, so traversal never skips the row's trailing controls. Candidates
+ * that refuse focus (hidden, inert) are skipped.
+ */
+export function focusSidebarRowEntry(
+  row: Pick<Element, "compareDocumentPosition" | "querySelectorAll" | "ownerDocument">,
+  from: Node | null,
+): void {
+  const controls = [...row.querySelectorAll<HTMLElement>(SIDEBAR_ROW_CONTROL_SELECTOR)];
+  const backward =
+    from !== null && (row.compareDocumentPosition(from) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+  if (backward) controls.reverse();
+  for (const control of controls) {
+    control.focus();
+    if (row.ownerDocument.activeElement === control) return;
+  }
+}
