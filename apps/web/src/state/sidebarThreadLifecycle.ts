@@ -11,7 +11,7 @@ import * as Schema from "effect/Schema";
 import { Atom } from "effect/unstable/reactivity";
 
 import { activeCompanyIdAtom } from "../cloud/activeCompany";
-import { type SyncResetStorage } from "../cloud/syncReset";
+import { readCloudSyncReset, type SyncResetStorage } from "../cloud/syncReset";
 import { threadChangeRequestSource, type ThreadChangeRequestState } from "./threadPullRequest";
 
 export const sidebarThreadScopeAtom = Atom.make((get) =>
@@ -98,6 +98,8 @@ export function readSidebarChangeRequests(
   const parts = scopeParts(scope);
   if (parts === null || storage === null) return new Map();
   try {
+    // A sign-out reset is pending until the sync runtime has swept the namespace.
+    if (readCloudSyncReset(parts.accountId, storage)) return new Map();
     const key = companyKey(parts.accountId, parts.company);
     const raw = storage.getItem(key);
     const decoded = raw ? Option.getOrNull(decodePersistedChangeRequests(raw)) : null;

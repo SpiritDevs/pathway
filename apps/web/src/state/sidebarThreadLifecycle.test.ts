@@ -3,7 +3,7 @@ import { setManagedRelaySession } from "@spiritdevs/client-runtime/relay";
 import { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
 import { AtomRegistry } from "effect/unstable/reactivity";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { type SyncResetStorage } from "../cloud/syncReset";
+import { clearCloudSyncReset, markCloudSyncReset, type SyncResetStorage } from "../cloud/syncReset";
 import { makeThreadFixture } from "../test-fixtures";
 import { threadChangeRequestSource, type ThreadChangeRequestState } from "./threadPullRequest";
 import {
@@ -342,6 +342,17 @@ it("evicts and signs out every company another tab stored, even one the index lo
   for (const [item, value] of signedOut) store.set(item, value);
   clearSidebarChangeRequests("account-a", storage);
   expect([...store.keys()]).toEqual([]);
+});
+
+it("reads nothing while a sign-out reset is pending", () => {
+  const scope = JSON.stringify(["account-a", "company-a"]);
+  const { storage } = memoryStorage();
+  writeSidebarChangeRequests(scope, new Map([[key, merged]]), storage);
+  markCloudSyncReset("account-a", storage);
+  expect(readSidebarChangeRequests(scope, storage).size).toBe(0);
+  // The sync runtime clears the marker once its reset sweep succeeds.
+  clearCloudSyncReset("account-a", storage);
+  expect(readSidebarChangeRequests(scope, storage).size).toBe(1);
 });
 
 it("warns once when storage rejects a write and retries on the next one", () => {
