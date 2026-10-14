@@ -109,7 +109,7 @@ export function SidebarThreadRowShell(props: {
         onFocus={(event) => {
           clearTimeout(blurTimer.current);
           // The primary element survives the body unmounting; only focus inside the body pins it.
-          if (event.target !== event.currentTarget) setFocusWithinBody(true);
+          setFocusWithinBody(event.target !== event.currentTarget);
         }}
         onBlur={() => {
           blurTimer.current = setTimeout(() => setFocusWithinBody(false));

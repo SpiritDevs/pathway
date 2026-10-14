@@ -156,6 +156,20 @@ describe("SidebarThreadRowShell", () => {
     expect(row.bodyMounted()).toBe(false);
   });
 
+  it("lets the body go once focus moves from a trailing control back to the row", () => {
+    const row = renderRow();
+    row.setNear(true);
+    const settle = row.primary().findByProps({ "aria-label": "Settle thread" });
+    act(() => row.primary().props.onFocus({ target: settle, currentTarget: {} }));
+    // Shift+Tab from the control: blur, then focus on the primary element before the timer runs.
+    act(() => {
+      row.primary().props.onBlur();
+      row.primary().props.onFocus(rowEvent());
+    });
+    row.setNear(false);
+    expect(row.bodyMounted()).toBe(false);
+  });
+
   it("ignores presses that bubble out of the body's popups", () => {
     const row = renderRow();
     row.setNear(true);
