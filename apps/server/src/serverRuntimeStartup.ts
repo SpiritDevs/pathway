@@ -521,22 +521,20 @@ export const make = (options?: StartupOptions) =>
         ),
       );
 
-      // Surviving title effects drained during recovery, so a marker with no pending or running
-      // effect of its own would leave "Regenerate title" disabled forever. Never fatal to startup.
-      yield* runStartupPhase(
-        "orchestration-v2.title-regeneration.recovery",
-        threadTitleRegeneration.recover.pipe(
-          Effect.tap((summary) =>
-            summary.cleared === 0
-              ? Effect.void
-              : Effect.logInfo("Cleared orphaned title regeneration markers", summary),
-          ),
-          Effect.catchCause((cause) =>
-            Effect.logWarning("V2 title regeneration recovery failed", {
-              cause: Cause.pretty(cause),
-            }),
-          ),
+      // Recovery has requeued or cancelled the previous process's title effects, so a marker with
+      // no pending or running effect of its own would leave "Regenerate title" disabled forever.
+      // Clearing one is a dispatch per marker and nothing waits on it, so it runs off the
+      // startup critical path; a marker cleared late only re-enables the action late.
+      yield* threadTitleRegeneration.recover.pipe(
+        Effect.tap((summary) =>
+          summary.cleared === 0
+            ? Effect.void
+            : Effect.logInfo("Cleared orphaned title regeneration markers", summary),
         ),
+        Effect.catch((cause) =>
+          Effect.logWarning("V2 title regeneration recovery failed", { cause }),
+        ),
+        forkParked,
       );
 
       // Compaction is maintenance-only and can scan a large event history, so
