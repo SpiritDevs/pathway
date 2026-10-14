@@ -375,7 +375,10 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
   );
   const threadTitleRegenerationTestLayer = Layer.succeed(
     ThreadTitleRegenerationService,
-    ThreadTitleRegenerationService.of({ execute: () => Effect.void }),
+    ThreadTitleRegenerationService.of({
+      execute: () => Effect.void,
+      recover: Effect.succeed({ cleared: 0 }),
+    }),
   );
   const browserTakeoverTestLayer = Layer.succeed(
     BrowserTakeoverService,

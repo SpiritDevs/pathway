@@ -33,6 +33,7 @@ import { OrchestratorV2 } from "./orchestration-v2/Orchestrator.ts";
 import * as ProjectionMaintenance from "./orchestration-v2/ProjectionMaintenance.ts";
 import * as ProviderRuntimeRecovery from "./orchestration-v2/ProviderRuntimeRecoveryService.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
+import { ThreadTitleRegenerationService } from "./orchestration-v2/ThreadTitleRegenerationService.ts";
 import * as ThreadLaunch from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "./project/ProjectService.ts";
@@ -382,6 +383,7 @@ export const make = (options?: StartupOptions) =>
     const providerRuntimeRecovery = yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService;
     const orchestrator = yield* OrchestratorV2;
     const browserTakeover = yield* BrowserTakeoverService;
+    const threadTitleRegeneration = yield* ThreadTitleRegenerationService;
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
     const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
@@ -513,6 +515,24 @@ export const make = (options?: StartupOptions) =>
           ),
           Effect.catchCause((cause) =>
             Effect.logWarning("V2 browser takeover recovery failed", {
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        ),
+      );
+
+      // Surviving title effects drained during recovery, so a marker with no pending or running
+      // effect of its own would leave "Regenerate title" disabled forever. Never fatal to startup.
+      yield* runStartupPhase(
+        "orchestration-v2.title-regeneration.recovery",
+        threadTitleRegeneration.recover.pipe(
+          Effect.tap((summary) =>
+            summary.cleared === 0
+              ? Effect.void
+              : Effect.logInfo("Cleared orphaned title regeneration markers", summary),
+          ),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("V2 title regeneration recovery failed", {
               cause: Cause.pretty(cause),
             }),
           ),

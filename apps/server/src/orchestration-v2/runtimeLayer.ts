@@ -244,7 +244,12 @@ const providerContinuationWorkerProvided = providerContinuationWorkerLive.pipe(
 );
 const threadTitleRegenerationProvided = threadTitleRegenerationServiceLayer.pipe(
   Layer.provide(
-    Layer.mergeAll(threadManagementProvided, ProjectionProjectRepositoryLive, TextGeneration.layer),
+    Layer.mergeAll(
+      threadManagementProvided,
+      storesLayer,
+      ProjectionProjectRepositoryLive,
+      TextGeneration.layer,
+    ),
   ),
 );
 const threadWorkspaceMoveProvided = threadWorkspaceMoveServiceLayer.pipe(
@@ -303,6 +308,7 @@ export const OrchestrationV2LayerLive = Layer.mergeAll(
   threadWorkspaceMoveProvided,
   browserTakeoverProvided,
   browserTakeoverFenceRegistryProvided,
+  threadTitleRegenerationProvided,
   effectWorkerProvided,
   providerSessionManagerProvided,
   providerRuntimeRecoveryProvided,

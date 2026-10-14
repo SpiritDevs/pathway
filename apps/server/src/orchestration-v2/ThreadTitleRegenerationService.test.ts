@@ -18,6 +18,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
+import * as ProjectionStore from "./ProjectionStore.ts";
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
@@ -53,6 +54,7 @@ function makeHarness(
   );
   const threadManagement = ThreadManagement.layer.pipe(Layer.provide(orchestrator));
   const outbox = EffectOutbox.layer.pipe(Layer.provide(database));
+  const projections = ProjectionStore.layer.pipe(Layer.provide(database));
   const generateThreadTitle = vi.fn(
     options.generateTitle ?? (() => Effect.succeed({ title: "Generated title" })),
   );
@@ -78,6 +80,8 @@ function makeHarness(
     Layer.provide(
       Layer.mergeAll(
         threadManagement,
+        outbox,
+        projections,
         projectedProjects,
         Layer.mock(TextGeneration.TextGeneration)({ generateThreadTitle }),
         ServerSettings.layerTest({}),
@@ -427,6 +431,45 @@ describe("ThreadTitleRegenerationService", () => {
         const projection = yield* threads.getThreadProjection(threadId);
         assert.equal(projection.thread.title, "Seed title");
         assert.isNotOk(projection.thread.titleRegeneration);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+  it.effect("clears only markers that no pending or running title effect owns", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness();
+      yield* Effect.gen(function* () {
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const outbox = yield* EffectOutbox.EffectOutboxV2;
+        const titleRegeneration = yield* ThreadTitleRegeneration.ThreadTitleRegenerationService;
+        const orphanThreadId = yield* createThread({
+          command: "command:title:orphan:create",
+          thread: "thread:title:orphan",
+        });
+        const liveThreadId = yield* createThread({
+          command: "command:title:live:create",
+          thread: "thread:title:live",
+        });
+        yield* armRegeneration({ command: "command:title:orphan:1", threadId: orphanThreadId });
+        const liveRequest = yield* armRegeneration({
+          command: "command:title:live:1",
+          threadId: liveThreadId,
+        });
+        // The orphan's effect ended without completing, so nothing will clear its marker.
+        yield* outbox.cancelUnsettled({
+          threadId: orphanThreadId,
+          effectTypes: ["thread-title.generate"],
+          reason: "test",
+        });
+
+        assert.deepEqual(yield* titleRegeneration.recover, { cleared: 1 });
+        assert.isNotOk(
+          (yield* threads.getThreadProjection(orphanThreadId)).thread.titleRegeneration,
+        );
+        assert.equal(
+          (yield* threads.getThreadProjection(liveThreadId)).thread.titleRegeneration?.requestId,
+          liveRequest,
+        );
+        assert.deepEqual(yield* titleRegeneration.recover, { cleared: 0 });
       }).pipe(Effect.provide(harness.layer));
     }),
   );

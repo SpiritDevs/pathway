@@ -15,7 +15,9 @@ import type { ProjectionRepositoryError } from "../persistence/Errors.ts";
 import { ProjectionProjectRepository } from "../persistence/Services/ProjectionProjects.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
+import { EffectOutboxV2, type EffectOutboxError } from "./EffectOutbox.ts";
 import type { OrchestratorV2Error } from "./Orchestrator.ts";
+import { ProjectionStoreV2, type ProjectionStoreV2Error } from "./ProjectionStore.ts";
 import { ThreadManagementService } from "./ThreadManagementService.ts";
 
 const MAX_REGENERATION_ATTACHMENTS = 4;
@@ -157,11 +159,21 @@ export class ThreadTitleRegenerationService extends Context.Service<
       void,
       OrchestratorV2Error | ProjectionRepositoryError | ServerSettingsError
     >;
+    /**
+     * Clears markers that no pending or running title effect will ever clear. Runs at startup,
+     * after the outbox has drained the effects that survived the previous process.
+     */
+    readonly recover: Effect.Effect<
+      { readonly cleared: number },
+      ProjectionStoreV2Error | EffectOutboxError
+    >;
   }
 >()("@spiritdevs/pathway/orchestration-v2/ThreadTitleRegenerationService") {}
 
 export const make = Effect.gen(function* () {
   const threads = yield* ThreadManagementService;
+  const projections = yield* ProjectionStoreV2;
+  const outbox = yield* EffectOutboxV2;
   const projects = yield* ProjectionProjectRepository;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const textGeneration = yield* TextGeneration.TextGeneration;
@@ -264,7 +276,39 @@ export const make = Effect.gen(function* () {
     });
   });
 
-  return ThreadTitleRegenerationService.of({ execute });
+  const recover = Effect.gen(function* () {
+    let cleared = 0;
+    for (const marker of yield* projections.getTitleRegenerationMarkers()) {
+      const effects = yield* outbox.listByCommandId(marker.requestId);
+      const live = effects.some(
+        (effect) =>
+          effect.threadId === marker.threadId &&
+          effect.request.type === "thread-title.generate" &&
+          (effect.status === "pending" || effect.status === "running"),
+      );
+      if (live) continue;
+      const result = yield* threads
+        .dispatch({
+          type: "thread.title.regeneration.complete",
+          // Thread-scoped: a copied marker shares its request id with the thread that owns it.
+          commandId: CommandId.make(`${marker.requestId}:title-recovery:${marker.threadId}`),
+          threadId: marker.threadId,
+          requestId: marker.requestId,
+        })
+        .pipe(Effect.result);
+      if (result._tag === "Failure") {
+        yield* Effect.logWarning("Could not clear an orphaned title regeneration marker", {
+          ...marker,
+          cause: result.failure,
+        });
+        continue;
+      }
+      cleared += 1;
+    }
+    return { cleared };
+  });
+
+  return ThreadTitleRegenerationService.of({ execute, recover });
 });
 
 export const layer = Layer.effect(ThreadTitleRegenerationService, make);
