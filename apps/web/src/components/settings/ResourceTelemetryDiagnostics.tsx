@@ -1006,7 +1006,11 @@ export function ResourceTelemetryDiagnostics() {
             </div>
             <div className="flex items-center gap-2 text-[10px] text-muted-foreground/65">
               <span className="size-1.5 rounded-full bg-emerald-500" />
-              Sampling every {snapshot ? formatSampleInterval(snapshot.sampleIntervalMs) : "..."}
+              {!snapshot
+                ? "Sampling every ..."
+                : snapshot.sampleIntervalMs === 0
+                  ? "Sampling on demand"
+                  : `Sampling every ${formatSampleInterval(snapshot.sampleIntervalMs)}`}
             </div>
           </div>
           <div className="grid grid-cols-2 divide-x divide-y divide-border/55 md:grid-cols-3">
