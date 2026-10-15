@@ -3220,6 +3220,94 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
+  it.effect("accepts a subagent model reported on a later update and keeps it after", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const path = yield* Path.Path;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const instanceId = ProviderInstanceId.make("acp-test");
+      // The mock streams the call pending, then in progress, then completed;
+      // only the in-progress update names the model, and it arrives padded.
+      const reportedModels = { pending: null, inProgress: " gpt-6-sol ", completed: " \t " };
+      const adapter = makeAcpAdapterV2({
+        crypto: yield* Crypto.Crypto,
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          extractSubagentUpdate: (toolCall) =>
+            toolCall.toolCallId === "tool-call-generic-1" && toolCall.status !== undefined
+              ? {
+                  nativeTaskId: "task-late-model",
+                  prompt: "Map orchestration",
+                  title: "Map orchestration",
+                  model: toolCall.status === "failed" ? null : reportedModels[toolCall.status],
+                  status: toolCall.status === "completed" ? "completed" : "running",
+                  childSessionId: null,
+                  result: toolCall.status === "completed" ? "Done" : null,
+                }
+              : undefined,
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            environment: { Pathway_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS: "1" },
+          }),
+        },
+        fileSystem: yield* FileSystem.FileSystem,
+        idAllocator: yield* IdAllocatorV2,
+        serverConfig: yield* ServerConfig,
+      });
+      const threadId = ThreadId.make("thread-acp-late-subagent-model");
+      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } satisfies ModelSelection;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-late-subagent-model"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      const now = yield* DateTime.now;
+      yield* runtime.startTurn(
+        makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, modelSelection }),
+      );
+      const events = yield* runtime.events.pipe(
+        Stream.takeUntil((event) => event.type === "turn.terminal"),
+        Stream.runCollect,
+      );
+      const tasks = events.flatMap((event) =>
+        event.type === "subagent.updated" ? [event.subagent] : [],
+      );
+      const childThreadId = tasks[0]?.childThreadId;
+      const childSelections = events.flatMap((event) =>
+        event.type === "app_thread.created" && event.appThread.id === childThreadId
+          ? [event.appThread.modelSelection]
+          : event.type === "app_thread.model_reported" && event.threadId === childThreadId
+            ? [event.modelSelection]
+            : [],
+      );
+      assert.deepEqual(
+        tasks.map((task) => [task.status, task.model]),
+        [
+          ["running", null],
+          ["running", "gpt-6-sol"],
+          ["completed", "gpt-6-sol"],
+        ],
+      );
+      assert.deepEqual(childSelections, [modelSelection, { instanceId, model: "gpt-6-sol" }]);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
   it.effect("finalizes a settled turn held open for background work when interrupted", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
