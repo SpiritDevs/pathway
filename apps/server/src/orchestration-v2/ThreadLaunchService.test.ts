@@ -37,6 +37,7 @@ import { ComputerDispatchAccess } from "./ComputerDispatchAccess.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as IdAllocator from "./IdAllocator.ts";
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
+import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ThreadLaunch from "./ThreadLaunchService.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
@@ -198,7 +199,15 @@ function makeHarness(options: HarnessOptions = {}) {
       ),
   });
   const titleRegeneration = ThreadTitleRegeneration.layer.pipe(
-    Layer.provide(Layer.mergeAll(threadManagement, projectedProjects, externalServices)),
+    Layer.provide(
+      Layer.mergeAll(
+        threadManagement,
+        outbox,
+        ProjectionStore.layer.pipe(Layer.provide(database)),
+        projectedProjects,
+        externalServices,
+      ),
+    ),
   );
   return {
     removeWorktree,

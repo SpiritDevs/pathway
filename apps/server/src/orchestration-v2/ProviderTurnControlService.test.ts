@@ -236,6 +236,7 @@ it.effect(
           getPendingSubagentCompletionThreads: () =>
             Effect.die("unused getPendingSubagentCompletionThreads"),
           getSubagentDescendantIds: () => Effect.die("unused getSubagentDescendantIds"),
+          getTitleRegenerationMarkers: () => Effect.die("unused getTitleRegenerationMarkers"),
           getThreadSnapshot: () => Effect.die("unused getThreadSnapshot"),
         }),
       );

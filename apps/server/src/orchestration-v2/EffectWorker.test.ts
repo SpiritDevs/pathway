@@ -160,6 +160,7 @@ function makeExecutorLayer(input: {
       ThreadTitleRegenerationService,
       ThreadTitleRegenerationService.of({
         execute: ({ requestId, kind }) => record(`title:${kind.type}:${requestId}`),
+        recover: Effect.succeed({ cleared: 0 }),
       }),
     ),
     Layer.succeed(

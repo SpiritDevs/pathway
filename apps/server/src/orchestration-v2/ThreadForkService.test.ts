@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import {
+  CommandId,
   ContextTransferId,
   MessageId,
   type ModelSelection,
@@ -59,6 +60,46 @@ function makeSourceThread(): OrchestrationV2AppThread {
     lastVisitedAt: null,
     snoozedUntil,
     snoozedAt,
+    titleRegeneration: {
+      requestId: CommandId.make("command:fork-source-title"),
+      startedAt: snoozedAt,
+    },
+    workspaceMove: {
+      id: CommandId.make("command:fork-source-move"),
+      status: "running",
+      phase: "creating_worktree",
+      sourceCwd: "/tmp/project",
+      sourceHead: null,
+      fileCount: 0,
+      terminalCount: 0,
+      transferStashOid: null,
+      targetWorktreePath: null,
+      targetBranch: null,
+      setup: "pending",
+      detail: null,
+      startedAt: snoozedAt,
+      updatedAt: snoozedAt,
+      completedAt: null,
+    },
+    browserTakeover: {
+      id: CommandId.make("command:fork-source-takeover"),
+      status: "active",
+      runId: sourceRunId,
+      providerSessionId: "provider-session:fork-source",
+      tabId: "tab:fork-source",
+      hostClientId: "client:fork-source",
+      hostConnectionId: "connection:fork-source",
+      failure: null,
+      requestedAt: snoozedAt,
+      updatedAt: snoozedAt,
+    },
+    previewActivity: {
+      runId: sourceRunId,
+      providerSessionId: "provider-session:fork-source",
+      tabId: "tab:fork-source",
+      hostClientId: "client:fork-source",
+      lastActivityAt: snoozedAt,
+    },
     deletedAt: null,
   };
 }
@@ -130,6 +171,11 @@ it.effect("keeps a fork awake when its source thread is snoozed", () =>
     assert.isNull(result.targetThread.snoozedUntil);
     assert.isTrue(result.transfer.compactContext);
     assert.isNull(result.targetThread.snoozedAt);
+    // The source's in-flight operations settle only on the source.
+    assert.isNull(result.targetThread.titleRegeneration);
+    assert.isNull(result.targetThread.workspaceMove);
+    assert.isNull(result.targetThread.browserTakeover);
+    assert.isNull(result.targetThread.previewActivity);
     assert.isFalse(result.targetThread.settleAfterCompletion);
     assert.equal(result.targetThread.projectId, sourceThread.projectId);
     assert.equal(result.targetThread.providerInstanceId, sourceThread.providerInstanceId);

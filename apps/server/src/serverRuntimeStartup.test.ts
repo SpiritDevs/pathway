@@ -4,10 +4,12 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Logger from "effect/Logger";
 import * as Ref from "effect/Ref";
 
 import * as ServerConfig from "./config.ts";
 import { ComputerDispatchAccess } from "./orchestration-v2/ComputerDispatchAccess.ts";
+import { forkParkedFiber } from "./serverActivation.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 
 it("uses the canonical Codex model for auto-bootstrap", () => {
@@ -200,3 +202,51 @@ it.effect("keeps commands and the worker gated until delivery recovery completes
     }),
   ),
 );
+
+const captureLogs = () => {
+  const logs: Array<{ readonly level: string; readonly message: unknown }> = [];
+  const layer = Logger.layer(
+    [Logger.make(({ logLevel, message }) => logs.push({ level: logLevel, message }))],
+    { mergeWithExisting: false },
+  );
+  return { logs, layer };
+};
+
+it.effect("logs a title marker recovery defect instead of losing it with the forked fiber", () => {
+  const { logs, layer } = captureLogs();
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const fiber = yield* forkParkedFiber(
+        ServerRuntimeStartup.recoverTitleRegenerationMarkers(
+          Effect.die(new Error("marker projection exploded")),
+        ),
+      );
+      assert.isTrue(Exit.isSuccess(yield* Fiber.await(fiber)));
+      const [log, ...rest] = logs;
+      assert.isDefined(log);
+      assert.deepEqual(rest, []);
+      assert.strictEqual(log.level, "Warn");
+      const [text, fields] = log.message as readonly [string, { readonly cause: string }];
+      assert.strictEqual(text, "V2 title regeneration recovery failed");
+      assert.include(fields.cause, "marker projection exploded");
+    }),
+  ).pipe(Effect.provide(layer));
+});
+
+it.effect("does not log title marker recovery interrupted by shutdown", () => {
+  const { logs, layer } = captureLogs();
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const fiber = yield* forkParkedFiber(
+        ServerRuntimeStartup.recoverTitleRegenerationMarkers(
+          Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+        ),
+      );
+      yield* Deferred.await(started);
+      yield* Fiber.interrupt(fiber);
+      assert.isTrue(Exit.hasInterrupts(yield* Fiber.await(fiber)));
+      assert.deepEqual(logs, []);
+    }),
+  ).pipe(Effect.provide(layer));
+});

@@ -16,6 +16,7 @@ import type {
   ProviderSessionId,
 } from "@spiritdevs/contracts";
 import {
+  CommandId,
   OrchestrationV2AppThreadJson as OrchestrationV2AppThreadJsonSchema,
   OrchestrationV2CheckpointJson as OrchestrationV2CheckpointJsonSchema,
   OrchestrationV2CheckpointScopeJson as OrchestrationV2CheckpointScopeJsonSchema,
@@ -200,6 +201,11 @@ export interface ProjectionStoreV2Shape {
   /** Candidates include archived threads; recovery checks current state under the thread lock. */
   readonly getDelegatedCompletionRecoveryThreadIds: () => Effect.Effect<
     ReadonlyArray<ThreadId>,
+    ProjectionStoreV2Error
+  >;
+  /** Non-deleted threads, archived included, still marked as regenerating their title. */
+  readonly getTitleRegenerationMarkers: () => Effect.Effect<
+    ReadonlyArray<{ readonly threadId: ThreadId; readonly requestId: CommandId }>,
     ProjectionStoreV2Error
   >;
   readonly getThreadSnapshot: (
@@ -3577,6 +3583,24 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       Effect.mapError((cause) => new ProjectionStoreRecoveryReadError({ cause })),
     );
 
+    const getTitleRegenerationMarkers = Effect.fn("ProjectionStoreV2.getTitleRegenerationMarkers")(
+      function* () {
+        const rows = yield* sql<{ readonly thread_id: string; readonly request_id: string }>`
+          SELECT
+            thread_id,
+            json_extract(payload_json, '$.titleRegeneration.requestId') AS request_id
+          FROM orchestration_v2_projection_threads
+          WHERE deleted_at IS NULL AND request_id IS NOT NULL
+          ORDER BY thread_id ASC
+        `;
+        return rows.map((row) => ({
+          threadId: ThreadId.make(row.thread_id),
+          requestId: CommandId.make(row.request_id),
+        }));
+      },
+      Effect.mapError((cause) => new ProjectionStoreRecoveryReadError({ cause })),
+    );
+
     const getQueuedRunThreadIds = Effect.fn("ProjectionStoreV2.getQueuedRunThreadIds")(
       function* () {
         const rows = yield* sql<{ readonly thread_id: string }>`
@@ -3709,6 +3733,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getPendingSubagentCompletionThreads,
       getSubagentDescendantIds,
       getDelegatedCompletionRecoveryThreadIds,
+      getTitleRegenerationMarkers,
       getThreadSnapshot,
     } satisfies ProjectionStoreV2Shape;
   }),
@@ -3873,6 +3898,20 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
               .toSorted(),
           ),
         ),
+      getTitleRegenerationMarkers: () =>
+        service
+          .getThreadMetadata()
+          .pipe(
+            Effect.map((threads) =>
+              threads
+                .flatMap((thread) =>
+                  thread.titleRegeneration == null
+                    ? []
+                    : [{ threadId: thread.id, requestId: thread.titleRegeneration.requestId }],
+                )
+                .toSorted((left, right) => String(left.threadId).localeCompare(right.threadId)),
+            ),
+          ),
       getProviderRuntimeRecoveryProjection: (threadId) =>
         Ref.get(replayState).pipe(
           Effect.flatMap((state) => {
