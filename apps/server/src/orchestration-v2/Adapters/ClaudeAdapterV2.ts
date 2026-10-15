@@ -5600,6 +5600,8 @@ export function makeClaudeAdapterV2(
           providerSessionId: input.providerSessionId,
           providerSession: session,
           events: Stream.fromEffectRepeat(Queue.take(events)),
+          // Background shells, agents, monitors, and workflows end with the CLI.
+          backgroundTasksEndWithProcess: true,
           hasPendingBackgroundWork: Effect.gen(function* () {
             // Session capability: any native thread with pending work pins idle.
             for (const roster of (yield* Ref.get(pendingBackgroundTasksByNativeThread)).values()) {

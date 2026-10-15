@@ -618,10 +618,114 @@ export const layerWithOptions = (
           }
         });
 
+      // Reads the background tasks a released session's process left on its
+      // provider threads. Read as soon as the session leaves the live map:
+      // after that, a replacement session with the same id can open and report
+      // tasks of its own on the same provider threads. Server shutdown keeps
+      // rosters, since startup recovery clears them and records the cancelled
+      // work. Only runtimes whose tasks end with their process opt in (Claude).
+      const readReleasedBackgroundTasks = (input: {
+        readonly entry: LiveSessionEntry;
+        readonly reason: ProviderSessionReleaseReason;
+        readonly detachedThreadId?: ThreadId;
+      }) =>
+        Effect.gen(function* () {
+          if (
+            input.reason === "server_shutdown" ||
+            input.entry.runtime.backgroundTasksEndWithProcess !== true
+          ) {
+            return [];
+          }
+          const providerSessionId = input.entry.runtime.providerSessionId;
+          // A detach that released the session already removed its thread
+          // from the attached set.
+          const threadIds = new Set(input.entry.attachedThreadIds);
+          if (input.detachedThreadId !== undefined) threadIds.add(input.detachedThreadId);
+          const released = [];
+          for (const threadId of threadIds) {
+            const projection = yield* projectionStore.getThreadProjection(threadId);
+            for (const providerThread of projection.providerThreads) {
+              const tasks = providerThread.pendingBackgroundTasks ?? [];
+              if (providerThread.providerSessionId !== providerSessionId || tasks.length === 0) {
+                continue;
+              }
+              released.push({
+                threadId,
+                providerSessionId,
+                providerThreadId: providerThread.id,
+                taskIds: new Set(tasks.map((task) => task.taskId)),
+              });
+            }
+          }
+          return released;
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("orchestration-v2.provider-session-release-roster-read-failed", {
+              providerSessionId: input.entry.runtime.providerSessionId,
+              cause,
+            }).pipe(Effect.as([])),
+          ),
+        );
+      type ReleasedBackgroundTasks = Effect.Success<
+        ReturnType<typeof readReleasedBackgroundTasks>
+      >[number];
+
+      // Removes the tasks `readReleasedBackgroundTasks` found from their
+      // rosters. Their process is gone, so nothing will report them ending,
+      // and a leftover roster keeps the thread Waiting. Tasks a replacement
+      // session reported since are left in place. The write commits only if
+      // the stored row still equals what was read, and is retried a few times
+      // when a provider update lands in between.
+      const writeReleasedBackgroundTaskEvents = (
+        released: ReadonlyArray<ReleasedBackgroundTasks>,
+      ) =>
+        Effect.forEach(
+          released,
+          ({ threadId, providerSessionId, providerThreadId, taskIds }) =>
+            Effect.gen(function* () {
+              for (let attempt = 0; attempt < 3; attempt++) {
+                const projection = yield* projectionStore.getThreadProjection(threadId);
+                const providerThread = projection.providerThreads.find(
+                  (candidate) => candidate.id === providerThreadId,
+                );
+                const tasks = providerThread?.pendingBackgroundTasks ?? [];
+                const remaining = tasks.filter((task) => !taskIds.has(task.taskId));
+                if (providerThread === undefined || remaining.length === tasks.length) return;
+                const now = yield* DateTime.now;
+                const { committed } = yield* eventSink.writeIfProviderThreadUnchanged({
+                  expected: providerThread,
+                  events: [
+                    {
+                      id: yield* idAllocator.allocate.event({ threadId, providerSessionId }),
+                      type: "provider-thread.updated",
+                      threadId,
+                      driver: providerThread.driver,
+                      providerInstanceId: providerThread.providerInstanceId,
+                      occurredAt: now,
+                      payload: {
+                        ...providerThread,
+                        pendingBackgroundTasks: remaining,
+                        updatedAt: now,
+                      },
+                    },
+                  ],
+                });
+                if (committed) return;
+              }
+              yield* Effect.logWarning(
+                "orchestration-v2.provider-session-release-roster-conflict",
+                { providerSessionId, providerThreadId },
+              );
+            }),
+          { discard: true },
+        );
+
       const releaseEntry = (input: {
         readonly providerSessionId: ProviderSessionId;
         readonly reason: ProviderSessionReleaseReason;
         readonly detail?: string;
+        /** The thread whose detach released the session; it is no longer attached. */
+        readonly detachedThreadId?: ThreadId;
         readonly cancelIdleFiber?: boolean;
         readonly onlyIfIdleGeneration?: number;
       }) =>
@@ -647,6 +751,13 @@ export const layerWithOptions = (
               onNone: () => Effect.void,
               onSome: (entry) =>
                 Effect.gen(function* () {
+                  const releasedBackgroundTasks = yield* readReleasedBackgroundTasks({
+                    entry,
+                    reason: input.reason,
+                    ...(input.detachedThreadId === undefined
+                      ? {}
+                      : { detachedThreadId: input.detachedThreadId }),
+                  });
                   if (input.cancelIdleFiber !== false) {
                     yield* cancelIdleFiber(entry.idleFiber);
                   }
@@ -710,6 +821,7 @@ export const layerWithOptions = (
                     entry,
                     reason: input.reason,
                   });
+                  yield* writeReleasedBackgroundTaskEvents(releasedBackgroundTasks);
                   if (Option.isSome(closeExit) && Exit.isFailure(closeExit.value)) {
                     return yield* Effect.failCause(closeExit.value.cause);
                   }
@@ -1793,6 +1905,7 @@ export const layerWithOptions = (
                 providerSessionId: input.providerSessionId,
                 reason: "manual_shutdown",
                 ...(input.detail === undefined ? {} : { detail: input.detail }),
+                detachedThreadId: input.threadId,
               });
               return;
             }
