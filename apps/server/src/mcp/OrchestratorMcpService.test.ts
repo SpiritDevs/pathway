@@ -575,6 +575,7 @@ describe("OrchestratorMcpService", () => {
         }),
         Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([]) }),
         Layer.mock(ScheduledTaskService)({}),
+        Layer.mock(ThreadLaunchService)({}),
       );
       const scope: McpInvocationScope = {
         environmentId: EnvironmentId.make("environment:mcp-cancel-finished"),

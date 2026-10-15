@@ -322,7 +322,6 @@ const openCohort = (
 ): OrchestrationV2DelegatedCompletionCohort => ({
   disposition: "open",
   nextGeneration: delivery === null ? 1 : delivery.generation + 1,
-  settledDeliveryCount: 0,
   delivery,
 });
 
