@@ -30,6 +30,14 @@ An agent can cancel a subagent it started. That stops the subagent the same way,
 
 Work started on another machine keeps running when you stop the agent. Stop it from its own conversation.
 
+## Give a subagent its own worktree
+
+By default, a subagent works in the same checkout as the agent that started it. When several subagents might edit the same files at once, an agent can give each one its own git worktree instead. You can ask for this, for example "run each fix in its own worktree", or the agent can choose it.
+
+The worktree starts from the last commit of the checkout the agent is working in, and the project's setup script runs before the subagent starts. Uncommitted changes are not copied, so commit anything the subagent needs first. While the worktree is being set up, the subagent's conversation shows its progress. If you stop the subagent before it starts, the worktree is removed. Once it has started, the worktree stays after the subagent finishes, so you can review or merge its work.
+
+This needs a project folder that is a git repository with at least one commit. It isn't available for temporary conversations or for work started on another machine. In those cases the agent is told why and can delegate without a separate worktree.
+
 ## Work on another machine
 
 An agent can also start work on another of your machines. For example, you can ask an agent on your laptop to investigate something on your desktop. The agent sees which machines and projects you can use, and starts a conversation in the project you choose, acting as you. That conversation runs on the other machine, and the agent can read it and send it messages. It is listed in the Lineage section of the agent's conversation rather than in your threads list, and its own Lineage links back to the agent's conversation.

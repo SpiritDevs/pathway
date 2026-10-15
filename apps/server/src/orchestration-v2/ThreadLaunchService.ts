@@ -28,6 +28,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import {
   buildTemporaryWorktreeBranchName,
   isTemporaryWorktreeBranch,
@@ -89,6 +90,15 @@ export interface ThreadLaunchInput {
   readonly creationSource: OrchestrationV2CreationSource;
 }
 
+/** A delegated child run dispatched with defer_start that needs its own worktree. */
+export interface DelegatedRunPreparationInput {
+  readonly commandId: CommandId;
+  readonly threadId: ThreadId;
+  readonly runId: RunId;
+  /** Commit the child's worktree starts from, from `resolveWorktreeBase`. */
+  readonly baseRef: string;
+}
+
 export interface ThreadLaunchResult {
   readonly threadId: ThreadId;
   readonly projection: OrchestrationV2ThreadProjection;
@@ -100,6 +110,7 @@ export class ThreadLaunchError extends Schema.TaggedErrorClass<ThreadLaunchError
   {
     operation: Schema.Literals([
       "resolve-project",
+      "resolve-base",
       "read-receipt",
       "generate-metadata",
       "provision-worktree",
@@ -121,7 +132,10 @@ export class ThreadLaunchError extends Schema.TaggedErrorClass<ThreadLaunchError
   override get message(): string {
     if (this.operation === "cleanup-worktree")
       return "Could not clean up the worktree. The task was kept and has not been started locally.";
-    if (this.operation === "control-preparation" && typeof this.cause === "string")
+    if (
+      (this.operation === "control-preparation" || this.operation === "resolve-base") &&
+      typeof this.cause === "string"
+    )
       return this.cause;
     return `Thread launch ${this.commandId} failed during ${this.operation}.`;
   }
@@ -136,6 +150,18 @@ export class ThreadLaunchService extends Context.Service<
     readonly controlPreparation: (
       input: OrchestrationV2WorkspacePreparationControlInput,
     ) => Effect.Effect<{ readonly threadId: ThreadId }, ThreadLaunchError>;
+    /** The commit a new worktree would start from: HEAD of the given checkout, or the project root. */
+    readonly resolveWorktreeBase: (input: {
+      readonly commandId: CommandId;
+      readonly projectId: ProjectId;
+      readonly worktreePath: string | null;
+    }) => Effect.Effect<string, ThreadLaunchError>;
+    /**
+     * Provisions a worktree for a preparing delegated child run, runs project setup, then
+     * releases the run. Safe to repeat for one command; a run stopped while preparing loses
+     * the worktree it never got to use.
+     */
+    readonly prepareDelegatedRun: (input: DelegatedRunPreparationInput) => Effect.Effect<void>;
   }
 >()("@spiritdevs/pathway/orchestration-v2/ThreadLaunchService") {}
 
@@ -177,7 +203,11 @@ export const make = Effect.gen(function* () {
   yield* Effect.addFinalizer(() => Scope.close(preparationScope, Exit.void));
 
   const mapError =
-    (input: ThreadLaunchInput, operation: ThreadLaunchError["operation"], threadId?: ThreadId) =>
+    (
+      input: Pick<ThreadLaunchInput, "commandId" | "projectId">,
+      operation: ThreadLaunchError["operation"],
+      threadId?: ThreadId,
+    ) =>
     (cause: unknown) =>
       new ThreadLaunchError({
         operation,
@@ -614,10 +644,18 @@ export const make = Effect.gen(function* () {
                   ),
                 ),
         )
-        .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
+        .pipe(
+          Effect.mapError(mapError(input, "provision-worktree", threadId)),
+          // Record ownership before an interrupt can land, so a stopped run can remove it.
+          Effect.tap((created) =>
+            Effect.sync(() => {
+              entry.worktree = { path: created.worktree.path };
+            }),
+          ),
+          Effect.uninterruptible,
+        );
       worktreePath = worktree.worktree.path;
       branch = worktree.worktree.refName;
-      entry.worktree = { path: worktreePath };
       if (yield* applyControl()) return;
     }
 
@@ -645,10 +683,17 @@ export const make = Effect.gen(function* () {
           scripts: project.scripts,
         },
       })
-      .pipe(Effect.mapError(mapError(input, "run-setup-script", threadId)));
+      .pipe(
+        Effect.mapError(mapError(input, "run-setup-script", threadId)),
+        Effect.tap((started) =>
+          Effect.sync(() => {
+            if (started.status === "started") entry.terminalId = started.terminalId;
+          }),
+        ),
+        Effect.uninterruptible,
+      );
 
     if (setup.status === "started") {
-      entry.terminalId = setup.terminalId;
       if (yield* applyControl()) return;
       yield* reportProgress(
         "setup",
@@ -718,7 +763,7 @@ export const make = Effect.gen(function* () {
   });
 
   const failPreparedRun = (
-    input: ThreadLaunchInput,
+    input: Pick<ThreadLaunchInput, "commandId" | "projectId">,
     threadId: ThreadId,
     runId: RunId | null,
     cause: unknown,
@@ -769,10 +814,83 @@ export const make = Effect.gen(function* () {
       return next;
     });
 
+  const isStoppedRunStatus = (status: OrchestrationV2ThreadProjection["runs"][number]["status"]) =>
+    status === "interrupted" || status === "cancelled";
+
+  // Removes what a preparation provisioned for a run that was stopped before release.
+  const discardStoppedPreparation = (
+    entry: ActivePreparation,
+    threadId: ThreadId,
+    runId: RunId,
+  ): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      entry.accepting = false;
+      if (entry.terminalId !== null)
+        yield* terminals.close({ threadId, terminalId: entry.terminalId });
+      if (entry.worktree === null || entry.projectCwd === null) return;
+      yield* git.removeWorktree({ cwd: entry.projectCwd, path: entry.worktree.path, force: true });
+      yield* threads.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make(`${entry.input.commandId}:workspace-discarded`),
+        threadId,
+        worktreePath: null,
+        branch: null,
+      });
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Could not discard the workspace of a stopped run", {
+          commandId: entry.input.commandId,
+          threadId,
+          runId,
+          cause,
+        }),
+      ),
+    );
+
+  // Runs a preparation that gives up as soon as its run is interrupted or cancelled.
+  const prepareUntilRunStops = Effect.fn("ThreadLaunchService.prepareUntilRunStops")(function* (
+    entry: ActivePreparation,
+    threadId: ThreadId,
+    runId: RunId,
+  ) {
+    const afterSequence = yield* threads
+      .getThreadEventSequence(threadId)
+      .pipe(Effect.mapError(mapError(entry.input, "update-thread", threadId)));
+    const runStatus = threads.getThreadProjection(threadId).pipe(
+      Effect.map((projection) => projection.runs.find((run) => run.id === runId)?.status),
+      Effect.mapError(mapError(entry.input, "update-thread", threadId)),
+    );
+    if ((yield* runStatus) !== "preparing") return;
+    const runStopped = threads.streamStoredEventsFrom({ threadId, afterSequence }).pipe(
+      Stream.filter(
+        (stored) =>
+          stored.event.type === "run.updated" &&
+          stored.event.payload.id === runId &&
+          isStoppedRunStatus(stored.event.payload.status),
+      ),
+      Stream.runHead,
+      Effect.flatMap((stopped) => (Option.isSome(stopped) ? Effect.void : Effect.never)),
+      // Without the watch, the preparation simply finishes; release then fails on a stopped run.
+      Effect.catchCause(() => Effect.never),
+    );
+    const outcome = yield* Effect.raceFirst(
+      prepareInBackground(entry.input, threadId, runId, entry).pipe(Effect.as("prepared" as const)),
+      runStopped.pipe(Effect.as("stopped" as const)),
+    ).pipe(Effect.exit);
+    if (Exit.isSuccess(outcome) && outcome.value === "prepared") return;
+    // A failed release can beat the stop event to the race; the run status settles it.
+    const status = yield* runStatus.pipe(Effect.orElseSucceed(() => undefined));
+    if (Exit.isSuccess(outcome) || (status !== undefined && isStoppedRunStatus(status))) {
+      return yield* discardStoppedPreparation(entry, threadId, runId);
+    }
+    return yield* Effect.asVoid(outcome);
+  });
+
   const schedulePreparation = Effect.fn("ThreadLaunchService.schedulePreparation")(function* (
     input: ThreadLaunchInput,
     threadId: ThreadId,
     runId: RunId | null,
+    options: { readonly discardWhenRunStops?: boolean } = {},
   ) {
     const entry: ActivePreparation = {
       input,
@@ -784,7 +902,11 @@ export const make = Effect.gen(function* () {
       terminalId: null,
     };
     if (runId !== null) activePreparations.set(runId, entry);
-    yield* prepareInBackground(input, threadId, runId, entry).pipe(
+    const preparation =
+      runId !== null && options.discardWhenRunStops === true
+        ? prepareUntilRunStops(entry, threadId, runId)
+        : prepareInBackground(input, threadId, runId, entry);
+    yield* preparation.pipe(
       Effect.exit,
       Effect.flatMap((exit) =>
         Effect.gen(function* () {
@@ -1000,7 +1122,86 @@ export const make = Effect.gen(function* () {
     },
   );
 
-  return ThreadLaunchService.of({ launch, controlPreparation });
+  const resolveWorktreeBase: ThreadLaunchService["Service"]["resolveWorktreeBase"] = Effect.fn(
+    "ThreadLaunchService.resolveWorktreeBase",
+  )(function* (input) {
+    const rejected = mapError(input, "resolve-base");
+    const project = yield* projects.getById(input.projectId).pipe(
+      Effect.mapError(rejected),
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.fail(rejected("The project no longer exists.")),
+          onSome: Effect.succeed,
+        }),
+      ),
+    );
+    if (
+      project.workspaceRoot === null ||
+      (project.internalWorkspaceRoot != null &&
+        project.workspaceRoot === project.internalWorkspaceRoot)
+    ) {
+      return yield* rejected("Attach a project directory before creating a worktree.");
+    }
+    const cwd = input.worktreePath ?? project.workspaceRoot;
+    return yield* git.resolveCommit({ cwd, revision: "HEAD" }).pipe(
+      Effect.map((resolved) => resolved.commitSha),
+      Effect.mapError(() =>
+        rejected(
+          `${cwd} is not a git repository with a commit, so a separate worktree cannot be created.`,
+        ),
+      ),
+    );
+  });
+
+  const prepareDelegatedRun: ThreadLaunchService["Service"]["prepareDelegatedRun"] = Effect.fn(
+    "ThreadLaunchService.prepareDelegatedRun",
+  )(function* (input) {
+    const scheduled = yield* Effect.gen(function* () {
+      const projection = yield* threads.getThreadProjection(input.threadId);
+      const run = projection.runs.find((candidate) => candidate.id === input.runId);
+      const message = projection.messages.find((candidate) => candidate.id === run?.userMessageId);
+      // A retried delegation finds its run already prepared, or still preparing under this command.
+      if (run?.status !== "preparing" || message === undefined) return;
+      if (!(yield* reservePreparation(input.commandId))) return;
+      const launchInput: ThreadLaunchInput = {
+        commandId: input.commandId,
+        threadId: input.threadId,
+        projectId: projection.thread.projectId,
+        title: projection.thread.title,
+        modelSelection: run.modelSelection,
+        runtimeMode: projection.thread.runtimeMode,
+        interactionMode: projection.thread.interactionMode,
+        createdBy: message.createdBy,
+        creationSource: message.creationSource,
+        initialMessage: {
+          messageId: message.id,
+          text: message.text,
+          attachments: message.attachments,
+        },
+        workspaceStrategy: { type: "worktree", baseRef: input.baseRef, startFromOrigin: false },
+      };
+      yield* schedulePreparation(launchInput, input.threadId, input.runId, {
+        discardWhenRunStops: true,
+      }).pipe(Effect.onError(() => releasePreparation(input.commandId)));
+    }).pipe(Effect.exit);
+    // Anything that stops preparation from being scheduled must fail the run, or it would
+    // wait in preparing forever.
+    if (Exit.isFailure(scheduled)) {
+      yield* failPreparedRun(
+        { commandId: input.commandId, projectId: null },
+        input.threadId,
+        input.runId,
+        Cause.squash(scheduled.cause),
+      );
+    }
+  });
+
+  return ThreadLaunchService.of({
+    launch,
+    controlPreparation,
+    resolveWorktreeBase,
+    prepareDelegatedRun,
+  });
 });
 
 export const layer = Layer.effect(ThreadLaunchService, make);

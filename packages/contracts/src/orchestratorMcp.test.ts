@@ -26,6 +26,14 @@ const decodeThreadStartInput = Schema.decodeUnknownSync(OrchestratorMcpThreadSta
 const decodeThreadWaitInput = Schema.decodeUnknownSync(OrchestratorMcpThreadWaitInput);
 
 describe("orchestrator MCP contracts", () => {
+  it("accepts worktree isolation and keeps the shared checkout as the default", () => {
+    expect(decodeDelegateTaskInput({ task: "Review changes" }).isolation).toBeUndefined();
+    expect(
+      decodeDelegateTaskInput({ task: "Review changes", isolation: "worktree" }).isolation,
+    ).toBe("worktree");
+    expect(() => decodeDelegateTaskInput({ task: "Review changes", isolation: "copy" })).toThrow();
+  });
+
   it("decodes cross-provider delegated task requests and durable results", () => {
     const request = decodeDelegateTaskInput({
       task: "Inspect the workspace and report the result.",

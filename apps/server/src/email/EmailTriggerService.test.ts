@@ -105,6 +105,8 @@ function makeTestLayer(launches: Ref.Ref<ReadonlyArray<ThreadLaunch.ThreadLaunch
     ThreadLaunch.ThreadLaunchService,
     ThreadLaunch.ThreadLaunchService.of({
       controlPreparation: () => Effect.die("unused"),
+      resolveWorktreeBase: () => Effect.die("unused"),
+      prepareDelegatedRun: () => Effect.die("unused"),
       launch: (input) =>
         Ref.update(launches, (current) => [...current, input]).pipe(
           Effect.as({

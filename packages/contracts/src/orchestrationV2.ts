@@ -2861,6 +2861,9 @@ export const OrchestrationV2Command = Schema.Union([
     modelSelection: ModelSelection,
     runtimeMode: RuntimeMode,
     interactionMode: ProviderInteractionMode,
+    // "worktree" leaves the child without a workspace and its first run
+    // preparing; ThreadLaunchService then provisions the child's own worktree.
+    isolation: Schema.optional(Schema.Literal("worktree")),
     // Omitted behaves as "settled_only" (no wake while the parent has a live
     // run); producers that want fire-and-forget wakes must set "always".
     completionWake: Schema.optional(Schema.Literals(["always", "settled_only"])),

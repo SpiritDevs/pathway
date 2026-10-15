@@ -29,6 +29,7 @@ import { ThreadWorkspaceService } from "../orchestration-v2/ThreadWorkspaceServi
 import { makeOrchestratorV2ReplayLayerWithRegistry } from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ScheduledTaskService } from "../scheduledTasks/ScheduledTaskService.ts";
+import { ThreadLaunchService } from "../orchestration-v2/ThreadLaunchService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import { OrchestratorMcpService, layer as mcpServiceLayer } from "./OrchestratorMcpService.ts";
 
@@ -117,6 +118,7 @@ const testLayer = mcpServiceLayer.pipe(
       NodeServices.layer,
       remoteThreadsLayer,
       Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([provider]) }),
+      Layer.mock(ThreadLaunchService)({}),
       Layer.mock(ScheduledTaskService)({}),
     ),
   ),

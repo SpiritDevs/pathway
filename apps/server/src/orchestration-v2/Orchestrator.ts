@@ -5861,6 +5861,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         }),
         runtimeMode: command.runtimeMode,
         interactionMode: command.interactionMode,
+        // An isolated child gets its own worktree during preparation, never the parent's.
+        ...(command.isolation === "worktree"
+          ? { branch: null, worktreePath: null, ownedWorktreePath: null }
+          : {}),
       };
       const task: OrchestrationV2Subagent = {
         id: taskNodeId,
@@ -5980,7 +5984,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         text: command.task,
         attachments: [],
         modelSelection: command.modelSelection,
-        dispatchMode: { type: "start_immediately" },
+        dispatchMode:
+          command.isolation === "worktree"
+            ? { type: "defer_start" }
+            : { type: "start_immediately" },
       } satisfies Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>;
       yield* dispatchMessage(childMessageCommand, events, effects);
 

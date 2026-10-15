@@ -23,6 +23,7 @@ import { OrchestratorDispatchError } from "../orchestration-v2/Orchestrator.ts";
 import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ScheduledTaskService } from "../scheduledTasks/ScheduledTaskService.ts";
+import { ThreadLaunchService } from "../orchestration-v2/ThreadLaunchService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 
@@ -220,6 +221,7 @@ function answerTestLayer(input: {
           dispatch: input.dispatch,
         }),
         Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+        Layer.mock(ThreadLaunchService)({}),
         Layer.mock(ScheduledTaskService)({}),
       ),
     ),

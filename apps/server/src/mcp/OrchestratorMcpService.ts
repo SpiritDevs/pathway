@@ -74,6 +74,7 @@ import { getChangeRequestTerminologyFromUrl } from "@spiritdevs/shared/sourceCon
 
 import { isBuiltInProviderAdapterDriverV2 } from "../orchestration-v2/builtInProviderAdapterDrivers.ts";
 import { openTaskQuestions, subagentResultForRun } from "../orchestration-v2/SubagentProjection.ts";
+import { ThreadLaunchService } from "../orchestration-v2/ThreadLaunchService.ts";
 import {
   isActiveRun,
   latestActiveRun,
@@ -773,6 +774,7 @@ const make = Effect.gen(function* () {
   const threadManagement = yield* ThreadManagementService;
   const providerRegistry = yield* ProviderRegistry;
   const scheduledTasks = yield* ScheduledTaskService;
+  const threadLaunch = yield* ThreadLaunchService;
   const remoteDispatch = yield* Effect.serviceOption(RemoteDispatch);
   const remoteThreads = yield* Effect.serviceOption(RemoteThreads);
   const allowanceRuntime = yield* Effect.serviceOption(ProviderAllowanceRuntime);
@@ -1145,11 +1147,51 @@ const make = Effect.gen(function* () {
       return task;
     });
 
+  /** The commit an isolated child's worktree starts from: the parent checkout's HEAD. */
+  const resolveDelegatedWorktreeBase = (
+    parent: OrchestrationV2ThreadProjection,
+    commandId: CommandId,
+  ) => {
+    const projectId = parent.thread.projectId;
+    if (projectId === null) {
+      return Effect.fail(
+        failure(
+          "invalid_request",
+          "isolation worktree needs a project with a git checkout; this thread has no project. Omit isolation to share the parent's workspace.",
+        ),
+      );
+    }
+    if (parent.thread.temporary === true) {
+      return Effect.fail(
+        failure(
+          "invalid_request",
+          "isolation worktree is not available from a temporary thread. Omit isolation to share the parent's worktree.",
+        ),
+      );
+    }
+    return threadLaunch
+      .resolveWorktreeBase({ commandId, projectId, worktreePath: parent.thread.worktreePath })
+      .pipe(
+        Effect.mapError((error) =>
+          failure(
+            "invalid_request",
+            `${error.message} Omit isolation to share the parent's checkout.`,
+          ),
+        ),
+      );
+  };
+
   const delegateRemoteTask = Effect.fn("OrchestratorMcpService.delegateRemoteTask")(function* (
     scope: McpInvocationScope,
     input: OrchestratorMcpDelegateTaskInput & { readonly targetEnvironmentId: EnvironmentId },
   ) {
     yield* requireCapability(scope);
+    if (input.isolation === "worktree") {
+      return yield* failure(
+        "invalid_request",
+        "isolation worktree is not available with targetEnvironmentId; a remote task runs in the target project's checkout. Omit isolation, or delegate locally.",
+      );
+    }
     if (Option.isNone(remoteDispatch) || Option.isNone(remoteThreads)) {
       return yield* failure(
         "remote_dispatch_unavailable",
@@ -1564,6 +1606,10 @@ const make = Effect.gen(function* () {
                 requestKey: key,
                 operation: "delegate-task",
               });
+              const isolated = input.isolation === "worktree";
+              const worktreeBase = isolated
+                ? yield* resolveDelegatedWorktreeBase(parent, commandId)
+                : null;
               const result = yield* threadManagement
                 .dispatch({
                   type: "delegated_task.request",
@@ -1578,6 +1624,7 @@ const make = Effect.gen(function* () {
                   modelSelection: target.modelSelection,
                   runtimeMode,
                   interactionMode,
+                  ...(isolated ? { isolation: "worktree" as const } : {}),
                   // Async delegations wake the parent on every child terminal; wait
                   // delegations deliver through the blocking tool call, so a wake is
                   // only needed if the parent settled first (timeout, disconnect).
@@ -1603,6 +1650,25 @@ const make = Effect.gen(function* () {
                 );
               }
               const taskId = taskEvent.event.payload.id;
+              // Replays return the original events, so a retried request reaches the same run;
+              // preparation ignores a run it is already preparing or has released.
+              const childThreadId = taskEvent.event.payload.childThreadId;
+              const childRun = result.storedEvents.find(
+                (stored) =>
+                  stored.event.type === "run.created" && stored.event.threadId === childThreadId,
+              );
+              if (
+                worktreeBase !== null &&
+                childRun?.event.type === "run.created" &&
+                childRun.event.payload.status === "preparing"
+              ) {
+                yield* threadLaunch.prepareDelegatedRun({
+                  commandId,
+                  threadId: childRun.event.threadId,
+                  runId: childRun.event.payload.id,
+                  baseRef: worktreeBase,
+                });
+              }
 
               if (input.mode !== "wait") {
                 return yield* readTask(scope, taskId, false, true);
@@ -2206,5 +2272,9 @@ const make = Effect.gen(function* () {
 export const layer: Layer.Layer<
   OrchestratorMcpService,
   never,
-  Crypto.Crypto | ThreadManagementService | ProviderRegistry | ScheduledTaskService
+  | Crypto.Crypto
+  | ThreadManagementService
+  | ThreadLaunchService
+  | ProviderRegistry
+  | ScheduledTaskService
 > = Layer.effect(OrchestratorMcpService, make);
