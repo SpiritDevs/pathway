@@ -173,6 +173,7 @@ import {
 import { V2ItemInspector } from "./V2ItemInspector";
 import {
   isV2LifecycleItem,
+  SubagentCard,
   V2LifecycleRow,
   type HandoffTimelineRun,
   type SubagentTimelineModel,
@@ -1549,6 +1550,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
                 !row.showAssistantMeta) ||
               row.kind === "work" ||
               row.kind === "event" ||
+              row.kind === "subagent-group" ||
               row.kind === "attempt-fold" ||
               row.kind === "html-render"
             ? "pb-2"
@@ -1570,6 +1572,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       {row.kind === "proposed-plan" ? <ProposedPlanTimelineRow row={row} /> : null}
       {row.kind === "html-render" ? <HtmlRenderTimelineRow row={row} /> : null}
       {row.kind === "event" ? <V2EventTimelineRow row={row} /> : null}
+      {row.kind === "subagent-group" ? <SubagentGroupTimelineRow row={row} /> : null}
       {row.kind === "working" ? <WorkingTimelineRow row={row} /> : null}
       {row.kind === "waiting-background" ? <WaitingBackgroundTimelineRow row={row} /> : null}
     </div>
@@ -2416,6 +2419,23 @@ function v2EventPresentation(item: OrchestrationV2TurnItem): {
         icon: WrenchIcon,
       };
   }
+}
+
+function SubagentGroupTimelineRow({
+  row,
+}: {
+  row: Extract<TimelineRow, { kind: "subagent-group" }>;
+}) {
+  const ctx = use(TimelineRowCtx);
+  const items = row.projectedItems.flatMap(({ item }) => (item.type === "subagent" ? [item] : []));
+  return (
+    <SubagentCard
+      items={items}
+      providerStatuses={ctx.providerStatuses}
+      subagents={ctx.subagents}
+      onOpenThread={ctx.onOpenThread}
+    />
+  );
 }
 
 function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event" }> }) {

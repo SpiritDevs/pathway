@@ -1,4 +1,5 @@
 import { Fragment, type ReactNode, useState } from "react";
+import * as DateTime from "effect/DateTime";
 import type {
   OrchestrationV2Run,
   OrchestrationV2Subagent,
@@ -18,6 +19,7 @@ import {
   BotIcon,
   CheckIcon,
   ChevronDownIcon,
+  ChevronRightIcon,
   ExternalLinkIcon,
   GitCommitHorizontalIcon,
   GitPullRequestIcon,
@@ -30,10 +32,12 @@ import {
   XIcon,
 } from "lucide-react";
 
+import { cn } from "../../lib/utils";
 import { getProviderInstanceEntry } from "../../providerInstances";
 import { formatShortTimestamp } from "../../timestampFormat";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { PROVIDER_ICON_BY_PROVIDER, getTriggerDisplayModelName } from "./providerIconUtils";
+import { AgentElapsed } from "./AgentElapsed";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { readLocalApi } from "../../localApi";
@@ -297,31 +301,11 @@ export function V2LifecycleRow(props: {
     );
   }
   if (item.type === "subagent") {
-    const streamedResult = item.result?.trim() ? item.result : null;
-    const finalResult = FINAL_RESULT_SUBAGENT_STATUSES.has(item.status) ? streamedResult : null;
-    const detail = TERMINAL_SUBAGENT_STATUSES.has(item.status)
-      ? (streamedResult ?? item.progress ?? item.prompt)
-      : (item.progress ?? streamedResult ?? item.prompt);
-    // The item only records the instance; the model lives on the projection's
-    // subagent record, which the timeline threads through for this join.
-    const subagentModel =
-      props.subagents.find((subagent) => subagent.id === item.subagentId)?.model ?? undefined;
     return (
-      <RelatedThreadCard
-        itemType={item.type}
-        icon={BotIcon}
-        title={subagentDisplayTitle(item.title ?? "Subagent")}
-        detail={detail}
-        endpoint={
-          <ProviderModelEndpoint
-            providers={props.providerStatuses}
-            instanceId={item.providerInstanceId}
-            model={subagentModel}
-          />
-        }
-        badge={item.status}
-        threadId={item.childThreadId}
-        expandedDetail={finalResult}
+      <SubagentCard
+        items={[item]}
+        providerStatuses={props.providerStatuses}
+        subagents={props.subagents}
         onOpenThread={props.onOpenThread}
       />
     );
@@ -424,20 +408,18 @@ function CompactionLifecycleRow(props: {
 }
 
 function RelatedThreadCard(props: {
-  readonly itemType: "subagent" | "thread_created";
+  readonly itemType: "thread_created";
   readonly icon: LucideIcon;
   readonly title: string;
   readonly detail: string;
   /** Provider icon + model label for the thread this card points at. */
   readonly endpoint?: ReactNode;
-  readonly expandedDetail?: string | null;
   readonly badge: string;
   readonly threadId: ThreadId | null;
   readonly onOpenThread: (threadId: ThreadId) => void;
 }) {
   const Icon = props.icon;
   const threadId = props.threadId;
-  const expandedDetail = props.expandedDetail ?? null;
   const content = (
     <>
       <Icon className="size-3.5 shrink-0 text-muted-foreground" />
@@ -453,43 +435,6 @@ function RelatedThreadCard(props: {
       </span>
     </>
   );
-
-  if (expandedDetail !== null) {
-    return (
-      <div
-        data-v2-item-type={props.itemType}
-        className="relative min-w-0 overflow-hidden rounded-lg border border-border/60 bg-card/30"
-      >
-        <details className="group" data-v2-subagent-result-disclosure="true">
-          <summary
-            aria-label={`Show full result for ${props.title}`}
-            className="flex min-w-0 cursor-pointer list-none items-center gap-2 px-3 py-2 pr-11 text-left transition-colors hover:bg-muted/50 [&::-webkit-details-marker]:hidden"
-          >
-            {content}
-            <ChevronDownIcon
-              className="size-3 shrink-0 text-muted-foreground transition-transform group-open:rotate-180"
-              aria-hidden="true"
-            />
-          </summary>
-          <div className="border-border/60 border-t px-3 py-2" data-v2-subagent-result="true">
-            <p className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">
-              {expandedDetail}
-            </p>
-          </div>
-        </details>
-        {threadId === null ? null : (
-          <button
-            type="button"
-            aria-label={`Open ${props.title}`}
-            onClick={() => props.onOpenThread(threadId)}
-            className="absolute top-1.5 right-1.5 flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          >
-            <ExternalLinkIcon className="size-3" aria-hidden="true" />
-          </button>
-        )}
-      </div>
-    );
-  }
 
   return threadId === null ? (
     <div
@@ -509,6 +454,247 @@ function RelatedThreadCard(props: {
       {content}
       <ExternalLinkIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
     </button>
+  );
+}
+
+export type SubagentTurnItem = Extract<OrchestrationV2TurnItem, { readonly type: "subagent" }>;
+
+/**
+ * In-flight states read as one family (info dot); only settled states
+ * differentiate. Labels match what a user would say about the child.
+ */
+const SUBAGENT_STATUS_VISUALS: Record<
+  OrchestrationV2TurnItem["status"],
+  { readonly dotClass: string; readonly label: string }
+> = {
+  pending: { dotClass: "bg-info", label: "Queued" },
+  running: { dotClass: "bg-info", label: "Running" },
+  waiting: { dotClass: "bg-info", label: "Waiting" },
+  completed: { dotClass: "bg-success", label: "Finished" },
+  failed: { dotClass: "bg-destructive", label: "Failed" },
+  cancelled: { dotClass: "bg-muted-foreground/60", label: "Stopped" },
+  interrupted: { dotClass: "bg-muted-foreground/60", label: "Stopped" },
+};
+
+/** The server's placeholder when a child ends without output; the status label already says it. */
+const GENERIC_CHILD_END = /^Child task ended with status\b/i;
+
+/** One line of a markdown result: drop link targets, code ticks, and list bullets. */
+function subagentOneLine(text: string): string {
+  return text
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/`/g, "")
+    .replace(/^[ \t]*[-*][ \t]+/gm, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** "2 running · 1 finished", in first-seen order. */
+export function summarizeSubagentStatuses(
+  statuses: ReadonlyArray<OrchestrationV2TurnItem["status"]>,
+): string {
+  const counts = new Map<string, number>();
+  for (const status of statuses) {
+    const label = SUBAGENT_STATUS_VISUALS[status].label;
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  return [...counts].map(([label, count]) => `${count} ${label.toLowerCase()}`).join(" · ");
+}
+
+/**
+ * Subagents a turn launched together, drawn as one card of rows. A group of
+ * two or more gets a count + status summary header.
+ */
+export function SubagentCard(props: {
+  readonly items: ReadonlyArray<SubagentTurnItem>;
+  readonly providerStatuses: ReadonlyArray<ServerProvider>;
+  readonly subagents: ReadonlyArray<SubagentTimelineModel>;
+  readonly onOpenThread: (threadId: ThreadId) => void;
+}) {
+  const grouped = props.items.length > 1;
+  return (
+    <div
+      data-subagent-group={grouped ? "true" : undefined}
+      className="min-w-0 overflow-hidden rounded-lg border border-border/60 bg-card/30 p-1"
+    >
+      {grouped ? (
+        <div className="flex min-w-0 items-baseline gap-2 px-2 pt-1 pb-0.5 text-[11px]">
+          <span className="shrink-0 font-medium text-foreground">
+            {props.items.length} subagents
+          </span>
+          <span className="min-w-0 truncate text-muted-foreground">
+            {summarizeSubagentStatuses(props.items.map((item) => item.status))}
+          </span>
+        </div>
+      ) : null}
+      {props.items.map((item) => (
+        <SubagentRow
+          key={item.id}
+          item={item}
+          providerStatuses={props.providerStatuses}
+          // The item only records the instance; the model lives on the
+          // projection's subagent record, which the timeline threads through.
+          model={props.subagents.find((subagent) => subagent.id === item.subagentId)?.model}
+          onOpenThread={props.onOpenThread}
+        />
+      ))}
+    </div>
+  );
+}
+
+function SubagentAvatar(props: {
+  readonly driver: SubagentTurnItem["driver"];
+  readonly status: OrchestrationV2TurnItem["status"];
+}) {
+  const Icon = PROVIDER_ICON_BY_PROVIDER[props.driver] ?? null;
+  return (
+    <span
+      aria-hidden="true"
+      className="relative inline-flex size-6 shrink-0 items-center justify-center rounded-full border border-border/70 bg-muted"
+    >
+      {Icon === null ? (
+        <BotIcon className="size-3.5 text-muted-foreground" />
+      ) : (
+        <Icon className="size-3.5" />
+      )}
+      <span
+        className={cn(
+          "absolute -right-px -bottom-px size-2 rounded-full ring-2 ring-background",
+          SUBAGENT_STATUS_VISUALS[props.status].dotClass,
+        )}
+      />
+    </span>
+  );
+}
+
+/**
+ * One subagent: provider avatar with a status dot, title, status and model,
+ * a one-line activity (live progress while running, the result once settled),
+ * and elapsed time. Clicking opens the child thread; a settled result can be
+ * read in full in place.
+ */
+function SubagentRow(props: {
+  readonly item: SubagentTurnItem;
+  readonly providerStatuses: ReadonlyArray<ServerProvider>;
+  readonly model: string | null | undefined;
+  readonly onOpenThread: (threadId: ThreadId) => void;
+}) {
+  const { item } = props;
+  const [resultOpen, setResultOpen] = useState(false);
+  const title = subagentDisplayTitle(item.title ?? "Subagent");
+  const visual = SUBAGENT_STATUS_VISUALS[item.status];
+  const failed = item.status === "failed";
+  const live = item.status === "pending" || item.status === "running" || item.status === "waiting";
+  const result = item.result?.trim() || null;
+  const progress = item.progress?.trim() || null;
+  // Live rows lead with what is happening now; settled rows with the outcome.
+  const rawDetail = TERMINAL_SUBAGENT_STATUSES.has(item.status)
+    ? (result ?? progress)
+    : (progress ?? result);
+  const detail =
+    rawDetail !== null && !GENERIC_CHILD_END.test(rawDetail) ? subagentOneLine(rawDetail) : "";
+  const fullResult =
+    FINAL_RESULT_SUBAGENT_STATUSES.has(item.status) &&
+    result !== null &&
+    !GENERIC_CHILD_END.test(result)
+      ? result
+      : null;
+  const modelLabel = providerModelLabel(
+    props.providerStatuses,
+    item.providerInstanceId,
+    props.model ?? undefined,
+  );
+  const threadId = item.childThreadId;
+  const content = (
+    <>
+      <SubagentAvatar driver={item.driver} status={item.status} />
+      <span className="min-w-0 flex-1">
+        <span className="flex min-w-0 items-baseline gap-1.5">
+          <span className="min-w-0 truncate text-xs font-medium text-foreground">{title}</span>
+          <span
+            className={cn(
+              "shrink-0 text-[11px]",
+              failed ? "text-destructive" : "text-muted-foreground",
+            )}
+          >
+            {visual.label}
+          </span>
+          <span aria-hidden="true" className="shrink-0 text-[11px] text-muted-foreground/50">
+            ·
+          </span>
+          <span className="max-w-40 shrink truncate text-[11px] text-muted-foreground">
+            {modelLabel}
+          </span>
+        </span>
+        {detail === "" ? null : (
+          <span
+            className={cn(
+              "block truncate text-[11px] leading-relaxed",
+              failed ? "text-destructive" : "text-muted-foreground",
+            )}
+          >
+            {detail}
+          </span>
+        )}
+      </span>
+      <span className="shrink-0 text-[11px] text-muted-foreground">
+        <AgentElapsed
+          startedAtMs={item.startedAt ? DateTime.toEpochMillis(item.startedAt) : null}
+          completedAtMs={item.completedAt ? DateTime.toEpochMillis(item.completedAt) : null}
+          live={live}
+        />
+      </span>
+    </>
+  );
+  const rowClassName = "flex min-w-0 flex-1 items-center gap-2.5 rounded-md px-2 py-1.5 text-left";
+  return (
+    <div data-v2-item-type="subagent" aria-description={visual.label}>
+      <div className="flex min-w-0 items-center gap-0.5">
+        {threadId === null ? (
+          <div className={rowClassName}>{content}</div>
+        ) : (
+          <button
+            type="button"
+            aria-label={`Open ${title}`}
+            onClick={() => props.onOpenThread(threadId)}
+            className={cn(
+              rowClassName,
+              "group/subagent cursor-pointer transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
+            )}
+          >
+            {content}
+            <ChevronRightIcon
+              aria-hidden="true"
+              className="size-3.5 shrink-0 text-muted-foreground/60 transition-colors group-hover/subagent:text-foreground"
+            />
+          </button>
+        )}
+        {fullResult === null ? null : (
+          <button
+            type="button"
+            data-v2-subagent-result-disclosure="true"
+            aria-expanded={resultOpen}
+            aria-label={`${resultOpen ? "Hide" : "Show"} full result for ${title}`}
+            title={resultOpen ? "Hide result" : "Show result"}
+            onClick={() => setResultOpen((open) => !open)}
+            className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <ChevronDownIcon
+              aria-hidden="true"
+              className={cn("size-3.5 transition-transform", resultOpen && "rotate-180")}
+            />
+          </button>
+        )}
+      </div>
+      {resultOpen && fullResult !== null ? (
+        <p
+          data-v2-subagent-result="true"
+          className="mx-2 mb-1.5 max-h-64 overflow-auto rounded-md bg-muted/30 px-2.5 py-2 text-xs leading-relaxed whitespace-pre-wrap break-words text-muted-foreground"
+        >
+          {fullResult}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
@@ -542,6 +728,18 @@ function latestRunModelBefore(
  * model slug when the instance no longer lists it, and to the instance display
  * name (or id) when no model was recorded on the item.
  */
+function providerModelLabel(
+  providers: ReadonlyArray<ServerProvider>,
+  instanceId: ProviderInstanceId,
+  model: string | undefined,
+): string {
+  const entry = getProviderInstanceEntry(providers, instanceId);
+  const slug = model?.trim();
+  if (slug === undefined || slug.length === 0) return entry?.displayName ?? instanceId;
+  const providerModel = entry?.models.find((candidate) => candidate.slug === slug);
+  return providerModel === undefined ? slug : getTriggerDisplayModelName(providerModel);
+}
+
 export function ProviderModelEndpoint(props: {
   readonly providers: ReadonlyArray<ServerProvider>;
   readonly instanceId: ProviderInstanceId;
@@ -549,21 +747,12 @@ export function ProviderModelEndpoint(props: {
 }) {
   const entry = getProviderInstanceEntry(props.providers, props.instanceId);
   const Icon = entry === undefined ? null : (PROVIDER_ICON_BY_PROVIDER[entry.driverKind] ?? null);
-  const model = props.model?.trim();
-  const providerModel =
-    model === undefined || model.length === 0
-      ? undefined
-      : entry?.models.find((candidate) => candidate.slug === model);
-  const label =
-    providerModel !== undefined
-      ? getTriggerDisplayModelName(providerModel)
-      : model !== undefined && model.length > 0
-        ? model
-        : (entry?.displayName ?? props.instanceId);
   return (
     <span className="inline-flex min-w-0 items-center gap-1">
       {Icon === null ? null : <Icon aria-hidden="true" className="size-3 shrink-0" />}
-      <span className="max-w-40 truncate">{label}</span>
+      <span className="max-w-40 truncate">
+        {providerModelLabel(props.providers, props.instanceId, props.model)}
+      </span>
     </span>
   );
 }

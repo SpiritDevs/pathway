@@ -19,6 +19,7 @@ import {
 import type { ThreadRunSummary } from "@spiritdevs/client-runtime/state/shell";
 import { formatPendingBackgroundWorkLabel } from "@spiritdevs/shared/orchestrationV2PendingBackgroundWork";
 import {
+  resolvePathwayMcpToolId,
   resolvePathwayMcpToolPresentation,
   type PathwayMcpToolPresentation,
 } from "@spiritdevs/shared/pathwayMcpToolPresentation";
@@ -249,6 +250,13 @@ export type MessagesTimelineRow =
       id: string;
       createdAt: string;
       projectedItem: OrchestrationV2ProjectedTurnItem;
+    }
+  | {
+      /** Two or more subagents one run launched back to back, drawn as one card. */
+      kind: "subagent-group";
+      id: string;
+      createdAt: string;
+      projectedItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem>;
     }
   | {
       kind: "proposed-plan";
@@ -589,6 +597,44 @@ function deriveTurnFolds(input: {
   return foldsByAnchorEntryId;
 }
 
+/**
+ * An app-owned delegation already has a durable subagent card, so its
+ * `delegate_task` tool row only repeats it. Drop the row once its output names
+ * a subagent the same run launched; failed or still-pending calls stay.
+ */
+function withoutSubagentDelegationEntries(
+  entries: ReadonlyArray<TimelineEntry>,
+): ReadonlyArray<TimelineEntry> {
+  const subagentIdsByRun = new Map<RunId, string[]>();
+  for (const entry of entries) {
+    if (entry.kind !== "event") continue;
+    const item = entry.projectedItem.item;
+    if (item.type !== "subagent" || item.origin !== "app_owned" || item.runId === null) continue;
+    const ids = subagentIdsByRun.get(item.runId) ?? [];
+    ids.push(item.subagentId);
+    subagentIdsByRun.set(item.runId, ids);
+  }
+  if (subagentIdsByRun.size === 0) return entries;
+  return entries.filter((entry) => {
+    if (entry.kind !== "work") return true;
+    const item = entry.entry.projectedItem?.item ?? entry.entry.structuredPayload;
+    if (
+      item?.type !== "dynamic_tool" ||
+      item.runId === null ||
+      item.status !== "completed" ||
+      resolvePathwayMcpToolId(item.toolName) !== "delegate_task"
+    ) {
+      return true;
+    }
+    const ids = subagentIdsByRun.get(item.runId);
+    if (ids === undefined || item.output === undefined) return true;
+    // The task id is a node id with no characters JSON escapes, so it appears
+    // verbatim however many times the provider wrapped the tool output.
+    const output = JSON.stringify(item.output);
+    return !ids.some((id) => output.includes(id));
+  });
+}
+
 export function deriveMessagesTimelineRows(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
   latestRun?: TimelineLatestRun | null;
@@ -605,7 +651,8 @@ export function deriveMessagesTimelineRows(input: {
   revertTurnCountByUserMessageId: ReadonlyMap<MessageId, number>;
 }): MessagesTimelineRow[] {
   const nextRows: MessagesTimelineRow[] = [];
-  const preparationItems = input.timelineEntries.flatMap((entry) =>
+  const timelineEntries = withoutSubagentDelegationEntries(input.timelineEntries);
+  const preparationItems = timelineEntries.flatMap((entry) =>
     entry.kind === "event" && turnItemIsWorkspacePreparation(entry.projectedItem.item)
       ? [entry.projectedItem.item]
       : [],
@@ -626,13 +673,13 @@ export function deriveMessagesTimelineRows(input: {
         : null))
     : input.activeTurnStartedAt;
   const durationStartByMessageId = computeMessageDurationStart(
-    input.timelineEntries.flatMap((entry) => (entry.kind === "message" ? [entry.message] : [])),
+    timelineEntries.flatMap((entry) => (entry.kind === "message" ? [entry.message] : [])),
   );
-  const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(input.timelineEntries);
+  const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(timelineEntries);
   const unsettledRunId = deriveUnsettledRunId(input.latestRun ?? null);
-  const supersededFoldsByAnchorEntryId = deriveSupersededAttemptFolds(input.timelineEntries);
+  const supersededFoldsByAnchorEntryId = deriveSupersededAttemptFolds(timelineEntries);
   const foldsByAnchorEntryId = deriveTurnFolds({
-    timelineEntries: input.timelineEntries,
+    timelineEntries: timelineEntries,
     terminalAssistantMessageIds,
     latestRun: input.latestRun ?? null,
     unsettledRunId,
@@ -654,8 +701,8 @@ export function deriveMessagesTimelineRows(input: {
     }
   }
 
-  for (let index = 0; index < input.timelineEntries.length; index += 1) {
-    const timelineEntry = input.timelineEntries[index];
+  for (let index = 0; index < timelineEntries.length; index += 1) {
+    const timelineEntry = timelineEntries[index];
     if (!timelineEntry) {
       continue;
     }
@@ -712,8 +759,8 @@ export function deriveMessagesTimelineRows(input: {
     if (timelineEntry.kind === "work") {
       const groupedEntries = [timelineEntry.entry];
       let cursor = index + 1;
-      while (cursor < input.timelineEntries.length) {
-        const nextEntry = input.timelineEntries[cursor];
+      while (cursor < timelineEntries.length) {
+        const nextEntry = timelineEntries[cursor];
         if (
           !nextEntry ||
           nextEntry.kind !== "work" ||
@@ -760,6 +807,29 @@ export function deriveMessagesTimelineRows(input: {
     }
 
     if (timelineEntry.kind === "event") {
+      const item = timelineEntry.projectedItem.item;
+      const previous = nextRows.at(-1);
+      const previousItems =
+        previous?.kind === "subagent-group"
+          ? previous.projectedItems
+          : previous?.kind === "event" && previous.projectedItem.item.type === "subagent"
+            ? [previous.projectedItem]
+            : null;
+      if (
+        item.type === "subagent" &&
+        item.runId !== null &&
+        (previous?.kind === "event" || previous?.kind === "subagent-group") &&
+        previousItems !== null &&
+        previousItems[0]?.item.runId === item.runId
+      ) {
+        nextRows[nextRows.length - 1] = {
+          kind: "subagent-group",
+          id: previous.id,
+          createdAt: previous.createdAt,
+          projectedItems: [...previousItems, timelineEntry.projectedItem],
+        };
+        continue;
+      }
       nextRows.push({
         kind: "event",
         id: timelineEntry.id,
@@ -901,6 +971,14 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
 
     case "event":
       return a.projectedItem === (b as typeof a).projectedItem;
+
+    case "subagent-group": {
+      const bg = b as typeof a;
+      return (
+        a.projectedItems.length === bg.projectedItems.length &&
+        a.projectedItems.every((projectedItem, index) => projectedItem === bg.projectedItems[index])
+      );
+    }
 
     case "work":
       return Equal.equals(a.groupedEntries, (b as typeof a).groupedEntries);

@@ -446,6 +446,61 @@ describe("resolveAssistantMessageCopyState", () => {
 });
 
 describe("deriveMessagesTimelineRows", () => {
+  it("drops delegate_task rows its subagent card repeats and groups the run's subagents", () => {
+    const subagentEntry = (id: string, subagentId: string): TimelineEntry =>
+      ({
+        id,
+        kind: "event",
+        createdAt: "2026-01-01T00:00:10Z",
+        projectedItem: {
+          visibility: "local",
+          item: { id, type: "subagent", runId: "run-1", origin: "app_owned", subagentId },
+        },
+      }) as never;
+    const delegateEntry = (id: string, output: unknown, status = "completed"): TimelineEntry =>
+      ({
+        id,
+        kind: "work",
+        createdAt: "2026-01-01T00:00:09Z",
+        entry: {
+          id,
+          createdAt: "2026-01-01T00:00:09Z",
+          label: "Delegate a child task",
+          tone: "tool",
+          structuredPayload: {
+            id,
+            type: "dynamic_tool",
+            runId: "run-1",
+            status,
+            toolName: "mcp__pathway__delegate_task",
+            output,
+          },
+        },
+      }) as never;
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        // Claude wraps the MCP result as JSON text inside `content`.
+        delegateEntry("delegate-1", { content: JSON.stringify({ taskId: "node:task-a" }) }),
+        subagentEntry("subagent-a", "node:task-a"),
+        delegateEntry("delegate-2", { taskId: "node:task-b" }),
+        subagentEntry("subagent-b", "node:task-b"),
+        delegateEntry("delegate-failed", { error: "no such provider" }),
+      ],
+      expandedRunIds: new Set(["run-1" as never]),
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows.map((row) => [row.kind, row.id])).toEqual([
+      ["subagent-group", "subagent-a"],
+      ["work", "delegate-failed"],
+    ]);
+    const group = rows[0] as Extract<MessagesTimelineRow, { kind: "subagent-group" }>;
+    expect(group.projectedItems.map(({ item }) => item.id)).toEqual(["subagent-a", "subagent-b"]);
+  });
+
   it("only enables assistant copy for the terminal assistant message in a turn", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [
