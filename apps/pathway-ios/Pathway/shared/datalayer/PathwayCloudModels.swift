@@ -134,6 +134,8 @@ struct PathwayRuntimeRequestSummary: Codable, Equatable, Sendable {
     let id: String
     let kind: String
     let createdAt: String
+    /// False for a question the agent keeps working past.
+    var isBlocking: Bool? = nil
 }
 
 struct PathwayThreadLineage: Codable, Equatable, Sendable {
@@ -208,6 +210,9 @@ struct PathwayAgentThread: Equatable, Identifiable, Sendable {
     let cloudProjectId: String?
     var shell: PathwayAgentThreadShell
     let cloudUpdatedAt: Double
+    /// What a live subagent below this thread waits on: "approval" or "user_input".
+    /// Subagent rows are hidden, so the lifecycle partition sets it on the threads above.
+    var pendingSubagentRequest: String? = nil
 
     var id: String { "\(companyId):\(environmentId):\(shell.id)" }
     var threadId: String { shell.id }

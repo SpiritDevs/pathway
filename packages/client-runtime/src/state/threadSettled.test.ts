@@ -471,6 +471,14 @@ describe("canSettle", () => {
     expect(canSettle(blocked, { now: NOW })).toBe(false);
     expect(effectiveSettled(blocked, { now: NOW, autoSettleAfterDays: 3 })).toBe(false);
   });
+
+  it("keeps an explicitly settled thread active while a subagent below it waits", () => {
+    const settled = makeShell({ settledOverride: "settled", activityAt: FRESH });
+    expect(effectiveSettled(settled, { now: NOW, autoSettleAfterDays: 3 })).toBe(true);
+    const waiting = { ...settled, pendingSubagentRequest: "approval" as const };
+    expect(canSettle(waiting, { now: NOW })).toBe(false);
+    expect(effectiveSettled(waiting, { now: NOW, autoSettleAfterDays: 3 })).toBe(false);
+  });
 });
 
 describe("temporary thread settlement", () => {

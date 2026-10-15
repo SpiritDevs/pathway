@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { focusReadModelAtom } from "@spiritdevs/client-runtime/state/focuses";
+import type { PendingUserRequest } from "@spiritdevs/client-runtime/state/models";
 import {
   FOCUS_THREAD_SORT_ORDERS,
   focusThreadSortOrder,
@@ -89,6 +90,7 @@ export interface SortableSidebarThread {
   readonly latestUserMessageAt: string | null;
   readonly hasPendingApprovals: boolean;
   readonly hasPendingUserInput: boolean;
+  readonly pendingSubagentRequest?: PendingUserRequest | null;
   readonly latestRun: {
     readonly status: string;
     readonly startedAt: string | null;
@@ -114,9 +116,12 @@ export const recentActivityMs = (thread: SortableSidebarThread) =>
     timestampMs(thread.latestRun?.completedAt),
   );
 
-/** Approval, input, or a failed last run. */
+/** Approval, input (its own or a subagent's), or a failed last run. */
 export const threadNeedsAttention = (thread: SortableSidebarThread) =>
-  thread.hasPendingApprovals || thread.hasPendingUserInput || thread.latestRun?.status === "failed";
+  thread.hasPendingApprovals ||
+  thread.hasPendingUserInput ||
+  thread.pendingSubagentRequest != null ||
+  thread.latestRun?.status === "failed";
 
 /**
  * Custom keeps the caller's arranged order. The rest are newest first; Needs

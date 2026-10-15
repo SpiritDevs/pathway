@@ -91,6 +91,17 @@ describe("effectiveSnoozed", () => {
     ).toBe(false);
   });
 
+  it("wakes early when a subagent below it is blocked on the user", () => {
+    const snoozed = makeShell({ snoozedUntil: FUTURE_WAKE });
+    expect(effectiveSnoozed(snoozed, { now: NOW })).toBe(true);
+    expect(effectiveSnoozed({ ...snoozed, pendingSubagentRequest: "approval" }, { now: NOW })).toBe(
+      false,
+    );
+    expect(
+      effectiveSnoozed({ ...snoozed, pendingSubagentRequest: "user_input" }, { now: NOW }),
+    ).toBe(false);
+  });
+
   it("wakes early on a failure that happened after the snooze", () => {
     // makeShell stamps session.updatedAt at 11:00, after SNOOZED_AT (9:00).
     expect(
@@ -179,6 +190,12 @@ describe("canSnooze", () => {
     expect(
       canSnooze(
         { ...makeShell({ pending: "user-input" }), latestUserMessageAt: null },
+        { now: NOW },
+      ),
+    ).toBe(false);
+    expect(
+      canSnooze(
+        { ...makeShell({}), latestUserMessageAt: null, pendingSubagentRequest: "approval" },
         { now: NOW },
       ),
     ).toBe(false);
