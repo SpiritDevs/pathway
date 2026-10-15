@@ -40,8 +40,10 @@ export const SYNC_DOCUMENT_SCHEMA_VERSION = 1 as const;
  * cloud projects. Older clients quarantined those rows while still advancing their cursor, so an
  * upgrade must reseed to materialize projects that have not changed since bootstrap. Generation 5
  * repairs bootstrap snapshots that incorrectly retained soft-deleted cloud projects as live rows.
+ * Generation 6 recovers agent threads whose title regeneration date Convex stored as
+ * `{ epochMilliseconds }`; older clients quarantined them while still advancing their cursor.
  */
-export const SYNC_BOOTSTRAP_GENERATION = 5 as const;
+export const SYNC_BOOTSTRAP_GENERATION = 6 as const;
 
 export const StoredSyncCheckpoint = Schema.Struct({
   schemaVersion: Schema.Literal(SYNC_DOCUMENT_SCHEMA_VERSION),

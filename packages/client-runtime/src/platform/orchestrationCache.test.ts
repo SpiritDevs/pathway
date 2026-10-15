@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import {
+  CommandId,
   EnvironmentId,
   MessageId,
   RuntimeRequestId,
@@ -60,6 +61,7 @@ const shellSnapshotWithSummaries: OrchestrationV2ShellSnapshot = {
       },
       latestUserMessageAt: v2Now,
       settledAt: v2Now,
+      titleRegeneration: { requestId: CommandId.make("command-title"), startedAt: v2Now },
     },
   ],
 };
@@ -116,6 +118,10 @@ describe("orchestration cache envelopes", () => {
           ? null
           : DateTime.formatIso(threadShell.settledAt),
       ).toBe("2026-06-20T00:00:00.000Z");
+      expect(threadShell?.titleRegeneration).toEqual({
+        requestId: "command-title",
+        startedAt: v2Now,
+      });
       expect(DateTime.formatIso(thread.snapshot.projection.thread.updatedAt)).toBe(
         "2026-06-20T00:00:00.000Z",
       );

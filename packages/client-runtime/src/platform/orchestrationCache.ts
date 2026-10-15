@@ -28,10 +28,20 @@ export const StoredOrchestrationThreadSnapshot = Schema.Struct({
   })),
 });
 
-/** Invalid orchestration caches are disposable and must never block live synchronization. */
+/**
+ * Invalid orchestration caches are disposable and must never block live synchronization. The
+ * failure is logged because a codec bug otherwise looks like a cold cache on every launch.
+ */
 export function decodeOrDiscardOrchestrationCache<A, E, R, E2, R2>(
   decode: Effect.Effect<Option.Option<A>, E, R>,
   discard: Effect.Effect<void, E2, R2>,
 ) {
-  return decode.pipe(Effect.catch(() => discard.pipe(Effect.as(Option.none<A>()))));
+  return decode.pipe(
+    Effect.catch((error) =>
+      Effect.logWarning("Discarding unreadable orchestration cache.", { error }).pipe(
+        Effect.andThen(discard),
+        Effect.as(Option.none<A>()),
+      ),
+    ),
+  );
 }

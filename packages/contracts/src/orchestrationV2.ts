@@ -2215,6 +2215,23 @@ export const OrchestrationV2LatestVisibleMessageSummaryJson =
 export type OrchestrationV2LatestVisibleMessageSummaryJson =
   typeof OrchestrationV2LatestVisibleMessageSummaryJson.Type;
 
+/**
+ * Shells published before this codec mapped `startedAt` reached Convex as the bare `DateTime.Utc`
+ * fields, `{ epochMilliseconds }`, and offline environments never republish them. Decode that
+ * shape as well; encoding always writes the ISO string.
+ */
+const LegacyEpochMillisecondsDateTimeUtc = Schema.Struct({
+  epochMilliseconds: Schema.DateTimeUtcFromMillis,
+}).pipe(
+  Schema.decodeTo(
+    Schema.DateTimeUtc,
+    SchemaTransformation.transform({
+      decode: ({ epochMilliseconds }) => epochMilliseconds,
+      encode: (epochMilliseconds) => ({ epochMilliseconds }),
+    }),
+  ),
+);
+
 export const OrchestrationV2ThreadShellJson = OrchestrationV2ThreadShell.mapFields((fields) => ({
   ...fields,
   workspaceMove: Schema.optional(Schema.NullOr(OrchestrationV2WorkspaceMoveJson)),
@@ -2233,6 +2250,14 @@ export const OrchestrationV2ThreadShellJson = OrchestrationV2ThreadShell.mapFiel
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   lastVisitedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
+  titleRegeneration: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        requestId: CommandId,
+        startedAt: Schema.Union([Schema.DateTimeUtcFromString, LegacyEpochMillisecondsDateTimeUtc]),
+      }),
+    ),
+  ),
   deletedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
 }));
 export type OrchestrationV2ThreadShellJson = typeof OrchestrationV2ThreadShellJson.Type;
