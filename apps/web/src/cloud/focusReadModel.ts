@@ -381,8 +381,8 @@ export function markFocusSeen(input: {
 }
 
 /**
- * Focus tabs holding an unread notification, not yet seen in the tray, newer than anything that
- * Focus's view has displayed on this device. The open Focus and All never carry the dot.
+ * Focus tabs holding an unread notification newer than anything that Focus's view has displayed
+ * on this device. The open Focus and All never carry the dot.
  */
 export function unseenFocusIds(input: {
   readonly notifications: ReadonlyArray<FocusNotification>;
@@ -398,7 +398,6 @@ export function unseenFocusIds(input: {
       focusId !== ALL_FOCUS_ID &&
       focusId !== input.activeFocusId &&
       !notification.isRead &&
-      !notification.isSeen &&
       !input.locallyRead.has(notification.eventId) &&
       notification.createdAt > (input.seenAt[focusId] ?? 0)
     ) {

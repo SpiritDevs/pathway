@@ -335,10 +335,9 @@ describe("unseen Focus dots", () => {
     );
   });
 
-  it("ignores notifications already read, seen in the tray, or acknowledged locally", () => {
+  it("ignores notifications already read or acknowledged locally", () => {
     const notifications = [
       notification("read", PROJECT, 10, { isRead: true }),
-      notification("tray", PROJECT, 10, { isSeen: true }),
       notification("local", PERSONAL_PROJECT, 10),
     ];
     expect(
@@ -349,6 +348,16 @@ describe("unseen Focus dots", () => {
         activeFocusId: ALL_FOCUS_ID,
       }).size,
     ).toBe(0);
+  });
+
+  it("keeps the dot for unread notifications only seen in the tray", () => {
+    expect(
+      unseenFocusIds({
+        ...base,
+        notifications: [notification("tray", PROJECT, 10, { isSeen: true })],
+        activeFocusId: ALL_FOCUS_ID,
+      }),
+    ).toEqual(new Set([WORK]));
   });
 
   it("clears once the Focus is seen and returns when something newer arrives", () => {
