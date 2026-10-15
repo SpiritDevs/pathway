@@ -1919,6 +1919,248 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
     }),
   );
 
+  it.effect("settles orphaned native subagents and their child root turns after process loss", () =>
+    Effect.gen(function* () {
+      const eventSink = yield* EventSinkV2;
+      const projectionStore = yield* ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const parentThreadId = ThreadId.make("thread:foundation-native-orphan:parent");
+      const childThreadId = ThreadId.make("thread:foundation-native-orphan:child");
+      const delegatorThreadId = ThreadId.make("thread:foundation-native-orphan:delegator");
+      const parentRunId = RunId.make("run:foundation-native-orphan:parent");
+      const nativeId = NodeId.make("subagent:foundation-native-orphan:native");
+      const appOwnedId = NodeId.make("subagent:foundation-native-orphan:app-owned");
+      const childRootId = NodeId.make("node:foundation-native-orphan:child-root");
+      const nativeItemId = TurnItemId.make("item:foundation-native-orphan:native");
+      const progressItemId = TurnItemId.make("item:foundation-native-orphan:progress");
+      const parentThread = makeThread(parentThreadId, now);
+      const childThread = {
+        ...makeThread(childThreadId, now),
+        createdBy: "agent" as const,
+        creationSource: "provider" as const,
+        lineage: {
+          parentThreadId,
+          relationshipToParent: "subagent" as const,
+          rootThreadId: parentThreadId,
+        },
+      };
+      const subagentNode = (id: NodeId, threadId: ThreadId) => ({
+        id,
+        threadId,
+        runId: null,
+        parentNodeId: null,
+        rootNodeId: id,
+        kind: "subagent" as const,
+        status: "running" as const,
+        countsForRun: false,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        runtimeRequestId: null,
+        checkpointScopeId: null,
+        startedAt: now,
+        completedAt: null,
+      });
+      const subagent = (input: {
+        readonly id: NodeId;
+        readonly threadId: ThreadId;
+        readonly origin: "provider_native" | "app_owned";
+        readonly runId: RunId | null;
+        readonly childThreadId: ThreadId | null;
+      }) => ({
+        id: input.id,
+        threadId: input.threadId,
+        runId: input.runId,
+        parentNodeId: NodeId.make(`node:${input.id}:parent`),
+        origin: input.origin,
+        createdBy: "agent" as const,
+        driver: providerDriver,
+        providerInstanceId,
+        providerThreadId: null,
+        childThreadId: input.childThreadId,
+        nativeTaskRef: null,
+        prompt: "Review the change",
+        title: "Reviewer",
+        model: modelSelection.model,
+        status: "running" as const,
+        result: null,
+        startedAt: now,
+        completedAt: null,
+        updatedAt: now,
+      });
+      const itemBase = {
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        title: null,
+        startedAt: now,
+        updatedAt: now,
+      };
+
+      yield* eventSink.write({
+        events: [
+          threadCreatedEvent({
+            id: "event:foundation-native-orphan:parent",
+            thread: parentThread,
+            now,
+          }),
+          threadCreatedEvent({
+            id: "event:foundation-native-orphan:child",
+            thread: childThread,
+            now,
+          }),
+          threadCreatedEvent({
+            id: "event:foundation-native-orphan:delegator",
+            thread: makeThread(delegatorThreadId, now),
+            now,
+          }),
+          {
+            id: EventId.make("event:foundation-native-orphan:native-node"),
+            type: "node.updated",
+            threadId: parentThreadId,
+            nodeId: nativeId,
+            occurredAt: now,
+            payload: subagentNode(nativeId, parentThreadId),
+          },
+          {
+            id: EventId.make("event:foundation-native-orphan:native"),
+            type: "subagent.updated",
+            threadId: parentThreadId,
+            nodeId: nativeId,
+            providerInstanceId,
+            occurredAt: now,
+            payload: subagent({
+              id: nativeId,
+              threadId: parentThreadId,
+              origin: "provider_native",
+              runId: parentRunId,
+              childThreadId,
+            }),
+          },
+          {
+            // Stop already closed the item, so recovery can't reach the
+            // subagent through it.
+            id: EventId.make("event:foundation-native-orphan:native-item"),
+            type: "turn-item.updated",
+            threadId: parentThreadId,
+            occurredAt: now,
+            payload: {
+              ...itemBase,
+              id: nativeItemId,
+              threadId: parentThreadId,
+              runId: parentRunId,
+              nodeId: nativeId,
+              ordinal: 1,
+              status: "interrupted",
+              completedAt: now,
+              type: "subagent",
+              subagentId: nativeId,
+              origin: "provider_native",
+              driver: providerDriver,
+              providerInstanceId,
+              childThreadId,
+              prompt: "Review the change",
+              result: null,
+            },
+          },
+          {
+            id: EventId.make("event:foundation-native-orphan:child-root"),
+            type: "node.updated",
+            threadId: childThreadId,
+            nodeId: childRootId,
+            occurredAt: now,
+            payload: { ...subagentNode(childRootId, childThreadId), kind: "root_turn" },
+          },
+          {
+            id: EventId.make("event:foundation-native-orphan:progress"),
+            type: "turn-item.updated",
+            threadId: childThreadId,
+            occurredAt: now,
+            payload: {
+              ...itemBase,
+              id: progressItemId,
+              threadId: childThreadId,
+              runId: null,
+              nodeId: childRootId,
+              ordinal: 1,
+              status: "running",
+              completedAt: null,
+              type: "assistant_message",
+              messageId: MessageId.make("message:foundation-native-orphan:progress"),
+              text: "Reading files",
+              streaming: true,
+            },
+          },
+          {
+            // An app-owned task has its own process lifetime; only its runs
+            // settle it.
+            id: EventId.make("event:foundation-native-orphan:app-owned-node"),
+            type: "node.updated",
+            threadId: delegatorThreadId,
+            nodeId: appOwnedId,
+            occurredAt: now,
+            payload: subagentNode(appOwnedId, delegatorThreadId),
+          },
+          {
+            id: EventId.make("event:foundation-native-orphan:app-owned"),
+            type: "subagent.updated",
+            threadId: delegatorThreadId,
+            nodeId: appOwnedId,
+            providerInstanceId,
+            occurredAt: now,
+            payload: subagent({
+              id: appOwnedId,
+              threadId: delegatorThreadId,
+              origin: "app_owned",
+              runId: null,
+              childThreadId: null,
+            }),
+          },
+        ],
+      });
+
+      const recoveryIds = yield* projectionStore.getRecoveryThreadIds();
+      assert.include(recoveryIds, parentThreadId);
+      assert.include(recoveryIds, childThreadId);
+      assert.notInclude(recoveryIds, delegatorThreadId);
+
+      const recovery = yield* ProviderRuntimeRecovery.make.pipe(
+        Effect.provideService(
+          OrchestrationEffectWorkerV2,
+          OrchestrationEffectWorkerV2.of({
+            awaitWork: Effect.void,
+            runOnce: Effect.succeed(false),
+            nextClaimableAt: Effect.succeed(Option.none()),
+            drain: () => Effect.succeed(0),
+          }),
+        ),
+      );
+      yield* recovery.recover;
+
+      const parent = yield* projectionStore.getThreadProjection(parentThreadId);
+      assert.equal(parent.subagents.find((entry) => entry.id === nativeId)?.status, "cancelled");
+      assert.equal(parent.nodes.find((node) => node.id === nativeId)?.status, "cancelled");
+      // The item already settled keeps its own end.
+      assert.equal(
+        parent.turnItems.find((item) => item.id === nativeItemId)?.status,
+        "interrupted",
+      );
+      const child = yield* projectionStore.getThreadProjection(childThreadId);
+      assert.equal(child.nodes.find((node) => node.id === childRootId)?.status, "cancelled");
+      const progress = child.turnItems.find((item) => item.id === progressItemId);
+      assert.equal(progress?.status, "cancelled");
+      assert.isFalse(progress?.type === "assistant_message" && progress.streaming);
+      const delegator = yield* projectionStore.getThreadProjection(delegatorThreadId);
+      assert.equal(delegator.subagents.find((entry) => entry.id === appOwnedId)?.status, "running");
+      assert.equal(delegator.nodes.find((node) => node.id === appOwnedId)?.status, "running");
+
+      const remaining = yield* projectionStore.getRecoveryThreadIds();
+      assert.notInclude(remaining, parentThreadId);
+      assert.notInclude(remaining, childThreadId);
+    }),
+  );
+
   it.effect("allocates collision-free positions beyond 100 items and rebuilds equivalently", () =>
     Effect.gen(function* () {
       const eventSink = yield* EventSinkV2;

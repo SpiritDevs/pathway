@@ -3377,6 +3377,17 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           INDEXED BY orchestration_v2_projection_turn_items_type_status_idx
           WHERE status IN ('pending', 'running', 'waiting')
           UNION
+          -- No native subagent outlives the provider process that ran it, even
+          -- after its run and turn item have closed.
+          SELECT thread_id FROM orchestration_v2_projection_subagents
+          INDEXED BY orchestration_v2_projection_subagents_open_native_idx
+          WHERE origin = 'provider_native' AND status IN ('pending', 'running', 'waiting')
+          UNION
+          -- A native subagent's own thread works through a runless root turn.
+          SELECT thread_id FROM orchestration_v2_projection_nodes
+          INDEXED BY orchestration_v2_projection_nodes_open_runless_root_idx
+          WHERE run_id IS NULL AND kind = 'root_turn' AND status IN ('pending', 'running', 'waiting')
+          UNION
           SELECT bindings.thread_id
           FROM orchestration_v2_projection_provider_session_bindings AS bindings
           JOIN orchestration_v2_projection_provider_sessions AS sessions

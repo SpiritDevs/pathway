@@ -93,6 +93,7 @@ import Migration0077 from "./Migrations/077_ProjectionDecodeVerifiedBuild.ts";
 import Migration0078 from "./Migrations/078_AuthCloudIdentity.ts";
 import Migration0079 from "./Migrations/079_ApplicationSequenceIndex.ts";
 import Migration0080 from "./Migrations/080_ScheduledTaskWebhooks.ts";
+import Migration0081 from "./Migrations/081_NativeSubagentRecoveryIndexes.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -185,6 +186,7 @@ export const migrationEntries = [
   [78, "AuthCloudIdentity", Migration0078],
   [79, "ApplicationSequenceIndex", Migration0079],
   [80, "ScheduledTaskWebhooks", Migration0080],
+  [81, "NativeSubagentRecoveryIndexes", Migration0081],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

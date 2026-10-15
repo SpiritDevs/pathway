@@ -80,6 +80,23 @@ function isNonterminalNodeStatus(status: string): boolean {
   return status === "pending" || status === "running" || status === "waiting";
 }
 
+/** Ids of the records `events` already writes with an event of `type`. */
+function writtenIds(
+  events: ReadonlyArray<OrchestrationV2DomainEvent>,
+  type: "subagent.updated" | "node.updated" | "turn-item.updated",
+): Set<string> {
+  return new Set(
+    events.flatMap((event) =>
+      (event.type === "subagent.updated" ||
+        event.type === "node.updated" ||
+        event.type === "turn-item.updated") &&
+      event.type === type
+        ? [event.payload.id]
+        : [],
+    ),
+  );
+}
+
 function providerThreadHasPendingBackgroundTasks(
   providerThread: ProjectionStore.ProviderRuntimeRecoveryProjection["providerThreads"][number],
 ): boolean {
@@ -458,6 +475,101 @@ export const make = Effect.gen(function* () {
             providerInstanceId,
             occurredAt: now,
             payload: { ...staleSubagentNode, status: "cancelled", completedAt: now },
+          });
+        }
+      }
+      // No provider process outlives the server, so a native subagent still
+      // open here never reports its end, even when its run and turn item have
+      // already closed. App-owned tasks live on their own runs and are left to
+      // them.
+      const cancelledSubagentIds = writtenIds(events, "subagent.updated");
+      const cancelledNodeIds = writtenIds(events, "node.updated");
+      for (const subagent of projection.subagents ?? []) {
+        if (
+          subagent.origin !== "provider_native" ||
+          !isNonterminalSubagentStatus(subagent.status)
+        ) {
+          continue;
+        }
+        const scope = {
+          threadId: projection.thread.id,
+          ...(subagent.runId === null ? {} : { runId: subagent.runId }),
+          nodeId: subagent.id,
+          providerInstanceId: subagent.providerInstanceId,
+          occurredAt: now,
+        };
+        if (!cancelledSubagentIds.has(subagent.id)) {
+          events.push({
+            ...scope,
+            id: yield* allocateEventId(),
+            type: "subagent.updated",
+            driver: subagent.driver,
+            payload: { ...subagent, status: "cancelled", completedAt: now, updatedAt: now },
+          });
+        }
+        const node = projection.nodes.find(
+          (candidate) => candidate.id === subagent.id && isNonterminalNodeStatus(candidate.status),
+        );
+        if (node !== undefined && !cancelledNodeIds.has(node.id)) {
+          cancelledNodeIds.add(node.id);
+          events.push({
+            ...scope,
+            id: yield* allocateEventId(),
+            type: "node.updated",
+            payload: { ...node, status: "cancelled", completedAt: now },
+          });
+        }
+      }
+      // A native subagent's own thread has no runs: its work is a runless root
+      // turn, plus items under it (Claude's live progress), that only the dead
+      // provider process could settle. Left open, the child reads as working
+      // forever.
+      const cancelledItemIds = writtenIds(events, "turn-item.updated");
+      for (const node of projection.nodes) {
+        if (
+          node.kind !== "root_turn" ||
+          node.runId !== null ||
+          !isNonterminalNodeStatus(node.status)
+        ) {
+          continue;
+        }
+        const scope = {
+          threadId: projection.thread.id,
+          nodeId: node.id,
+          providerInstanceId: projection.thread.providerInstanceId,
+          occurredAt: now,
+        };
+        if (!cancelledNodeIds.has(node.id)) {
+          cancelledNodeIds.add(node.id);
+          events.push({
+            ...scope,
+            id: yield* allocateEventId(),
+            type: "node.updated",
+            payload: { ...node, status: "cancelled", completedAt: now },
+          });
+        }
+        for (const item of projection.turnItems) {
+          if (
+            item.nodeId !== node.id ||
+            item.runId !== null ||
+            !isNonterminalTurnItemStatus(item.status) ||
+            cancelledItemIds.has(item.id)
+          ) {
+            continue;
+          }
+          events.push({
+            ...scope,
+            id: yield* allocateEventId(),
+            type: "turn-item.updated",
+            payload: {
+              ...item,
+              status: "cancelled",
+              completedAt: now,
+              updatedAt: now,
+              ...(item.type === "reasoning" || item.type === "assistant_message"
+                ? { streaming: false }
+                : {}),
+            },
           });
         }
       }
