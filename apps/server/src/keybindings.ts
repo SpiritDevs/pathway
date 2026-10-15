@@ -108,10 +108,13 @@ function isSameKeybindingRule(left: KeybindingRule, right: KeybindingRule): bool
   );
 }
 
-function keybindingShortcutContext(rule: KeybindingRule): string | null {
+function encodedRuleShortcut(rule: KeybindingRule): string | null {
   const parsed = parseKeybindingShortcut(rule.key);
-  if (!parsed) return null;
-  const encoded = encodeShortcut(parsed);
+  return parsed ? encodeShortcut(parsed) : null;
+}
+
+function keybindingShortcutContext(rule: KeybindingRule): string | null {
+  const encoded = encodedRuleShortcut(rule);
   if (!encoded) return null;
   return `${encoded}\u0000${rule.when ?? ""}`;
 }
@@ -505,8 +508,15 @@ const make = Effect.gen(function* () {
         if (existingCommands.has(defaultRule.command)) {
           continue;
         }
-        const conflictingEntry = customConfig.find((entry) =>
-          hasSameShortcutContext(entry, defaultRule),
+        // A backfilled default lands after every existing rule, so it would outrank any user rule
+        // on its key whatever that rule's `when`. Defaults are left to share keys with each other.
+        const defaultShortcut = encodedRuleShortcut(defaultRule);
+        const conflictingEntry = customConfig.find(
+          (entry) =>
+            hasSameShortcutContext(entry, defaultRule) ||
+            (defaultShortcut !== null &&
+              encodedRuleShortcut(entry) === defaultShortcut &&
+              !DEFAULT_KEYBINDINGS.some((rule) => isSameKeybindingRule(entry, rule))),
         );
         if (conflictingEntry) {
           shortcutConflictWarnings.push({
@@ -526,7 +536,7 @@ const make = Effect.gen(function* () {
           conflictingCommand: conflict.conflictingCommand,
           key: conflict.key,
           when: conflict.when,
-          reason: "shortcut context already used by existing rule",
+          reason: "shortcut already used by existing rule",
         });
       }
       if (missingDefaults.length === 0) {

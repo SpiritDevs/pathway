@@ -18,6 +18,51 @@ import {
 
 const quiet = { reportFailure: false, reportDefect: false };
 const HISTORY_FRESHNESS_MS = 5 * 60_000;
+// Answers persist across launches. Only a merged or closed answer for attached PRs alone is final
+// enough to wait a day; a branch can grow a PR opened outside Pathway at any time, so "no PR",
+// open, and branch-derived answers keep the five-minute recheck.
+const FINAL_RECHECK_MS = 24 * 60 * 60_000;
+
+function recheckAfterMs(thread: EnvironmentThreadShell, retained: ThreadChangeRequestState) {
+  const final =
+    thread.branch === null &&
+    threadPullRequestAttachments(thread).length > 0 &&
+    (retained.state === "merged" || retained.state === "closed");
+  return final ? FINAL_RECHECK_MS : HISTORY_FRESHNESS_MS;
+}
+
+/**
+ * Threads the background PR pass checks: provisionally placed threads, then every Active and
+ * Settled row whose section rests on a retained answer (an offscreen row has no live status to
+ * correct it, so an Active "open" answer could otherwise outlive its PR). The pass skips answers
+ * still within their recheck window. Order is check order: the open thread first, then Active and
+ * Settled as the sidebar shows them.
+ */
+export function sidebarPrRevalidationCandidates(input: {
+  readonly activeThreads: ReadonlyArray<EnvironmentThreadShell>;
+  readonly settledThreads: ReadonlyArray<EnvironmentThreadShell>;
+  readonly provisionalThreadKeys: ReadonlySet<string>;
+  readonly retainedStates: ReadonlyMap<string, ThreadChangeRequestState>;
+  readonly routeThreadKey: string | null;
+  readonly connectedEnvironmentIds: ReadonlySet<string>;
+}): EnvironmentThreadShell[] {
+  const keyOf = (thread: EnvironmentThreadShell) =>
+    scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+  const provisional = [...input.activeThreads, ...input.settledThreads].filter((thread) =>
+    input.provisionalThreadKeys.has(keyOf(thread)),
+  );
+  const routeIndex = provisional.findIndex((thread) => keyOf(thread) === input.routeThreadKey);
+  if (routeIndex > 0) provisional.unshift(...provisional.splice(routeIndex, 1));
+  const retained = (thread: EnvironmentThreadShell) =>
+    thread.settledOverride == null &&
+    !input.provisionalThreadKeys.has(keyOf(thread)) &&
+    input.retainedStates.has(keyOf(thread));
+  return [
+    ...provisional,
+    ...input.activeThreads.filter(retained),
+    ...input.settledThreads.filter(retained),
+  ].filter((thread) => input.connectedEnvironmentIds.has(thread.environmentId));
+}
 
 interface RevalidationInput {
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
@@ -175,14 +220,14 @@ export function createSidebarPrRevalidation(registry: ContextType<typeof Registr
       );
       for (const token of attempted) if (!eligible.has(token)) attempted.delete(token);
       pending = new Map(
-        [...eligible].filter(([token, { key, source }]) => {
+        [...eligible].filter(([token, { thread, key, source }]) => {
           if (attempted.has(token)) return false;
           const retained = input.retainedStates.get(key);
-          // No answer for the current source yet: check it once so the thread can leave loading.
+          // No answer for the current source yet: check it once to confirm its provisional section.
           if (retained?.source !== source) return true;
           return (
             retained.checkedAt === undefined ||
-            Date.now() - retained.checkedAt >= HISTORY_FRESHNESS_MS
+            Date.now() - retained.checkedAt >= recheckAfterMs(thread, retained)
           );
         }),
       );

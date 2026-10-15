@@ -7,6 +7,7 @@ import {
   type ResolvedKeybindingsConfig,
 } from "@spiritdevs/contracts";
 import {
+  ariaKeyShortcutsForCommand,
   formatShortcutLabel,
   isChatNewShortcut,
   isChatNewLocalShortcut,
@@ -1032,5 +1033,60 @@ describe("keybindingCaptureOwnsEvent", () => {
     const body = element(false);
     assert.isFalse(keybindingCaptureOwnsEvent({ target: body, composedPath: () => [body] }));
     assert.isFalse(keybindingCaptureOwnsEvent({ target: {}, composedPath: () => [{}, null] }));
+  });
+});
+
+describe("sidebar thread details", () => {
+  const press = (overrides: Partial<ShortcutEventLike> = {}) =>
+    event({ key: "i", code: "KeyI", ...overrides });
+
+  it("binds bare I only while a sidebar row has focus", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(press(), DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "MacIntel",
+        context: { sidebarThreadFocus: true },
+      }),
+      "sidebar.threadDetails",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(press(), DEFAULT_RESOLVED_KEYBINDINGS, { platform: "MacIntel" }),
+      null,
+    );
+  });
+
+  it("announces the effective binding in aria-keyshortcuts syntax", () => {
+    const rowContext = { context: { sidebarThreadFocus: true } };
+    assert.strictEqual(
+      ariaKeyShortcutsForCommand(DEFAULT_RESOLVED_KEYBINDINGS, "sidebar.threadDetails", {
+        ...rowContext,
+        platform: "MacIntel",
+      }),
+      "I",
+    );
+    const rebound = compile([
+      {
+        shortcut: modShortcut("i", { shiftKey: true }),
+        command: "sidebar.threadDetails",
+        whenAst: whenIdentifier("sidebarThreadFocus"),
+      },
+    ]);
+    assert.strictEqual(
+      ariaKeyShortcutsForCommand(rebound, "sidebar.threadDetails", {
+        ...rowContext,
+        platform: "Linux",
+      }),
+      "Control+Shift+I",
+    );
+    assert.strictEqual(
+      ariaKeyShortcutsForCommand(rebound, "sidebar.threadDetails", {
+        ...rowContext,
+        platform: "MacIntel",
+      }),
+      "Shift+Meta+I",
+    );
+    assert.strictEqual(
+      ariaKeyShortcutsForCommand(DEFAULT_BINDINGS, "sidebar.threadDetails", rowContext),
+      null,
+    );
   });
 });

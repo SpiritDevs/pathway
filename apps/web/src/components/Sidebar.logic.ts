@@ -1146,3 +1146,40 @@ export function sortScopedProjectsForSidebar<
       left.id.localeCompare(right.id),
   );
 }
+
+/**
+ * Where focus goes when a details card that took focus from its row closes: back to the row while
+ * focus is still inside the card (or has fallen to the body), and nowhere when the user already
+ * moved it elsewhere, such as tabbing out or clicking another control.
+ */
+export function detailsCardReturnFocus<Row>(input: {
+  readonly row: Row | null;
+  readonly card: { contains(node: Node | null): boolean } | null;
+  readonly activeElement: Element | null;
+  readonly body: Element;
+}): Row | null {
+  const { activeElement, body, card, row } = input;
+  if (activeElement === null || activeElement === body) return row;
+  return card?.contains(activeElement) ? row : null;
+}
+
+// `keyboard` survives the close, so the card returns focus to the row it took it from.
+export type SidebarThreadDetailsState = { readonly open: boolean; readonly keyboard: boolean };
+
+/**
+ * The details card's state after a Base UI open change, or null when the row must cancel the change.
+ * The keyboard opens the card through its popover handle (`imperative-action`). Once it has, hover
+ * no longer drives the card: a hover open still pending from before the key, or the mouseleave of
+ * the hover that first opened it, would hand the card back to hover, which turns off Base UI's focus
+ * manager. The row cancels those synchronously so Base UI keeps its keyboard state. A missing
+ * reason is the multi-PR badge, which opens the card in place.
+ */
+export function nextSidebarThreadDetailsState(
+  current: SidebarThreadDetailsState,
+  open: boolean,
+  reason: string | undefined,
+): SidebarThreadDetailsState | null {
+  if (current.open && current.keyboard && reason === "trigger-hover") return null;
+  if (!open) return { open: false, keyboard: current.keyboard };
+  return { open: true, keyboard: reason === "imperative-action" };
+}

@@ -1,4 +1,7 @@
-import { useSidebarPrRevalidation } from "../state/sidebarPrRevalidation";
+import {
+  sidebarPrRevalidationCandidates,
+  useSidebarPrRevalidation,
+} from "../state/sidebarPrRevalidation";
 import { QueuedThreadSidebar } from "./QueuedThreadSidebar";
 import { sortActiveThreadsForFocus, useFocusViews } from "./focus/focusViewPreferences";
 import {
@@ -19,6 +22,7 @@ import {
   type AlertPolicyRow,
 } from "@spiritdevs/contracts/threadAlerts";
 import { ThreadAlertBell } from "./ThreadAlertBell";
+import { SidebarThreadRowShell, type SortableThreadRowBag } from "./sidebar/SidebarThreadRowShell";
 import { threadAlertPoliciesAtom } from "../threadAlerts/state";
 import { useAtom, useAtomValue } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
@@ -37,7 +41,6 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-kit/modifiers";
-import { CSS } from "@dnd-kit/utilities";
 import {
   canSettle,
   canSnooze,
@@ -61,6 +64,7 @@ import { useFocusSwipe } from "../hooks/useFocusSwipe";
 import {
   threadIsVisibleAt,
   type Issue,
+  type ResolvedKeybindingsConfig,
   type ScopedThreadRef,
   ThreadId,
   EnvironmentId,
@@ -100,12 +104,15 @@ import {
   memo,
   useCallback,
   useEffect,
+  useId,
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { useParams, useRouter } from "@tanstack/react-router";
 
@@ -116,6 +123,7 @@ import {
 } from "@spiritdevs/client-runtime/state/runtime";
 import { isElectron } from "../env";
 import {
+  ariaKeyShortcutsForCommand,
   resolveShortcutCommand,
   shortcutLabelForCommand,
   shouldShowThreadJumpHintsForModifiers,
@@ -147,7 +155,6 @@ import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
-import { useNearViewport } from "../hooks/useNearViewport";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useEnvironment, useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { pendingDraftSendHold } from "../lib/pendingDraftSend";
@@ -216,6 +223,9 @@ import {
   intersectSidebarProjectScopes,
   resolveSidebarThreadModels,
   useThreadJumpHintVisibility,
+  detailsCardReturnFocus,
+  nextSidebarThreadDetailsState,
+  type SidebarThreadDetailsState,
 } from "./Sidebar.logic";
 import { useRightPanelStore } from "../rightPanelStore";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
@@ -261,7 +271,7 @@ import {
 } from "./ui/menu";
 import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
 import { SidebarChromeHeader } from "./sidebar/SidebarChrome";
-import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
+import { Popover, PopoverCreateHandle, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import {
   composerDraftHasUserContent,
@@ -440,6 +450,9 @@ function SidebarThreadTooltip({
   sideChats,
   onOpenSideChat,
   onOpenIssue,
+  cardRef,
+  takeFocus = false,
+  returnFocus = false,
 }: {
   thread: SidebarThreadSummary;
   branchPullRequest?: ThreadPr;
@@ -458,14 +471,22 @@ function SidebarThreadTooltip({
   sideChats: ReadonlyArray<SidebarThreadSummary>;
   onOpenSideChat: (threadId: ThreadId) => void;
   onOpenIssue: (issueKey: string) => void;
+  // Thread rows only (search results keep focus in the search input).
+  cardRef?: RefObject<HTMLDivElement | null>;
+  // Opened from the keyboard: focus moves onto the card, and `returnFocus` picks where it goes when
+  // the card closes.
+  takeFocus?: boolean;
+  returnFocus?: false | (() => HTMLElement | false);
 }) {
   return (
     <PopoverPopup
+      ref={cardRef}
       side="right"
       align="start"
       sideOffset={4}
-      initialFocus={false}
-      finalFocus={false}
+      initialFocus={takeFocus && cardRef ? cardRef : false}
+      finalFocus={takeFocus ? returnFocus : false}
+      aria-label={`Details for ${thread.title}`}
       viewportClassName="p-0"
       className={cn("max-w-80 text-left whitespace-normal", "pointer-events-auto")}
     >
@@ -641,16 +662,6 @@ function SnoozePopoverButton(props: {
     </Popover>
   );
 }
-
-// Subset of useSortable applied to a card's root <li> (pinned and active
-// sections). Listeners go on the whole card (no dedicated handle): the
-// pointer sensor's distance constraint keeps plain clicks working, and we
-// skip dnd-kit's aria attributes since there is no keyboard sensor and the
-// card body already carries its own button semantics.
-type SortableThreadRowBag = Pick<
-  ReturnType<typeof useSortable>,
-  "listeners" | "setNodeRef" | "transform" | "transition" | "isDragging"
->;
 
 function SortableThreadRow(props: {
   id: string;
@@ -1040,7 +1051,7 @@ function SettleActionTooltipText(props: {
   return settleActionLabel({ controlKeyHeld, ...props });
 }
 
-const SidebarThreadRow = memo(function SidebarThreadRow(props: {
+type SidebarThreadRowProps = {
   queuedStatusLabel?: string | null;
   alertProjectKey: string | null;
   alertPolicies: readonly AlertPolicyRow[] | null;
@@ -1086,6 +1097,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   providerEntryByInstanceId: ReadonlyMap<string, ProviderInstanceEntry>;
   sideChats: ReadonlyArray<SidebarThreadSummary>;
   timestampFormat: TimestampFormat;
+  keybindings: ResolvedKeybindingsConfig;
+  // `aria-keyshortcuts` for the row's details key, computed once for every row.
+  detailsKeyShortcuts: string | null;
   onThreadClick: (event: ReactMouseEvent, threadRef: ScopedThreadRef) => void;
   onThreadActivate: (threadRef: ScopedThreadRef) => void;
   onStartRename: (threadRef: ScopedThreadRef, title: string) => void;
@@ -1110,21 +1124,34 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   cachedChangeRequest?: ThreadChangeRequestState | undefined;
   onOpenIssue: (issueKey: string) => void;
   onOpenSideChat: (parentRef: ScopedThreadRef, sideChatThreadId: ThreadId) => void;
-}) {
+};
+
+type DetailsCardHandle = ReturnType<typeof PopoverCreateHandle>;
+// Base UI's change details, absent when the multi-PR badge opens the card.
+type DetailsChangeDetails = { readonly reason: string; cancel(): void };
+
+const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
+  props: SidebarThreadRowProps & {
+    near: boolean;
+    details: SidebarThreadDetailsState;
+    onDetailsOpenChange: (open: boolean, eventDetails?: DetailsChangeDetails) => void;
+    detailsCardRef: RefObject<HTMLDivElement | null>;
+    detailsHandleRef: RefObject<DetailsCardHandle | null>;
+    detailsTriggerId: string;
+    returnDetailsFocus: () => HTMLElement | false;
+  },
+) {
   const {
     isRenaming,
     onChangeRequestState,
     onCancelRename,
     onCommitRename,
-    onContextMenu,
     onAcknowledgeWoke,
     onRenameTitleChange,
     onSettle,
     onSettleAfterCompletionChange,
     onSnooze,
-    onStartRename,
     onThreadActivate,
-    onThreadClick,
     onUnsettle,
     onUnsnooze,
     onUnpin,
@@ -1152,24 +1179,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
   const terminalProcessCount = runningTerminalIds.length;
 
-  const viewport = useNearViewport();
-  const rowRef = useCallback(
-    (element: HTMLLIElement | null) => {
-      props.sortable?.setNodeRef(element);
-      const stopObserving = viewport.ref(element);
-      if (element === null) return;
-      return () => {
-        stopObserving?.();
-        props.sortable?.setNodeRef(null);
-      };
-    },
-    [props.sortable?.setNodeRef, viewport.ref],
-  );
   const { gitStatus, visibleBranchPr, badges, prState } = useSidebarChangeRequest({
     thread,
     projectCwd: props.projectCwd,
     poll: props.isActive,
-    enabled: viewport.near,
+    enabled: props.near,
     cached: props.cachedChangeRequest,
     onChangeRequestState,
   });
@@ -1295,15 +1309,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       sideChats={props.sideChats}
       onOpenSideChat={(sideChatThreadId) => props.onOpenSideChat(threadRef, sideChatThreadId)}
       onOpenIssue={props.onOpenIssue}
+      cardRef={props.detailsCardRef}
+      takeFocus={props.details.keyboard}
+      returnFocus={props.returnDetailsFocus}
     />
   );
 
-  const handleClick = useCallback(
-    (event: ReactMouseEvent) => {
-      onThreadClick(event, threadRef);
-    },
-    [onThreadClick, threadRef],
-  );
   const handleIssueClick = useCallback(
     (event: ReactMouseEvent) => {
       event.preventDefault();
@@ -1320,40 +1331,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       onAcknowledgeWoke(threadRef, props.wokeAt);
     },
     [onAcknowledgeWoke, props.wokeAt, threadRef],
-  );
-  const handleContextMenu = useCallback(
-    (event: ReactMouseEvent) => {
-      event.preventDefault();
-      onContextMenu(threadRef, { x: event.clientX, y: event.clientY });
-    },
-    [onContextMenu, threadRef],
-  );
-  const handleKeyDown = useCallback(
-    (event: ReactKeyboardEvent) => {
-      if (event.target !== event.currentTarget) return;
-      // Keyboard equivalent of right-click: the row has no visible actions button.
-      if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
-        event.preventDefault();
-        const bounds = event.currentTarget.getBoundingClientRect();
-        onContextMenu(threadRef, { x: bounds.left, y: bounds.bottom });
-        return;
-      }
-      if (event.key !== "Enter" && event.key !== " ") return;
-      event.preventDefault();
-      onThreadActivate(threadRef);
-    },
-    [onThreadActivate, threadRef],
-  );
-  const handleDoubleClick = useCallback(
-    (event: ReactMouseEvent) => {
-      if (isRenaming || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
-        return;
-      }
-      if ((event.target as HTMLElement).closest("button, a, input")) return;
-      event.preventDefault();
-      onStartRename(threadRef, thread.title);
-    },
-    [isRenaming, onStartRename, thread.title, threadRef],
   );
   const renameCommittedRef = useRef(false);
   useEffect(() => {
@@ -1451,13 +1428,16 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   useEffect(() => {
     if (!showSnoozeButton) setSnoozeMenuOpen(false);
   }, [showSnoozeButton]);
-  const [detailsOpen, setDetailsOpen] = useState(false);
+  const { details, onDetailsOpenChange } = props;
+  // Made with the row's body rather than per row, since offscreen rows never render a card.
+  const [detailsHandle] = useState(PopoverCreateHandle);
+  useImperativeHandle(props.detailsHandleRef, () => detailsHandle, [detailsHandle]);
   const handlePrClick = useCallback(
     (event: ReactMouseEvent<HTMLElement>) => {
       if (badges.length > 1) {
         event.preventDefault();
         event.stopPropagation();
-        setDetailsOpen(true);
+        onDetailsOpenChange(true);
         return;
       }
       if (!displayedPr?.url) return;
@@ -1473,6 +1453,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     [
       badges.length,
       displayedPr,
+      onDetailsOpenChange,
       onThreadActivate,
       openPrLink,
       openPullRequestsInRightPanel,
@@ -1485,8 +1466,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // like elevated cards while settled threads were plain rows, leaving neither
   // a useful hierarchy nor a reliable hover cue. Status now lives in the row
   // content; surface is reserved for interaction (hover, multi-select, route).
+  // The surface is the details card's hover trigger only: the row shell's primary element owns
+  // focus and button semantics, so the trigger drops the role and tab stop Base UI would add.
   const rowSurfaceClassName = cn(
-    "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left outline-none select-none",
+    "relative w-full overflow-hidden rounded-md",
     props.isActive
       ? "bg-sidebar-row-active text-sidebar-foreground"
       : isSelected
@@ -1603,33 +1586,21 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
 
   if (variant === "slim") {
     return (
-      <li
-        ref={rowRef}
-        data-thread-item
-        data-active-thread={props.isActive || undefined}
-        className={cn(
-          "relative -ml-[3px] list-none pl-[3px]",
-          props.deferRendering && "[content-visibility:auto] [contain-intrinsic-size:auto_34px]",
-        )}
-      >
+      <>
         {unreadDot}
-        <Popover open={detailsOpen} onOpenChange={setDetailsOpen}>
+        <Popover handle={detailsHandle} open={details.open} onOpenChange={onDetailsOpenChange}>
           <PopoverTrigger
+            id={props.detailsTriggerId}
             nativeButton={false}
             openOnHover
             delay={400}
             closeDelay={200}
             render={
               <div
-                role="button"
-                tabIndex={0}
-                data-testid="sidebar-row-slim"
+                role={undefined}
+                tabIndex={undefined}
                 aria-busy={isRegeneratingTitle || undefined}
                 className={cn(rowSurfaceClassName, "flex h-9 items-center gap-2.5 px-2.5")}
-                onClick={handleClick}
-                onDoubleClick={handleDoubleClick}
-                onKeyDown={handleKeyDown}
-                onContextMenu={handleContextMenu}
               />
             }
           >
@@ -1752,51 +1723,28 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
           </PopoverTrigger>
           {detailsTooltip}
         </Popover>
-      </li>
+      </>
     );
   }
 
   const diff = latestRunDiff(thread);
 
-  const sortable = props.sortable;
   return (
-    <li
-      data-thread-item
-      data-active-thread={props.isActive || undefined}
-      ref={rowRef}
-      style={
-        sortable
-          ? {
-              transform: CSS.Translate.toString(sortable.transform),
-              transition: sortable.transition,
-            }
-          : undefined
-      }
-      {...(sortable?.listeners ?? {})}
-      className={cn(
-        "relative -ml-[3px] list-none py-0.5 pl-[3px]",
-        props.deferRendering && "[content-visibility:auto] [contain-intrinsic-size:auto_96px]",
-        sortable?.isDragging && "z-20 opacity-80",
-      )}
-    >
+    <>
       {unreadDot}
-      <Popover open={detailsOpen} onOpenChange={setDetailsOpen}>
+      <Popover handle={detailsHandle} open={details.open} onOpenChange={onDetailsOpenChange}>
         <PopoverTrigger
+          id={props.detailsTriggerId}
           nativeButton={false}
           openOnHover
           delay={400}
           closeDelay={200}
           render={
             <div
-              role="button"
-              tabIndex={0}
-              data-testid="sidebar-row-card"
+              role={undefined}
+              tabIndex={undefined}
               aria-busy={isRegeneratingTitle || undefined}
               className={rowSurfaceClassName}
-              onClick={handleClick}
-              onDoubleClick={handleDoubleClick}
-              onKeyDown={handleKeyDown}
-              onContextMenu={handleContextMenu}
             />
           }
         >
@@ -2016,7 +1964,103 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         </PopoverTrigger>
         {detailsTooltip}
       </Popover>
-    </li>
+    </>
+  );
+});
+
+const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowProps) {
+  const { isRenaming, onContextMenu, onStartRename, onThreadActivate, onThreadClick, thread } =
+    props;
+  const threadRef = useMemo(
+    () => scopeThreadRef(thread.environmentId, thread.id),
+    [thread.environmentId, thread.id],
+  );
+  // Hover and the multi-PR badge open the details card in place; `sidebar.threadDetails` (I by
+  // default) on the focused row opens it with focus so keyboard users can reach its links.
+  const [details, setDetails] = useState<SidebarThreadDetailsState>({
+    open: false,
+    keyboard: false,
+  });
+  // Read synchronously by Base UI's change callback, which must cancel before React re-renders.
+  const detailsRef = useRef(details);
+  const primaryRef = useRef<HTMLDivElement>(null);
+  const detailsCardRef = useRef<HTMLDivElement>(null);
+  const detailsHandleRef = useRef<DetailsCardHandle>(null);
+  const detailsTriggerId = useId();
+  // The card's `finalFocus`. It names the row's primary element because Base UI's default target,
+  // the hover trigger, has no tab stop, so Base UI would focus its first tabbable child (Unpin or
+  // Snooze). It is a function rather than the bare ref because Base UI returns focus to an explicit
+  // ref even after the user tabbed or clicked elsewhere.
+  const returnDetailsFocus = useCallback(
+    () =>
+      detailsCardReturnFocus({
+        row: primaryRef.current,
+        card: detailsCardRef.current,
+        activeElement: document.activeElement,
+        body: document.body,
+      }) ?? false,
+    [],
+  );
+  const handleDetailsOpenChange = useCallback(
+    (open: boolean, eventDetails?: DetailsChangeDetails) => {
+      const next = nextSidebarThreadDetailsState(detailsRef.current, open, eventDetails?.reason);
+      if (next === null) {
+        eventDetails?.cancel();
+        return;
+      }
+      detailsRef.current = next;
+      setDetails(next);
+    },
+    [],
+  );
+  const showDetails = useCallback(() => {
+    // The handle opens with Base UI's imperative reason even over a hover-opened or hover-closing
+    // card, so its focus manager runs: the card takes focus, keeps Tab order, and returns focus to
+    // the row. Rows whose body has not rendered have no card or handle yet.
+    const handle = detailsHandleRef.current;
+    if (handle) {
+      handle.open(detailsTriggerId);
+      return;
+    }
+    detailsRef.current = { open: true, keyboard: true };
+    setDetails(detailsRef.current);
+  }, [detailsTriggerId]);
+  return (
+    <SidebarThreadRowShell
+      variant={props.variant}
+      title={thread.title}
+      active={props.isActive}
+      renaming={isRenaming}
+      detailsOpen={details.open}
+      keybindings={props.keybindings}
+      detailsKeyShortcuts={props.detailsKeyShortcuts}
+      primaryRef={primaryRef}
+      deferRendering={props.deferRendering}
+      sortable={props.sortable}
+      onClick={(event) => onThreadClick(event, threadRef)}
+      onDoubleClick={(event) => {
+        if (isRenaming || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        if ((event.target as HTMLElement).closest("button, a, input")) return;
+        event.preventDefault();
+        onStartRename(threadRef, thread.title);
+      }}
+      onActivate={() => onThreadActivate(threadRef)}
+      onContextMenu={(position) => onContextMenu(threadRef, position)}
+      onShowDetails={showDetails}
+    >
+      {(near) => (
+        <SidebarThreadRowContent
+          {...props}
+          near={near}
+          details={details}
+          onDetailsOpenChange={handleDetailsOpenChange}
+          detailsCardRef={detailsCardRef}
+          detailsHandleRef={detailsHandleRef}
+          detailsTriggerId={detailsTriggerId}
+          returnDetailsFocus={returnDetailsFocus}
+        />
+      )}
+    </SidebarThreadRowShell>
   );
 });
 
@@ -2194,6 +2238,13 @@ export default function Sidebar() {
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const threadDetailsKeyShortcuts = useMemo(
+    () =>
+      ariaKeyShortcutsForCommand(keybindings, "sidebar.threadDetails", {
+        context: { sidebarThreadFocus: true },
+      }),
+    [keybindings],
+  );
   const autoSettleAfterDays = useClientSettings((s) => s.sidebarAutoSettleAfterDays);
   const collapseWorkingThreads = useClientSettings((s) => s.sidebarCollapseWorkingThreads);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
@@ -2496,19 +2547,6 @@ export default function Sidebar() {
       return new Map([...current].filter(([key]) => keys.has(key)));
     });
   }, [threads, threadListReadiness, setChangeRequestStateByKey]);
-  const unavailableEnvironmentIds = useMemo(
-    () =>
-      new Set(
-        environments
-          .filter((environment) =>
-            ["available", "offline", "error", "reconnecting"].includes(
-              environment.connection.phase,
-            ),
-          )
-          .map((environment) => environment.environmentId),
-      ),
-    [environments],
-  );
   const lifecycleCapabilities = useMemo(() => {
     const capabilities = new Map(
       environments.map((environment) => [
@@ -2686,7 +2724,7 @@ export default function Sidebar() {
     snoozedThreads,
     settledThreads,
     snoozeNow,
-    loadingThreads,
+    provisionalThreadKeys,
   } = useMemo(() => {
     void nowMinute;
     // Snooze classification uses a REAL clock, not the quantized minute:
@@ -2707,14 +2745,13 @@ export default function Sidebar() {
     const snoozed: EnvironmentThreadShell[] = [];
     const working: EnvironmentThreadShell[] = [];
     const settled: EnvironmentThreadShell[] = [];
-    const loading: EnvironmentThreadShell[] = [];
-    const sections = { active, pinned, working, snoozed, settled, loading };
+    const provisional = new Set<string>();
+    const sections = { active, pinned, working, snoozed, settled };
     for (const thread of visible) {
       const capabilities = lifecycleCapabilities.get(thread.environmentId);
       const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-      const section = sidebarThreadSection(thread, {
+      const placement = sidebarThreadSection(thread, {
         now: preciseNow,
-        unavailable: unavailableEnvironmentIds.has(thread.environmentId),
         autoSettleAfterDays,
         queued: queuedStatusByThreadId.has(threadKey),
         unread: unreadNotificationThreadKeys.has(threadKey),
@@ -2724,6 +2761,8 @@ export default function Sidebar() {
         projectCwd: projectCwdByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null,
         changeRequests: changeRequestStateByKey,
       });
+      const { section } = placement;
+      if (placement.provisional) provisional.add(threadKey);
       // Opt-in: inbox threads with an agent at work (not waiting on approval
       // or input) tuck into the Working shelf until they need the user.
       const isWorking =
@@ -2757,14 +2796,13 @@ export default function Sidebar() {
         .map(({ thread }) => thread),
       settledThreads: sortSettledThreadsForSidebar(settled),
       snoozeNow: preciseNow,
-      loadingThreads: loading,
+      provisionalThreadKeys: provisional,
     };
   }, [
     autoSettleAfterDays,
     changeRequestStateByKey,
     collapseWorkingThreads,
     lifecycleCapabilities,
-    unavailableEnvironmentIds,
     projectCwdByKey,
     nowMinute,
     scopedProjectKeys,
@@ -2776,29 +2814,29 @@ export default function Sidebar() {
     unreadNotificationThreadKeys,
   ]);
 
-  // Background PR checks cover retained Settled rows and threads still waiting on a first answer.
-  const revalidatedThreads = useMemo(() => {
-    const connected = (thread: EnvironmentThreadShell) =>
-      environments.some(
-        (environment) =>
-          environment.environmentId === thread.environmentId &&
-          environment.connection.phase === "connected",
-      );
-    return [
-      ...settledThreads.filter(
-        (thread) =>
-          thread.settledOverride == null &&
-          connected(thread) &&
-          retainedStates.has(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
-      ),
-      ...loadingThreads.filter((thread) => {
-        const cached = changeRequestStateByKey.get(
-          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-        );
-        return connected(thread) && cached?.source !== threadChangeRequestSource(thread);
+  const revalidatedThreads = useMemo(
+    () =>
+      sidebarPrRevalidationCandidates({
+        activeThreads,
+        settledThreads,
+        provisionalThreadKeys,
+        retainedStates,
+        routeThreadKey,
+        connectedEnvironmentIds: new Set(
+          environments
+            .filter((environment) => environment.connection.phase === "connected")
+            .map((environment) => environment.environmentId),
+        ),
       }),
-    ];
-  }, [settledThreads, loadingThreads, environments, retainedStates, changeRequestStateByKey]);
+    [
+      activeThreads,
+      settledThreads,
+      provisionalThreadKeys,
+      routeThreadKey,
+      environments,
+      retainedStates,
+    ],
+  );
   useSidebarPrRevalidation(
     threadScope,
     revalidatedThreads,
@@ -5004,6 +5042,8 @@ export default function Sidebar() {
                           EMPTY_PROVIDER_ENTRIES
                         }
                         timestampFormat={timestampFormat}
+                        keybindings={keybindings}
+                        detailsKeyShortcuts={threadDetailsKeyShortcuts}
                         onThreadClick={handleThreadClick}
                         onThreadActivate={navigateToThread}
                         onStartRename={startThreadRename}
@@ -5318,7 +5358,7 @@ export default function Sidebar() {
               </ul>
             </TooltipProvider>
           ) : null}
-          {threadListReadiness !== "ready" || (!isSearchingThreads && loadingThreads.length > 0) ? (
+          {threadListReadiness !== "ready" ? (
             <p
               role="status"
               className="px-2 py-6 text-center text-xs text-sidebar-muted-foreground"
@@ -5330,7 +5370,6 @@ export default function Sidebar() {
           ) : null}
           {!isSearchingThreads &&
           threadListReadiness === "ready" &&
-          loadingThreads.length === 0 &&
           visibleDraftSessionCount === 0 &&
           visibleQueuedThreadCount === 0 &&
           pinnedThreads.length +

@@ -4,7 +4,10 @@ import { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
 import { AsyncResult, AtomRegistry } from "effect/unstable/reactivity";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import { makeThreadFixture } from "../test-fixtures";
-import { createSidebarPrRevalidation } from "./sidebarPrRevalidation";
+import {
+  createSidebarPrRevalidation,
+  sidebarPrRevalidationCandidates,
+} from "./sidebarPrRevalidation";
 import { threadChangeRequestSource, type ThreadChangeRequestState } from "./threadPullRequest";
 import { updateSidebarChangeRequest } from "./sidebarThreadLifecycle";
 
@@ -119,12 +122,102 @@ it("skips fresh history on repeated remounts and revalidates after five minutes"
   };
   for (let i = 0; i < 5; i++) await run();
   expect(mocks.command).not.toHaveBeenCalled();
+  // Even a merged branch answer can be joined by a PR opened outside Pathway.
   vi.mocked(Date.now).mockReturnValue(1_300_000);
   await run();
   expect(onResult).toHaveBeenCalledTimes(106);
   expect(mocks.command).toHaveBeenCalledTimes(1);
   await run();
   expect(mocks.command).toHaveBeenCalledTimes(1);
+});
+
+it("rechecks a launch's mutable answers after five minutes and final attached answers daily", async () => {
+  const attachment = { number: 7, url: "https://github.com/example/repo/pull/7" };
+  const attached = {
+    ...thread,
+    id: ThreadId.make("attached"),
+    branch: null,
+    attachedPullRequest: attachment,
+  };
+  const noPr = { ...thread, id: ThreadId.make("no-pr") };
+  const openAttached = { ...attached, id: ThreadId.make("open-attached") };
+  const both = { ...attached, id: ThreadId.make("both"), branch: "work" };
+  const threads = [attached, noPr, openAttached, both];
+  const answer = (item: (typeof threads)[number], state: ThreadChangeRequestState["state"]) =>
+    [
+      keyFor(item),
+      { source: threadChangeRequestSource(item), state, checkedAt: 1_000_000 },
+    ] as const;
+  const retainedStates = new Map([
+    answer(attached, "merged"),
+    answer(noPr, null),
+    answer(openAttached, "open"),
+    answer(both, "merged"),
+  ]);
+  const checked = async (now: number) => {
+    vi.mocked(Date.now).mockReturnValue(now);
+    const input = { ...inputFor(threads), retainedStates };
+    const pass = mount();
+    await pass.update(input);
+    pass.stop();
+    return input.onResult.mock.calls.map(([key]) => key).sort();
+  };
+  expect(await checked(1_000_000 + 60_000)).toEqual([]);
+  // A relaunch an hour later finds a PR opened outside Pathway on the quiet branch.
+  expect(await checked(1_000_000 + 60 * 60_000)).toEqual(
+    [noPr, openAttached, both].map(keyFor).sort(),
+  );
+  expect(await checked(1_000_000 + 24 * 60 * 60_000)).toEqual(threads.map(keyFor).sort());
+});
+
+it("rechecks a relaunch's retained Active answers, so an externally merged PR can settle", async () => {
+  const row = (id: string, overrides: Partial<(typeof history)[number]> = {}) => ({
+    ...history[0]!,
+    id: ThreadId.make(id),
+    ...overrides,
+  });
+  const active = row("active-open");
+  const fresh = row("active-fresh");
+  const kept = row("active-kept", { settledOverride: "active" });
+  const unchecked = row("active-no-answer");
+  const provisional = row("provisional");
+  const route = row("route-provisional");
+  const settled = row("settled");
+  const remote = row("remote", { environmentId: EnvironmentId.make("disconnected") });
+  const answer = (item: typeof active, checkedAt: number) =>
+    [
+      keyFor(item),
+      { source: threadChangeRequestSource(item), state: "open" as const, checkedAt },
+    ] as const;
+  const retainedStates = new Map([
+    answer(active, 0),
+    answer(fresh, 1_000_000),
+    answer(kept, 0),
+    answer(settled, 0),
+    answer(remote, 0),
+  ]);
+  const candidates = sidebarPrRevalidationCandidates({
+    activeThreads: [active, fresh, kept, unchecked, provisional, remote, route],
+    settledThreads: [settled],
+    provisionalThreadKeys: new Set([keyFor(provisional), keyFor(route)]),
+    retainedStates,
+    routeThreadKey: keyFor(route),
+    connectedEnvironmentIds: new Set([row("connected").environmentId]),
+  });
+  expect(candidates.map(keyFor)).toEqual([route, provisional, active, fresh, settled].map(keyFor));
+  // The pass leaves the answer checked a minute ago alone and finds the merge on the other.
+  mocks.command.mockResolvedValue(
+    AsyncResult.success({
+      refName: "work",
+      pr: { state: "merged", url: "https://github.com/example/repo/pull/2" },
+    }),
+  );
+  vi.mocked(Date.now).mockReturnValue(1_060_000);
+  const input = { ...inputFor(candidates), retainedStates };
+  await mount().update(input);
+  const results = new Map(input.onResult.mock.calls.map(([key, value]) => [key, value.state]));
+  expect(results.get(keyFor(active))).toBe("merged");
+  expect(results.has(keyFor(fresh))).toBe(false);
 });
 
 it.each([false, true])(
@@ -173,6 +266,32 @@ it("bounds concurrent work and stops queued history reads when the sidebar leave
   await complete;
   expect(input.onResult).not.toHaveBeenCalled();
   expect(mocks.command).toHaveBeenCalledTimes(4);
+});
+
+it("checks a newly prioritized thread next without exceeding four reads", async () => {
+  const reads = new Map<string, ReturnType<typeof deferred<unknown>>>();
+  let readStarted = () => {};
+  mocks.command.mockImplementation((_registry, _command, input: { input: { cwd: string } }) => {
+    const read = deferred<unknown>();
+    reads.set(input.input.cwd, read);
+    readStarted();
+    return read.promise;
+  });
+  const threads = history
+    .slice(0, 8)
+    .map((item, index) => ({ ...item, worktreePath: `/work/${index}` }));
+  const pass = mount();
+  const first = pass.update(inputFor(threads));
+  expect([...reads.keys()]).toEqual(["/work/0", "/work/1", "/work/2", "/work/3"]);
+  const second = pass.update(inputFor([threads[7]!, ...threads.slice(0, 7)]));
+  const fifth = new Promise<void>((resolve) => (readStarted = resolve));
+  reads.get("/work/0")!.resolve(openStatus);
+  await fifth;
+  expect([...reads.keys()]).toEqual(["/work/0", "/work/1", "/work/2", "/work/3", "/work/7"]);
+  mocks.command.mockResolvedValue(openStatus);
+  for (const read of reads.values()) read.resolve(openStatus);
+  await Promise.all([first, second]);
+  expect(mocks.command).toHaveBeenCalledTimes(8);
 });
 
 it("never shares reads between environments or publishes a superseded branch result", async () => {

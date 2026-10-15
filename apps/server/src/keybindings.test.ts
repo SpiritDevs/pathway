@@ -346,6 +346,33 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     );
   });
 
+  it.effect("does not backfill a default over a user rule on its key in another context", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+      const userRule: KeybindingRule = { key: "i", command: "thread.next" };
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [
+        ...Keybindings.DEFAULT_KEYBINDINGS.filter(
+          (rule) => rule.command !== "sidebar.threadDetails" && rule.command !== "terminal.split",
+        ),
+        userRule,
+      ]);
+
+      yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings.Keybindings;
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+      });
+
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      // The user's global `i` stays the only rule on that key, so it still wins on a focused row.
+      assert.deepStrictEqual(
+        persisted.filter((entry) => entry.key === "i"),
+        [userRule],
+      );
+      // Defaults still share keys with each other: `mod+d` is also `diff.toggle`'s.
+      assert.isTrue(persisted.some((entry) => entry.command === "terminal.split"));
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
   it.effect("upserts custom keybindings to configured path", () =>
     Effect.gen(function* () {
       const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;

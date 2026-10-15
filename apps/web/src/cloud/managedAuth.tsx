@@ -13,6 +13,7 @@ import { environmentCatalog } from "../connection/catalog";
 import { runtime } from "../lib/runtime";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { useAtomCommand } from "../state/use-atom-command";
+import { clearSidebarChangeRequests } from "../state/sidebarThreadLifecycle";
 import { markCloudSyncReset } from "./syncReset";
 import { resolveRelayClerkTokenOptions } from "./publicConfig";
 
@@ -66,6 +67,8 @@ export function ManagedRelayAuthProvider({ children }: { readonly children: Reac
      * sync runtime because only it can know when the replica databases are safely closed.
      */
     const queueAccountCleanup = (account: string) => {
+      // Synchronous, so a delayed sidebar cache write cannot land after sign-out.
+      clearSidebarChangeRequests(account);
       const previousTransition = accountTransitionRef.current ?? Promise.resolve();
       accountTransitionRef.current = previousTransition.then(async () => {
         markCloudSyncReset(account);
