@@ -24,7 +24,7 @@ import {
 import { ThreadAlertBell } from "./ThreadAlertBell";
 import { SidebarThreadRowShell, type SortableThreadRowBag } from "./sidebar/SidebarThreadRowShell";
 import { threadAlertPoliciesAtom } from "../threadAlerts/state";
-import { useAtom, useAtomValue } from "@effect/atom-react";
+import { useAtom, useAtomSet, useAtomValue } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
 import {
   DndContext,
@@ -156,6 +156,7 @@ import { useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
+import { usePageVisible } from "../hooks/usePageVisible";
 import { useEnvironment, useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { pendingDraftSendHold } from "../lib/pendingDraftSend";
 import {
@@ -288,9 +289,11 @@ import {
   focusListAtom,
   focusMutationsAtom,
   focusNotificationsAtom,
+  focusSeenAtAtom,
   focusUnreadCountAtom,
   threadHasUnreadNotificationAtom,
   unreadNotificationThreadKeysAtom,
+  unseenFocusIdsAtom,
   visibleFocusProjectKeysAtom,
 } from "../cloud/focusReadModel";
 import type { FocusNotification } from "@spiritdevs/contracts/focus";
@@ -2209,6 +2212,7 @@ export default function Sidebar() {
   const focusMutations = useAtomValue(focusMutationsAtom);
   const focusNotifications = useAtomValue(focusNotificationsAtom);
   const focusUnreadCount = useAtomValue(focusUnreadCountAtom);
+  const unseenFocusIds = useAtomValue(unseenFocusIdsAtom);
   const [activeFocusId, setActiveFocusId] = useAtom(activeFocusIdAtom);
   const shownFocuses = useMemo(
     () =>
@@ -2236,7 +2240,7 @@ export default function Sidebar() {
   );
   const startWorkIssuesByThread = useStartWorkIssuesByThread();
   const router = useRouter();
-  const { isMobile, setOpenMobile } = useSidebar();
+  const { isMobile, open, openMobile, hoverRevealed, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const threadDetailsKeyShortcuts = useMemo(
     () =>
@@ -2878,6 +2882,42 @@ export default function Sidebar() {
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
   const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
   const isSearchingThreads = threadSearchQuery.trim().length > 0;
+  // Only a shown, loaded view of the whole Focus acknowledges notifications, and only the ones it
+  // rendered; search, the project picker, or the company scope can hide some of them.
+  const acknowledgeFocusView = useAtomSet(focusSeenAtAtom);
+  const pageVisible = usePageVisible();
+  const focusViewShown =
+    threadListReadiness === "ready" &&
+    pageVisible &&
+    (isMobile ? openMobile : open || hoverRevealed);
+  const focusViewNarrowed = isSearchingThreads || projectScopeKey !== null;
+  const notificationInFocusView = useCallback(
+    (notification: FocusNotification) => {
+      const projectKey = focusNotificationProjectKey(notification);
+      return projectKey === null
+        ? threadTitlesByKey.has(
+            scopedThreadKey(scopeThreadRef(notification.environmentId, notification.threadId)),
+          )
+        : visibleFocusProjectKeys.has(projectKey);
+    },
+    [threadTitlesByKey, visibleFocusProjectKeys],
+  );
+  useEffect(() => {
+    acknowledgeFocusView({
+      focusId: activeFocusId,
+      notifications: focusNotifications,
+      shown: focusViewShown,
+      narrowed: focusViewNarrowed,
+      inView: notificationInFocusView,
+    });
+  }, [
+    acknowledgeFocusView,
+    activeFocusId,
+    focusNotifications,
+    focusViewNarrowed,
+    focusViewShown,
+    notificationInFocusView,
+  ]);
   // The header search rests as an icon and stays open while focused or holding a query.
   const [threadSearchFocused, setThreadSearchFocused] = useState(false);
   const threadSearchExpanded = threadSearchFocused || isSearchingThreads;
@@ -5408,6 +5448,7 @@ export default function Sidebar() {
         assignments={focusAssignments}
         visibleProjectKeys={visibleFocusProjectKeys}
         activeFocusId={activeFocusId}
+        unseenFocusIds={unseenFocusIds}
         onActiveFocusChange={setActiveFocusId}
         editorProjects={focusEditorProjects}
         unreadCount={focusUnreadCount}
