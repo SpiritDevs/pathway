@@ -14,6 +14,8 @@ A subagent started through Pathway gets the same access as the agent that starte
 
 When a subagent stops to ask something, such as whether it may change a file outside the scope it was given, the question goes to the agent that started it. That agent answers when the decision is part of the work it handed off, and the subagent carries on. When the question needs your judgement, the agent asks you and passes your answer back. You can still answer a subagent's question yourself in its conversation.
 
+When subagents started through Pathway finish, the agent that started them is woken to pick up their results, however many it started. Subagents that finish around the same time report back together, and results that arrive while the agent is already reading earlier ones follow in its next update.
+
 Codex task names appear as readable labels. For example, `audit_server` appears as "Audit server" in the conversation, Lineage, and the child conversation's title. Nested subagents use their own task name; their relationship to the parent remains in Lineage. Previously saved conversations retain their saved titles.
 
 Only subagents started through Pathway appear in Lineage. If an agent starts another provider's command-line tool itself, for example running `codex exec` in a terminal command, that work shows only as background work, without a provider, model, or child conversation. Claude agents can't do this in Pathway: the command is blocked and the agent is told to delegate the work as a subagent instead. If you have a project note or memory telling an agent to run `codex exec` or `claude -p`, update it to ask for a subagent.

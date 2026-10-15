@@ -830,7 +830,6 @@ for (const status of ["completed", "interrupted", "failed", "cancelled", "rolled
         assert.deepEqual(repaired.runs[0]?.delegatedCompletion, {
           disposition: "open",
           nextGeneration: 2,
-          settledDeliveryCount: 1,
           delivery: null,
         });
         assert.deepEqual(repaired.subagents[0]?.completionDelivery, {
