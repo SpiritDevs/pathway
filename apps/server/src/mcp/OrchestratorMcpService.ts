@@ -38,7 +38,6 @@ import {
   type OrchestratorMcpTaskAnswerResult,
   type OrchestratorMcpTaskCancelInput,
   type OrchestratorMcpTaskCancelResult,
-  type OrchestratorMcpTaskQuestion,
   type OrchestratorMcpUpdateScheduledTaskInput,
   type OrchestratorMcpThreadDetail,
   type OrchestratorMcpThreadInterruptInput,
@@ -74,7 +73,7 @@ import * as Schema from "effect/Schema";
 import { getChangeRequestTerminologyFromUrl } from "@spiritdevs/shared/sourceControl";
 
 import { isBuiltInProviderAdapterDriverV2 } from "../orchestration-v2/builtInProviderAdapterDrivers.ts";
-import { subagentResultForRun } from "../orchestration-v2/SubagentProjection.ts";
+import { openTaskQuestions, subagentResultForRun } from "../orchestration-v2/SubagentProjection.ts";
 import {
   isActiveRun,
   latestActiveRun,
@@ -356,6 +355,18 @@ function isTerminalTaskStatus(
   );
 }
 
+/** A question in the result that stops the child until someone answers it. */
+function hasBlockingTaskQuestion(
+  childProjection: Pick<OrchestrationV2ThreadProjection, "runtimeRequests">,
+  response: OrchestratorMcpDelegateTaskResult,
+): boolean {
+  return (response.pendingQuestions ?? []).some((question) =>
+    childProjection.runtimeRequests.some(
+      (request) => request.id === question.requestId && request.isBlocking !== false,
+    ),
+  );
+}
+
 function directAppOwnedChildTask(
   parent: OrchestrationV2ThreadProjection,
   target: OrchestrationV2ThreadProjection,
@@ -443,40 +454,6 @@ export function resolveDelegatedRuntimeMode(
   return parentMode === "full-access"
     ? Effect.succeed(parentMode)
     : resolveRuntimeMode(parentMode, requested);
-}
-
-/**
- * Questions a delegated child is still waiting on. Secret questions stay with
- * the user, so they are left out rather than offered to the parent agent.
- */
-export function openTaskQuestions(
-  projection: Pick<OrchestrationV2ThreadProjection, "runtimeRequests" | "turnItems">,
-): ReadonlyArray<OrchestratorMcpTaskQuestion> {
-  return projection.runtimeRequests.flatMap((request) => {
-    if (
-      request.kind !== "user_input" ||
-      request.status !== "pending" ||
-      request.responseCapability.type === "not_resumable"
-    ) {
-      return [];
-    }
-    const item = projection.turnItems.find(
-      (candidate) => candidate.type === "user_input_request" && candidate.requestId === request.id,
-    );
-    if (item?.type !== "user_input_request" || item.questions.some((q) => q.isSecret)) {
-      return [];
-    }
-    return [
-      {
-        requestId: request.id,
-        questions: item.questions.map((question) => ({
-          id: question.id,
-          question: question.question,
-          options: question.options.map((option) => option.label),
-        })),
-      },
-    ];
-  });
 }
 
 function resolveInteractionMode(
@@ -1023,13 +1000,20 @@ const make = Effect.gen(function* () {
       ? crypto.randomUUIDv4.pipe(Effect.orDie)
       : Effect.succeed(clientRequestId);
 
-  const readTask = (
+  /** Reads a task's result along with its child projection, for checks the result omits. */
+  const readTaskState = (
     scope: McpInvocationScope,
     taskId: NodeId,
     waitTimedOut = false,
     acknowledgeTerminal = false,
     acknowledgementOperation = "task-status-acknowledge",
-  ): Effect.Effect<OrchestratorMcpDelegateTaskResult, OrchestratorMcpFailure> =>
+  ): Effect.Effect<
+    {
+      readonly response: OrchestratorMcpDelegateTaskResult;
+      readonly childProjection: OrchestrationV2ThreadProjection;
+    },
+    OrchestratorMcpFailure
+  > =>
     Effect.gen(function* () {
       yield* requireCapability(scope);
       const parentProjection = yield* loadProjection(scope.threadId);
@@ -1107,14 +1091,32 @@ const make = Effect.gen(function* () {
             ),
           );
       }
-      return response;
+      return { response, childProjection };
     });
 
+  const readTask = (
+    scope: McpInvocationScope,
+    taskId: NodeId,
+    waitTimedOut = false,
+    acknowledgeTerminal = false,
+    acknowledgementOperation = "task-status-acknowledge",
+  ): Effect.Effect<OrchestratorMcpDelegateTaskResult, OrchestratorMcpFailure> =>
+    readTaskState(scope, taskId, waitTimedOut, acknowledgeTerminal, acknowledgementOperation).pipe(
+      Effect.map((state) => state.response),
+    );
+
+  // Ends at a terminal status, or early when the child is blocked on a question the
+  // parent can answer: otherwise the child waits on the parent and the parent on the child.
   const waitForTask = (scope: McpInvocationScope, taskId: NodeId, timeoutMs: number) =>
     Effect.gen(function* () {
       while (true) {
-        const result = yield* readTask(scope, taskId, false, true);
-        if (isTerminalTaskStatus(result.status)) return result;
+        const { response, childProjection } = yield* readTaskState(scope, taskId, false, true);
+        if (
+          isTerminalTaskStatus(response.status) ||
+          hasBlockingTaskQuestion(childProjection, response)
+        ) {
+          return response;
+        }
         yield* Effect.sleep(Duration.millis(TASK_POLL_INTERVAL_MS));
       }
     }).pipe(Effect.timeoutOption(Duration.millis(timeoutMs)));
@@ -1610,13 +1612,13 @@ const make = Effect.gen(function* () {
                 Math.max(1, input.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS),
               );
               const waited = yield* waitForTask(scope, taskId, timeoutMs);
-              if (Option.isSome(waited)) {
+              if (Option.isSome(waited) && isTerminalTaskStatus(waited.value.status)) {
                 return waited.value;
               }
-              // The blocking wait timed out, so it no longer owns delivery: upgrade
-              // the task so a later terminal wakes the parent even mid-turn. Best
-              // effort; on failure the settled_only policy still wakes a settled
-              // parent.
+              // The blocking wait timed out or returned a question, so it no longer
+              // owns delivery: upgrade the task so a later terminal wakes the parent
+              // even mid-turn. Best effort; on failure the settled_only policy still
+              // wakes a settled parent.
               yield* threadManagement
                 .dispatch({
                   type: "delegated_task.wake-policy",
@@ -1630,7 +1632,7 @@ const make = Effect.gen(function* () {
                   completionWake: "always",
                 })
                 .pipe(
-                  // The tool result is the timed-out task either way, so failures
+                  // The tool result still returns after a timeout or question, so failures
                   // stay warnings. Keep the two shapes apart: a rejected receipt
                   // means this exact command id already failed (a replay of a
                   // no-op upgrade), while anything else is a fresh dispatch fault.
@@ -1652,7 +1654,7 @@ const make = Effect.gen(function* () {
                     }),
                   ),
                 );
-              return yield* readTask(scope, taskId, true, true);
+              return yield* readTask(scope, taskId, Option.isNone(waited), true);
             })
         : delegateRemoteTask(
             scope,

@@ -18,6 +18,7 @@ import { layer as checkpointRollbackServiceLayer } from "./CheckpointRollbackSer
 import { layer as commandPolicyLayer } from "./CommandPolicy.ts";
 import { layerFromApplicationReceipts as commandReceiptStoreLayer } from "./CommandReceiptStore.ts";
 import { layer as contextHandoffServiceLayer } from "./ContextHandoffService.ts";
+import { layer as delegatedTaskQuestionWakeLayer } from "./DelegatedTaskQuestionWake.ts";
 import { layer as effectOutboxLayer } from "./EffectOutbox.ts";
 import {
   executorLayer as effectExecutorLayer,
@@ -326,6 +327,7 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
   scheduledTaskProvided,
   usageRecoveryLayer.pipe(Layer.provide(threadManagementProvided)),
   providerContinuationWorkerProvided,
+  delegatedTaskQuestionWakeLayer.pipe(Layer.provide(threadManagementProvided)),
   temporaryThreadSettlementLayer.pipe(Layer.provide(threadManagementProvided)),
   allowanceResumeLayer.pipe(
     Layer.provide(Layer.mergeAll(threadManagementProvided, projectionStoreLayer)),
