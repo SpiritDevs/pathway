@@ -3,6 +3,7 @@ import { notifyOrchestratorThreadUpdate } from "./lib/aiOrchestratorSignals.ts";
 import { scheduleThreadWorkRefresh } from "./lib/aiOrchestratorWorkRefresh.ts";
 // @effect-diagnostics globalDate:off -- Convex mutations use the transaction clock.
 /** Environment-published, cloud-safe Agent Thread discovery metadata. */
+import { CloudAgentThreadShell } from "@spiritdevs/contracts/cloudProject";
 import { v } from "convex/values";
 
 import { canonicalJson } from "../src/canonicalJson.ts";
@@ -29,66 +30,10 @@ import {
 } from "./lib/threadQueueRetention.ts";
 
 const MAX_RECONCILE_REMOVALS = 100;
-/** Must cover every field of the contracts `CloudAgentThreadShell`; upserts with unknown fields are rejected. */
-export const AGENT_THREAD_SHELL_FIELDS = new Set([
-  "createdBy",
-  "creationSource",
-  "id",
-  "projectId",
-  "conversationPath",
-  "conversationCompanyId",
-  "orchestratorOrigin",
-  "temporary",
-  "ownedWorktreePath",
-  "ownedBranch",
-  "keptAt",
-  "title",
-  "providerInstanceId",
-  "modelSelection",
-  "usedModels",
-  "runtimeMode",
-  "interactionMode",
-  "branch",
-  "worktreePath",
-  "workspaceMove",
-  "lineage",
-  "forkKind",
-  "locations",
-  "forkedFrom",
-  "activeProviderThreadId",
-  "latestRunId",
-  "latestRunRequestedAt",
-  "latestRunStartedAt",
-  "latestRunCompletedAt",
-  "activeRunId",
-  "activityRunStatus",
-  "status",
-  "allowanceHold",
-  "lastError",
-  "pendingRuntimeRequest",
-  "latestVisibleMessage",
-  "latestUserMessageAt",
-  "attachedPullRequest",
-  "attachedPullRequests",
-  "detachedPullRequestUrls",
-  "hasActionableProposedPlan",
-  "pendingBackgroundTasks",
-  "itemCount",
-  "visibleItemCount",
-  "createdAt",
-  "updatedAt",
-  "archivedAt",
-  "settledOverride",
-  "settledAt",
-  "settleAfterCompletion",
-  "snoozedUntil",
-  "snoozedAt",
-  "pinnedAt",
-  "pinOrderKey",
-  "lastVisitedAt",
-  "titleRegeneration",
-  "deletedAt",
-]);
+/** Upserts with a field the contracts `CloudAgentThreadShell` does not define are rejected. */
+export const AGENT_THREAD_SHELL_FIELDS: ReadonlySet<string> = new Set(
+  Object.keys(CloudAgentThreadShell.fields),
+);
 const LATEST_VISIBLE_MESSAGE_FIELDS = new Set(["id", "role", "updatedAt"]);
 
 function agentThreadId(environmentId: string, threadId: string): string {

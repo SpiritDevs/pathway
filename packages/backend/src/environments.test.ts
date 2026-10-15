@@ -7,7 +7,22 @@ import {
 } from "../convex/lib/environmentRuntime.ts";
 // @effect-diagnostics globalDate:off -- Test fixtures mirror Convex documents and use epoch milliseconds.
 /** End-to-end company environment registry, authorization, feed, and bootstrap coverage. */
+import {
+  EnvironmentId,
+  MessageId,
+  ProjectId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  ProviderThreadId,
+  RunId,
+  RuntimeRequestId,
+  ThreadId,
+} from "@spiritdevs/contracts";
+import { CloudAgentThreadShell } from "@spiritdevs/contracts/cloudProject";
+import { CompanyId } from "@spiritdevs/contracts/company";
 import { convexTest } from "convex-test";
+import * as DateTime from "effect/DateTime";
+import * as Schema from "effect/Schema";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { api } from "../convex/_generated/api.js";
@@ -20,6 +35,7 @@ import { PUBLISHER_RECONCILIATION_INTERVAL_MS } from "../convex/lib/publisherRec
 import { functionHandler, measureDatabaseReads } from "./testDatabaseReads.ts";
 
 const RELAY_ISSUER = "https://relay.example.test";
+const encodeCloudShell = Schema.encodeSync(CloudAgentThreadShell);
 process.env.PATHWAY_RELAY_JWT_ISSUER = RELAY_ISSUER;
 process.env.PATHWAY_RELAY_JWKS_URL = `${RELAY_ISSUER}/.well-known/jwks.json`;
 
@@ -1130,6 +1146,127 @@ describe("environment registry", () => {
         },
       }),
     ).rejects.toThrow("may not contain message text");
+  });
+
+  it("accepts a shell carrying every field an environment publishes", async () => {
+    const t = harness();
+    await seedRegistration(t);
+    await t.run(async (ctx) => {
+      const registration = await ctx.db.query("environmentRegistrations").unique();
+      if (registration === null) throw new Error("missing environment fixture");
+      await ctx.db.patch(registration._id, { serviceRoleIds: [MANAGER_ROLE_ID] });
+    });
+    await asUser(t, "manager").mutation(api.cloudProjects.ensureEnvironmentProject, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: PROJECT_ID,
+      localWorkspaceRoot: "/workspace/pathway",
+      name: "Pathway",
+    });
+    const now = DateTime.makeUnsafe("2026-10-01T00:00:00.000Z");
+    const threadId = ThreadId.make("thread-full");
+    const instanceId = ProviderInstanceId.make("codex");
+    // `Required` makes a new contract shell field fail to typecheck here until it is published.
+    const shell = {
+      subagentComposerStates: [
+        {
+          childThreadId: ThreadId.make("thread-child"),
+          origin: "app_owned",
+          driver: ProviderDriverKind.make("codex"),
+          model: "gpt-5.4",
+          options: [{ id: "effort", value: "high" }],
+        },
+      ],
+      allowanceHold: "hold-1",
+      createdBy: "user",
+      creationSource: "web",
+      id: threadId,
+      projectId: ProjectId.make(PROJECT_ID),
+      conversationCompanyId: CompanyId.make(COMPANY_ID),
+      orchestratorOrigin: {
+        execution: { threadId: "thread-orchestrator", runId: "run-orchestrator", messageId: "m-1" },
+        orchestratorId: "orchestrator-1",
+        companyId: COMPANY_ID,
+        commandId: "command-orchestrator",
+      },
+      conversationPath: null,
+      ownedWorktreePath: "/worktrees/full",
+      ownedBranch: "full",
+      temporary: false,
+      keptAt: now,
+      title: "Every field",
+      providerInstanceId: instanceId,
+      modelSelection: { instanceId, model: "gpt-5.4" },
+      usedModels: [{ instanceId, model: "gpt-5.4" }],
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: "full",
+      worktreePath: "/worktrees/full",
+      workspaceMove: null,
+      lineage: {
+        rootThreadId: threadId,
+        parentThreadId: ThreadId.make("thread-parent"),
+        relationshipToParent: "fork",
+        parentEnvironmentId: EnvironmentId.make(ENVIRONMENT_ID),
+      },
+      forkKind: "side_chat",
+      locations: ["agents"],
+      forkedFrom: {
+        type: "run",
+        threadId: ThreadId.make("thread-parent"),
+        runId: RunId.make("run-0"),
+      },
+      activeProviderThreadId: ProviderThreadId.make("provider-thread-1"),
+      latestRunId: RunId.make("run-1"),
+      latestRunRequestedAt: now,
+      latestRunStartedAt: now,
+      latestRunCompletedAt: null,
+      activeRunId: RunId.make("run-1"),
+      activityRunStatus: "running",
+      status: "running",
+      lastError: null,
+      pendingRuntimeRequest: {
+        isBlocking: true,
+        id: RuntimeRequestId.make("runtime-request-1"),
+        kind: "command",
+        createdAt: now,
+      },
+      latestVisibleMessage: { id: MessageId.make("message-1"), role: "assistant", updatedAt: now },
+      latestUserMessageAt: now,
+      detachedPullRequestUrls: [],
+      attachedPullRequests: [{ number: 2, url: "https://example.com/pr/2" }],
+      attachedPullRequest: { number: 2, url: "https://example.com/pr/2" },
+      hasActionableProposedPlan: false,
+      pendingBackgroundTasks: [{ taskId: "task-1", description: "Build", taskType: "bash" }],
+      itemCount: 3,
+      visibleItemCount: 2,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+      settledOverride: null,
+      settledAt: null,
+      settleAfterCompletion: false,
+      snoozedUntil: null,
+      snoozedAt: null,
+      pinnedAt: now,
+      pinOrderKey: "a0",
+      lastVisitedAt: now,
+      titleRegeneration: null,
+      deletedAt: null,
+    } satisfies Required<CloudAgentThreadShell>;
+    const encoded = encodeCloudShell(shell);
+
+    await expect(
+      asEnvironment(t).mutation(api.agentThreads.upsert, {
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+        threadId,
+        localProjectId: PROJECT_ID,
+        shell: encoded,
+      }),
+    ).resolves.toEqual({ outcome: "published" });
+    const thread = await t.run(async (ctx) => await ctx.db.query("agentThreads").unique());
+    expect(thread?.shell).toEqual(encoded);
   });
 
   it("reports an unbound project as an outcome instead of failing the upsert", async () => {
