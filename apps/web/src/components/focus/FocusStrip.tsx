@@ -89,6 +89,20 @@ export const FocusNotificationBadge = memo(function FocusNotificationBadge(
   );
 });
 
+/** Sits under a tab's icon while that Focus has notifications the user has not seen. */
+function FocusUnseenDot() {
+  return (
+    <span
+      aria-hidden
+      className="pointer-events-none absolute bottom-0 left-1/2 size-1 -translate-x-1/2 rounded-full bg-blue-500"
+    />
+  );
+}
+
+function focusTabLabel(name: string, unseen: boolean): string {
+  return unseen ? `${name}, new notifications` : name;
+}
+
 function FocusTabVisual(props: {
   readonly active: boolean;
   readonly accentColor?: string;
@@ -111,6 +125,7 @@ function FocusTabVisual(props: {
 const SortableFocusTab = memo(function SortableFocusTab(props: {
   readonly focus: Focus;
   readonly active: boolean;
+  readonly unseen: boolean;
   readonly onSelect: () => void;
   readonly onEdit: () => void;
 }) {
@@ -123,7 +138,7 @@ const SortableFocusTab = memo(function SortableFocusTab(props: {
       type="button"
       role="tab"
       aria-selected={props.active}
-      aria-label={props.focus.name}
+      aria-label={focusTabLabel(props.focus.name, props.unseen)}
       title={props.focus.name}
       onClick={props.onSelect}
       onContextMenu={(event) => {
@@ -131,7 +146,7 @@ const SortableFocusTab = memo(function SortableFocusTab(props: {
         props.onEdit();
       }}
       className={cn(
-        "flex h-7 w-6 shrink-0 cursor-pointer touch-none items-center justify-center rounded-md text-sidebar-muted-foreground outline-none transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+        "relative flex h-7 w-6 shrink-0 cursor-pointer touch-none items-center justify-center rounded-md text-sidebar-muted-foreground outline-none transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring",
         isDragging && "z-10 opacity-80",
       )}
       style={{ transform: CSS.Transform.toString(transform), transition }}
@@ -140,6 +155,7 @@ const SortableFocusTab = memo(function SortableFocusTab(props: {
       <FocusTabVisual active={props.active} accentColor={props.focus.accentColor}>
         <FocusIcon iconName={props.focus.iconName} className="size-4" />
       </FocusTabVisual>
+      {props.unseen ? <FocusUnseenDot /> : null}
     </button>
   );
 });
@@ -150,6 +166,7 @@ export function FocusStrip(props: {
   readonly assignments: ReadonlyArray<FocusAssignment>;
   readonly visibleProjectKeys: ReadonlySet<string>;
   readonly activeFocusId: ActiveFocusId;
+  readonly unseenFocusIds: ReadonlySet<ActiveFocusId>;
   readonly onActiveFocusChange: (focusId: ActiveFocusId) => void;
   readonly editorProjects: ReadonlyArray<FocusProjectOption>;
   readonly unreadCount: number;
@@ -345,6 +362,7 @@ export function FocusStrip(props: {
                   key={focus.id}
                   focus={focus}
                   active={props.activeFocusId === focus.id}
+                  unseen={props.unseenFocusIds.has(focus.id)}
                   onSelect={() => props.onActiveFocusChange(focus.id)}
                   onEdit={() => {
                     if (props.mutations === null) return;
@@ -372,15 +390,19 @@ export function FocusStrip(props: {
                   props.onConversationsContextMenu({ x: bounds.right, y: bounds.top });
                 }
               }}
-              aria-label="Conversations"
+              aria-label={focusTabLabel(
+                "Conversations",
+                props.unseenFocusIds.has(CONVERSATIONS_FOCUS_ID),
+              )}
               title="Conversations"
               aria-pressed={props.activeFocusId === CONVERSATIONS_FOCUS_ID}
               onClick={() => props.onActiveFocusChange(CONVERSATIONS_FOCUS_ID)}
-              className="flex h-7 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+              className="relative flex h-7 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-sidebar-ring"
             >
               <FocusTabVisual active={props.activeFocusId === CONVERSATIONS_FOCUS_ID}>
                 <MessageSquareIcon className="size-4" />
               </FocusTabVisual>
+              {props.unseenFocusIds.has(CONVERSATIONS_FOCUS_ID) ? <FocusUnseenDot /> : null}
             </button>
           )}
           <FocusNotificationBadge

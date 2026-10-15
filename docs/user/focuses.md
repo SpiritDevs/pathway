@@ -93,6 +93,8 @@ The bell in the Focus Strip toggles the notification tray open and closed. Pathw
 
 Opening the tray marks notifications as seen on all your machines. Opening a thread marks all its notifications as read, removes them from the tray, and reduces the unread count. A small blue dot in the thread's left margin shows that it has unread notifications. New events are marked read while you have that thread open in the foreground.
 
+On web and desktop, a small blue dot under a Focus or Conversations icon in the strip means that Focus has new notifications you have not seen. The dot clears when you open that Focus, open the tray, or read the notifications, and comes back when a newer notification arrives. Each machine remembers which Focuses you have opened.
+
 The bell shows a count for new unread notifications and a green dot for unread notifications you have already seen in the tray. It disappears when no unread notifications remain. Unread notifications expire after 30 days. Pathway keeps at most 200 notifications per account and removes the oldest records first when the limit is reached.
 
 Starting a project thread from Conversations switches to the profile containing that project after the first successful send, or to All if the project has no profile.

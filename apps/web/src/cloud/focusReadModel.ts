@@ -2,6 +2,9 @@ import { managedRelaySessionAtom } from "@spiritdevs/client-runtime/relay";
 import {
   ALL_FOCUS_ID,
   focusAssignmentsAtom,
+  focusIdForThread,
+  focusListAtom,
+  focusNotificationProjectKey,
   focusReadModelAtom,
   resolveActiveFocusId,
   scopedProjectKeysForFocus,
@@ -14,6 +17,7 @@ import {
   FocusProjectKey,
   FocusReadModel as FocusReadModelSchema,
   type Focus,
+  type FocusAssignment,
   type FocusNotification,
   type FocusReadModel,
   type FocusThreadSortOrder,
@@ -300,6 +304,95 @@ export function persistActiveFocusSelection(options: {
   return new Map(options.overrides).set(options.scope, options.requestedId);
 }
 
+/** Per Focus tab, the newest notification time the user has had in view on this device. */
+export type FocusSeenAt = Readonly<Record<string, number>>;
+
+const EMPTY_FOCUS_SEEN_AT: FocusSeenAt = Object.freeze({});
+
+export function focusSeenAtStorageKey(scope: string): string {
+  return `pathway:cloud-sync/${scope}/focus-seen-at`;
+}
+
+const decodeFocusSeenAt = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Number)),
+);
+
+export function readFocusSeenAt(scope: string, storage: ActiveFocusStorage | null): FocusSeenAt {
+  try {
+    const raw = storage?.getItem(focusSeenAtStorageKey(scope));
+    return raw
+      ? Option.getOrElse(decodeFocusSeenAt(raw), () => EMPTY_FOCUS_SEEN_AT)
+      : EMPTY_FOCUS_SEEN_AT;
+  } catch {
+    return EMPTY_FOCUS_SEEN_AT;
+  }
+}
+
+function notificationFocusIds(input: {
+  readonly notifications: ReadonlyArray<FocusNotification>;
+  readonly focuses: ReadonlyArray<Pick<Focus, "id" | "includeConversations">>;
+  readonly assignments: ReadonlyArray<Pick<FocusAssignment, "focusId" | "projectKey">>;
+}): ReadonlyArray<readonly [FocusNotification, ActiveFocusId]> {
+  const focusIdByProjectKey = new Map(
+    input.assignments.map((assignment) => [assignment.projectKey, assignment.focusId] as const),
+  );
+  return input.notifications.map((notification) => [
+    notification,
+    focusIdForThread({
+      projectKey: focusNotificationProjectKey(notification),
+      activeFocusId: ALL_FOCUS_ID,
+      focuses: input.focuses,
+      focusIdByProjectKey,
+    }),
+  ]);
+}
+
+/** Raises each Focus's seen mark to its newest notification; returns `seenAt` itself when nothing moved. */
+export function markFocusesSeen(input: {
+  readonly seenAt: FocusSeenAt;
+  readonly focusIds: ReadonlyArray<ActiveFocusId>;
+  readonly notifications: ReadonlyArray<FocusNotification>;
+  readonly focuses: ReadonlyArray<Pick<Focus, "id" | "includeConversations">>;
+  readonly assignments: ReadonlyArray<Pick<FocusAssignment, "focusId" | "projectKey">>;
+}): FocusSeenAt {
+  let next: Record<string, number> | null = null;
+  for (const [notification, focusId] of notificationFocusIds(input)) {
+    if (!input.focusIds.includes(focusId)) continue;
+    if (notification.createdAt <= ((next ?? input.seenAt)[focusId] ?? 0)) continue;
+    next ??= { ...input.seenAt };
+    next[focusId] = notification.createdAt;
+  }
+  return next ?? input.seenAt;
+}
+
+/**
+ * Focus tabs holding a new notification (unread and not yet seen in the tray) that arrived after
+ * the user last had that Focus open. The open Focus and All never carry the dot.
+ */
+export function unseenFocusIds(input: {
+  readonly notifications: ReadonlyArray<FocusNotification>;
+  readonly locallyRead: ReadonlySet<string>;
+  readonly focuses: ReadonlyArray<Pick<Focus, "id" | "includeConversations">>;
+  readonly assignments: ReadonlyArray<Pick<FocusAssignment, "focusId" | "projectKey">>;
+  readonly activeFocusId: ActiveFocusId;
+  readonly seenAt: FocusSeenAt;
+}): ReadonlySet<ActiveFocusId> {
+  const unseen = new Set<ActiveFocusId>();
+  for (const [notification, focusId] of notificationFocusIds(input)) {
+    if (
+      focusId !== ALL_FOCUS_ID &&
+      focusId !== input.activeFocusId &&
+      !notification.isRead &&
+      !notification.isSeen &&
+      !input.locallyRead.has(notification.eventId) &&
+      notification.createdAt > (input.seenAt[focusId] ?? 0)
+    ) {
+      unseen.add(focusId);
+    }
+  }
+  return unseen;
+}
+
 function ambientLocalStorage(): ActiveFocusStorage | null {
   try {
     return typeof window === "undefined" ? null : window.localStorage;
@@ -361,6 +454,17 @@ const activeFocusOverridesAtom = Atom.make<ReadonlyMap<string, ActiveFocusId>>(n
   Atom.withLabel("focuses:active-overrides"),
 );
 
+const focusSeenAtOverridesAtom = Atom.make<ReadonlyMap<string, FocusSeenAt>>(new Map()).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("focuses:seen-at-overrides"),
+);
+
+const focusSeenAtAtom = Atom.make((get): FocusSeenAt => {
+  const scope = get(activeFocusAccountScopeAtom);
+  if (scope === null) return EMPTY_FOCUS_SEEN_AT;
+  return get(focusSeenAtOverridesAtom).get(scope) ?? readFocusSeenAt(scope, ambientLocalStorage());
+}).pipe(Atom.withLabel("focuses:seen-at"));
+
 export const activeFocusIdAtom = Atom.writable(
   (get) => {
     const scope = get(activeFocusAccountScopeAtom);
@@ -389,6 +493,28 @@ export const activeFocusIdAtom = Atom.writable(
   },
   (context, requestedId: ActiveFocusId) => {
     const scope = context.get(activeFocusAccountScopeAtom);
+    if (scope !== null) {
+      // Opening a Focus, and leaving one that gained notifications while open, both count as seeing it.
+      const seenAt = context.get(focusSeenAtAtom);
+      const nextSeenAt = markFocusesSeen({
+        seenAt,
+        focusIds: [context.get(activeFocusIdAtom), requestedId],
+        notifications: context.get(focusNotificationsAtom),
+        focuses: context.get(focusListAtom),
+        assignments: context.get(focusAssignmentsAtom),
+      });
+      if (nextSeenAt !== seenAt) {
+        try {
+          ambientLocalStorage()?.setItem(focusSeenAtStorageKey(scope), JSON.stringify(nextSeenAt));
+        } catch {
+          // The mark still applies for this session if persistence is unavailable.
+        }
+        context.set(
+          focusSeenAtOverridesAtom,
+          new Map(context.get(focusSeenAtOverridesAtom)).set(scope, nextSeenAt),
+        );
+      }
+    }
     const overrides = persistActiveFocusSelection({
       scope,
       requestedId,
@@ -401,6 +527,17 @@ export const activeFocusIdAtom = Atom.writable(
     context.refreshSelf();
   },
 ).pipe(Atom.withLabel("focuses:active-id"));
+
+export const unseenFocusIdsAtom = Atom.make((get) =>
+  unseenFocusIds({
+    notifications: get(focusNotificationsAtom),
+    locallyRead: get(locallyReadNotificationIdsAtom),
+    focuses: get(focusListAtom),
+    assignments: get(focusAssignmentsAtom),
+    activeFocusId: get(activeFocusIdAtom),
+    seenAt: get(focusSeenAtAtom),
+  }),
+).pipe(Atom.withLabel("focuses:unseen-ids"));
 
 export const activeFocusProjectKeysAtom = Atom.make((get) =>
   scopedProjectKeysForFocus(get(focusAssignmentsAtom), get(activeFocusIdAtom)),

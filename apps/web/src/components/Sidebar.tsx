@@ -291,6 +291,7 @@ import {
   focusUnreadCountAtom,
   threadHasUnreadNotificationAtom,
   unreadNotificationThreadKeysAtom,
+  unseenFocusIdsAtom,
   visibleFocusProjectKeysAtom,
 } from "../cloud/focusReadModel";
 import type { FocusNotification } from "@spiritdevs/contracts/focus";
@@ -2209,6 +2210,7 @@ export default function Sidebar() {
   const focusMutations = useAtomValue(focusMutationsAtom);
   const focusNotifications = useAtomValue(focusNotificationsAtom);
   const focusUnreadCount = useAtomValue(focusUnreadCountAtom);
+  const unseenFocusIds = useAtomValue(unseenFocusIdsAtom);
   const [activeFocusId, setActiveFocusId] = useAtom(activeFocusIdAtom);
   const shownFocuses = useMemo(
     () =>
@@ -5408,6 +5410,7 @@ export default function Sidebar() {
         assignments={focusAssignments}
         visibleProjectKeys={visibleFocusProjectKeys}
         activeFocusId={activeFocusId}
+        unseenFocusIds={unseenFocusIds}
         onActiveFocusChange={setActiveFocusId}
         editorProjects={focusEditorProjects}
         unreadCount={focusUnreadCount}

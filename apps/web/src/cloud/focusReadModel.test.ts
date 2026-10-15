@@ -1,4 +1,9 @@
 import { AtomRegistry } from "effect/unstable/reactivity";
+import { managedRelaySessionAtom } from "@spiritdevs/client-runtime/relay";
+import {
+  CONVERSATIONS_FOCUS_ID,
+  focusReadModelAtom,
+} from "@spiritdevs/client-runtime/state/focuses";
 import { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
 import {
   AttentionEventId,
@@ -25,6 +30,12 @@ import {
   readActiveFocusId,
   writeActiveFocusId,
   type ActiveFocusStorage,
+  activeFocusIdAtom,
+  focusSeenAtStorageKey,
+  markFocusesSeen,
+  readFocusSeenAt,
+  unseenFocusIds,
+  unseenFocusIdsAtom,
 } from "./focusReadModel";
 
 const WORK = FocusId.make("focus-work");
@@ -269,5 +280,132 @@ describe("cached Focus read model", () => {
         setItem: () => undefined,
       }),
     ).toBeNull();
+  });
+});
+
+describe("unseen Focus dots", () => {
+  const PERSONAL = FocusId.make("focus-personal");
+  const PERSONAL_PROJECT = FocusProjectKey.make("environment-a:project-b");
+  const focuses = [
+    READ_MODEL.focuses[0]!,
+    { ...READ_MODEL.focuses[0]!, id: PERSONAL, name: "Personal", orderKey: "t" },
+  ];
+  const assignments = [
+    ...READ_MODEL.assignments,
+    { focusId: PERSONAL, projectKey: PERSONAL_PROJECT, createdAt: 1, updatedAt: 1 },
+  ];
+  function notification(
+    id: string,
+    projectKey: string,
+    createdAt: number,
+    overrides: Partial<FocusNotification> = {},
+  ): FocusNotification {
+    return {
+      id: FocusNotificationId.make(id),
+      eventId: AttentionEventId.make(id),
+      environmentId: EnvironmentId.make("environment-a"),
+      threadId: ThreadId.make(`thread-${id}`),
+      projectKey: FocusProjectKey.make(projectKey),
+      eventKind: "finished-unsettled",
+      createdAt,
+      alertEligibleAtCreation: true,
+      ...overrides,
+    };
+  }
+  const base = { locallyRead: new Set<string>(), focuses, assignments, seenAt: {} };
+
+  it("marks the Focus holding a new notification, never the open Focus or All", () => {
+    const notifications = [
+      notification("work", PROJECT, 10),
+      notification("unassigned", "environment-a:project-z", 10),
+      notification("chat", "environment-a:conversations", 10),
+    ];
+    expect(unseenFocusIds({ ...base, notifications, activeFocusId: ALL_FOCUS_ID })).toEqual(
+      new Set([WORK, CONVERSATIONS_FOCUS_ID]),
+    );
+    expect(unseenFocusIds({ ...base, notifications, activeFocusId: WORK })).toEqual(
+      new Set([CONVERSATIONS_FOCUS_ID]),
+    );
+  });
+
+  it("ignores notifications already read, seen in the tray, or acknowledged locally", () => {
+    const notifications = [
+      notification("read", PROJECT, 10, { isRead: true }),
+      notification("tray", PROJECT, 10, { isSeen: true }),
+      notification("local", PERSONAL_PROJECT, 10),
+    ];
+    expect(
+      unseenFocusIds({
+        ...base,
+        notifications,
+        locallyRead: new Set(["local"]),
+        activeFocusId: ALL_FOCUS_ID,
+      }).size,
+    ).toBe(0);
+  });
+
+  it("clears once the Focus is seen and returns when something newer arrives", () => {
+    const first = [notification("first", PROJECT, 10), notification("other", PERSONAL_PROJECT, 12)];
+    const seenAt = markFocusesSeen({ ...base, notifications: first, focusIds: [WORK] });
+    expect(seenAt).toEqual({ [WORK]: 10 });
+    expect(markFocusesSeen({ ...base, seenAt, notifications: first, focusIds: [WORK] })).toBe(
+      seenAt,
+    );
+    expect(
+      unseenFocusIds({ ...base, seenAt, notifications: first, activeFocusId: ALL_FOCUS_ID }),
+    ).toEqual(new Set([PERSONAL]));
+    expect(
+      unseenFocusIds({
+        ...base,
+        seenAt,
+        notifications: [...first, notification("second", PROJECT, 11)],
+        activeFocusId: ALL_FOCUS_ID,
+      }),
+    ).toEqual(new Set([WORK, PERSONAL]));
+  });
+
+  it("reads seen marks per account and tolerates bad storage", () => {
+    const { storage } = memoryStorage({
+      [focusSeenAtStorageKey("account-a")]: JSON.stringify({ [WORK]: 10 }),
+      [focusSeenAtStorageKey("account-b")]: "{bad",
+    });
+    expect(readFocusSeenAt("account-a", storage)).toEqual({ [WORK]: 10 });
+    expect(readFocusSeenAt("account-b", storage)).toEqual({});
+    expect(readFocusSeenAt("account-c", null)).toEqual({});
+  });
+
+  it("clears a Focus's dot from any entry point that selects it, and remembers it", () => {
+    const { storage, values } = memoryStorage();
+    vi.stubGlobal("window", { localStorage: storage });
+    const registry = AtomRegistry.make();
+    const unmount = registry.mount(unseenFocusIdsAtom);
+    try {
+      registry.set(managedRelaySessionAtom, {
+        accountId: "account-a",
+        readClerkToken: () => {
+          throw new Error("unused");
+        },
+      });
+      registry.set(focusReadModelAtom, { ...READ_MODEL, focuses, assignments });
+      registry.set(focusNotificationsAtom, [notification("work", PROJECT, 10)]);
+      expect(registry.get(unseenFocusIdsAtom)).toEqual(new Set([WORK]));
+
+      registry.set(activeFocusIdAtom, WORK);
+      expect(registry.get(unseenFocusIdsAtom).size).toBe(0);
+      registry.set(focusNotificationsAtom, [
+        notification("work", PROJECT, 10),
+        notification("while-open", PROJECT, 11),
+      ]);
+      registry.set(activeFocusIdAtom, PERSONAL);
+      expect(registry.get(unseenFocusIdsAtom).size).toBe(0);
+      expect(JSON.parse(values.get(focusSeenAtStorageKey("account-a"))!)).toEqual({ [WORK]: 11 });
+
+      registry.set(focusNotificationsAtom, [notification("later", PROJECT, 12)]);
+      expect(registry.get(unseenFocusIdsAtom)).toEqual(new Set([WORK]));
+    } finally {
+      unmount();
+      registry.dispose();
+      vi.unstubAllGlobals();
+    }
   });
 });
