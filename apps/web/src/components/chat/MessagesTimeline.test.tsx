@@ -1909,7 +1909,6 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain('data-v2-item-type="subagent"');
     expect(markup).toContain('data-v2-subagent-result-disclosure="true"');
-    expect(markup).toContain('data-v2-subagent-result="true"');
     expect(markup).toContain('aria-label="Show full result for Isolation report"');
     expect(markup).toContain('aria-label="Open Isolation report"');
     expect(markup).toContain("Tests should be isolated.");

@@ -3,8 +3,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ThreadId } from "@spiritdevs/contracts";
 
+import { formatAgentElapsed } from "./AgentElapsed";
 import {
-  formatAgentElapsed,
   isPreviousAgentRow,
   resolveThreadLineageWindow,
   ThreadLineageRowList,

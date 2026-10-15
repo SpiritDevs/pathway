@@ -2,6 +2,8 @@
 
 Agents can delegate work to subagents. Open a subagent's card in the conversation or its entry in Lineage to inspect the child conversation.
 
+On web and desktop, a subagent's card shows the icon of the provider it runs on with a status dot, its title, status and model, one line on what it is doing (or, once it finishes, what it found), and how long it has run. Click a card to open the subagent's conversation. When a subagent has finished, the arrow at the end of its card shows its full result in place. Subagents an agent starts together share one card, headed by how many there are and how many are still running.
+
 On web and desktop, each subagent in Lineage shows the icon of the provider it runs on, how long it has been working, and its status. Hover over a subagent to see its model and what it is doing right now. Finished subagents move into a collapsed Previous agents group below the ones still running.
 
 On web and desktop, a subagent's conversation replaces the message box with a one-line bar. The bar shows the model and effort the subagent runs on, how long it has been working or took to finish, and an Open parent button that goes back to the conversation that started it. Subagents started through Pathway can still take messages: choose Message to open the full message box, where you can also change the model. Subagents a provider runs itself say Runs on its own and can't take messages. If a subagent is waiting on an approval or a question, the message box opens so you can answer.

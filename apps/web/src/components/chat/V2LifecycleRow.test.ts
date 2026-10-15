@@ -9,9 +9,60 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import { isV2LifecycleItem, V2LifecycleRow } from "./V2LifecycleRow";
+import { isV2LifecycleItem, SubagentCard, V2LifecycleRow } from "./V2LifecycleRow";
 
 describe("V2LifecycleRow", () => {
+  it("groups subagents into one card with a count and status summary", () => {
+    const now = DateTime.makeUnsafe("2026-08-14T00:00:00.000Z");
+    const subagent = (id: string, status: "running" | "completed", result: string | null) =>
+      ({
+        id: TurnItemId.make(id),
+        threadId: ThreadId.make("thread-parent"),
+        runId: null,
+        nodeId: null,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 1,
+        status,
+        title: `Subagent: ${id}`,
+        startedAt: now,
+        completedAt: status === "completed" ? DateTime.add(now, { minutes: 2 }) : null,
+        updatedAt: now,
+        type: "subagent",
+        subagentId: `node:${id}`,
+        origin: "app_owned",
+        driver: "codex",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        childThreadId: ThreadId.make(`thread-${id}`),
+        prompt: "Do the work",
+        progress: "Reading files",
+        result,
+      }) as Extract<OrchestrationV2TurnItem, { type: "subagent" }>;
+
+    const markup = renderToStaticMarkup(
+      createElement(SubagentCard, {
+        items: [
+          subagent("fix-cache", "running", null),
+          subagent("audit", "completed", "- No **bugs** found in `cache.ts`"),
+        ],
+        providerStatuses: [],
+        subagents: [],
+        onOpenThread: () => {},
+      }),
+    );
+    expect(markup).toContain('data-subagent-group="true"');
+    expect(markup).toContain("2 subagents");
+    expect(markup).toContain("1 running · 1 finished");
+    expect(markup).toContain('aria-label="Open fix-cache"');
+    expect(markup).toContain("Reading files");
+    // A settled row leads with its result, flattened to one line.
+    expect(markup).toContain("No **bugs** found in cache.ts");
+    expect(markup).toContain("2m 0s");
+    expect(markup).not.toContain("Do the work");
+  });
+
   it("renders source-control markers as standalone lifecycle rows", () => {
     const now = DateTime.makeUnsafe("2026-08-14T00:00:00.000Z");
     const item: OrchestrationV2TurnItem = {
