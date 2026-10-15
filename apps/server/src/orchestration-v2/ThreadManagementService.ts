@@ -1,6 +1,6 @@
 import {
   type ChatAttachment,
-  type CommandId,
+  CommandId,
   MessageId,
   type ModelSelection,
   type OrchestrationV2Actor,
@@ -30,6 +30,7 @@ import {
   type OrchestratorV2DispatchResult,
   type OrchestratorV2Error,
 } from "./Orchestrator.ts";
+import { delegatedThreadStopTarget } from "./SubagentProjection.ts";
 
 export type ThreadManagementSendMode = "auto" | "queue" | "steer" | "restart";
 
@@ -108,6 +109,13 @@ export interface ThreadManagementInterruptInput extends ThreadManagementScope {
   readonly threadId: ThreadId;
   readonly runId?: RunId;
   readonly reason?: string;
+}
+
+/** `commandId` is stable for one Stop, so a retry repeats nothing that already landed. */
+export interface ThreadManagementStopInput {
+  readonly threadId: ThreadId;
+  readonly commandId: CommandId;
+  readonly reason?: string | undefined;
 }
 
 export type ThreadManagementInterruptResult =
@@ -264,6 +272,21 @@ export interface ThreadManagementServiceShape {
   readonly interruptThread: (
     input: ThreadManagementInterruptInput,
   ) => Effect.Effect<ThreadManagementInterruptResult, ThreadManagementFailure>;
+  /**
+   * Stops a delegated task's thread the way Stop does. Its live run, or a finished run still
+   * owed a wake, gets `run.interrupt` with `stopDelegatedTasks`, whose effect then stops the
+   * tasks under it. A thread with nothing of its own to stop has its tasks stopped here.
+   */
+  readonly stopThread: (
+    input: ThreadManagementStopInput,
+  ) => Effect.Effect<void, OrchestratorV2Error>;
+  /**
+   * Runs `stopThread` on every delegated task under a thread. A task that cannot be stopped
+   * does not keep the others running: all are tried, then it fails.
+   */
+  readonly stopDelegatedTasks: (
+    input: ThreadManagementStopInput,
+  ) => Effect.Effect<void, OrchestratorV2Error>;
   readonly getThreadEventSequence: OrchestratorV2["Service"]["getThreadEventSequence"];
   readonly streamStoredEvents: OrchestratorV2["Service"]["streamStoredEvents"];
   readonly streamStoredEventsFrom: OrchestratorV2["Service"]["streamStoredEventsFrom"];
@@ -585,6 +608,60 @@ const make = Effect.gen(function* () {
       return { type: "interrupt_requested", run: interruptibleRun, dispatch } as const;
     });
 
+  const stopThread: ThreadManagementServiceShape["stopThread"] = (input) =>
+    Effect.gen(function* () {
+      const projection = yield* getThreadProjection(input.threadId);
+      if (projection.thread.deletedAt !== null) return;
+      const target = delegatedThreadStopTarget(projection);
+      if (target === undefined) return yield* stopDelegatedTasks(input);
+      yield* orchestrator
+        .dispatch({
+          type: "run.interrupt",
+          commandId: input.commandId,
+          threadId: input.threadId,
+          runId: target.id,
+          stopDelegatedTasks: true,
+          ...(input.reason === undefined ? {} : { reason: input.reason }),
+        })
+        .pipe(
+          // The target can finish between the read and the dispatch. Once the thread has
+          // nothing of its own left to stop, only its tasks remain.
+          Effect.catch((error) =>
+            getThreadProjection(input.threadId).pipe(
+              Effect.flatMap((latest) =>
+                delegatedThreadStopTarget(latest) === undefined
+                  ? stopDelegatedTasks(input)
+                  : Effect.fail(error),
+              ),
+            ),
+          ),
+        );
+    });
+
+  const stopDelegatedTasks: ThreadManagementServiceShape["stopDelegatedTasks"] = (input) =>
+    Effect.gen(function* () {
+      const { subagents } = yield* getThreadProjection(input.threadId);
+      const failures: Array<OrchestratorV2Error> = [];
+      for (const task of subagents) {
+        if (task.origin !== "app_owned" || task.childThreadId === null) continue;
+        const threadId = task.childThreadId;
+        yield* stopThread({
+          threadId,
+          commandId: CommandId.make(`${input.commandId}:stop:${threadId}`),
+          reason: input.reason,
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("Unable to stop a delegated task", {
+              parentThreadId: input.threadId,
+              threadId,
+              error,
+            }).pipe(Effect.andThen(Effect.sync(() => failures.push(error)))),
+          ),
+        );
+      }
+      if (failures[0] !== undefined) return yield* Effect.fail(failures[0]);
+    });
+
   return ThreadManagementService.of({
     dispatch,
     getThreadProjection,
@@ -596,6 +673,8 @@ const make = Effect.gen(function* () {
     sendToThread,
     waitForThread,
     interruptThread,
+    stopThread,
+    stopDelegatedTasks,
     getThreadEventSequence: orchestrator.getThreadEventSequence,
     streamStoredEvents: orchestrator.streamStoredEvents,
     streamStoredEventsFrom: orchestrator.streamStoredEventsFrom,

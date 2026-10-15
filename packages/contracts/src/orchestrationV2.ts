@@ -2781,6 +2781,11 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     runId: RunId,
     reason: Schema.optional(Schema.String),
+    /**
+     * Set by a user's Stop: also drop every delegated-task wake the thread is still owed and,
+     * once committed, stop every task it delegated, depth first.
+     */
+    stopDelegatedTasks: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("queued-message.promote-to-steer"),

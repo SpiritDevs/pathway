@@ -126,6 +126,7 @@ struct PathwayThreadConversationTests {
         if expected {
             #expect(commands.first?["type"]?.stringValue == "run.interrupt")
             #expect(commands.first?["runId"]?.stringValue == "run-1")
+            #expect(commands.first?["stopDelegatedTasks"] == .bool(true))
         }
     }
 

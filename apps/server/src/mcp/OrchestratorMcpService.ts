@@ -1692,7 +1692,25 @@ const make = Effect.gen(function* () {
                     ),
                   ),
                 );
+        // Cancelling stops the child thread the way Stop does, including work that came
+        // after a published result: follow-up runs, wakes it is owed, and the tasks it
+        // delegated. The published result stays terminal.
+        const stopChild = threadManagement
+          .stopThread({
+            threadId: current.childThreadId,
+            commandId: stableCommandId({ scope, requestKey: key, operation: "cancel-task" }),
+            reason: input.reason,
+          })
+          .pipe(
+            Effect.mapError((error) =>
+              failure(
+                "task_not_cancellable",
+                `Unable to stop delegated task ${input.taskId}: ${errorMessage(error)}`,
+              ),
+            ),
+          );
         if (isTerminalTaskStatus(current.status)) {
+          yield* stopChild;
           yield* disposeCompletionDelivery;
           return {
             taskId: input.taskId,
@@ -1709,26 +1727,7 @@ const make = Effect.gen(function* () {
             `Delegated task ${input.taskId} has no interruptible child run.`,
           );
         }
-        yield* threadManagement
-          .dispatch({
-            type: "run.interrupt",
-            commandId: stableCommandId({
-              scope,
-              requestKey: key,
-              operation: "cancel-task",
-            }),
-            threadId: current.childThreadId,
-            runId: activeRun.id,
-            ...(input.reason === undefined ? {} : { reason: input.reason }),
-          })
-          .pipe(
-            Effect.mapError((error) =>
-              failure(
-                "task_not_cancellable",
-                `Unable to interrupt delegated task ${input.taskId}: ${errorMessage(error)}`,
-              ),
-            ),
-          );
+        yield* stopChild;
         yield* disposeCompletionDelivery.pipe(
           Effect.catchCause((cause) =>
             Effect.logWarning("orchestrator-mcp.cancel-task.delivery-dispose-failed", {

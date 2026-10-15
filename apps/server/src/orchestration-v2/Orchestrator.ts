@@ -84,6 +84,7 @@ import { isAutomaticCompletionRun, queuedRunsInDeliveryOrder } from "./QueuedRun
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
 import {
   makeSubagentChildThread,
+  runsOwingDelegatedWakes,
   subagentResultForRun,
   subagentThreadTitle,
 } from "./SubagentProjection.ts";
@@ -5788,6 +5789,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: `Parent run ${command.parentRunId} is not active.`,
         });
       }
+      // Its agent can call tools until the provider stops it, but nothing it starts may
+      // outlive the interrupt, or a Stop would miss the task it delegated late.
+      if (
+        parentProjection.turnItems.some(
+          (item) => item.runId === parentRun.id && item.type === "run_interrupt_request",
+        )
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Parent run ${command.parentRunId} is stopping.`,
+        });
+      }
       const parentNode = parentProjection.nodes.find(
         (candidate) => candidate.id === command.parentNodeId,
       );
@@ -7517,17 +7531,32 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     Effect.gen(function* () {
       const projection = yield* loadProjectionForCommand(command);
       const run = projection.runs.find((candidate) => candidate.id === command.runId);
+      // A plain interrupt drops the wakes owed to this run's delegated tasks, or on a wake run,
+      // to the cohort that woke it. Stop drops every wake the thread is still owed, since it
+      // stops those tasks too.
+      const stopCompletionCohorts = (cohortRunId: RunId, now: DateTime.Utc) =>
+        Effect.forEach(
+          command.stopDelegatedTasks === true
+            ? new Set([cohortRunId, ...runsOwingDelegatedWakes(projection)])
+            : [cohortRunId],
+          (parentRunId) =>
+            Effect.gen(function* () {
+              yield* disposeDelegatedCompletionCohort({
+                command,
+                events,
+                // Each disposal reads the events the ones before it wrote.
+                projection: yield* getProjectionWithPendingEvents(command.threadId, events),
+                parentRunId,
+                disposition: "stopped",
+                now,
+              });
+            }),
+          { discard: true },
+        );
       // A completed parent can still have a pending descendant-completion wake.
       // Persist its stop fence without attempting to interrupt a newer run on this thread.
       if (run && isTerminalRun(run)) {
-        yield* disposeDelegatedCompletionCohort({
-          command,
-          events,
-          projection,
-          parentRunId: run.id,
-          disposition: "stopped",
-          now: yield* DateTime.now,
-        });
+        yield* stopCompletionCohorts(run.id, yield* DateTime.now);
         return;
       }
       const rootNode =
@@ -7557,17 +7586,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         (candidate) => candidate.id === run.userMessageId,
       );
       const completionCohortRunId = completionMessage?.delegatedCompletion?.parentRunId ?? run.id;
-      const stopCompletionCohort = () =>
-        Effect.gen(function* () {
-          yield* disposeDelegatedCompletionCohort({
-            command,
-            events,
-            projection: yield* getProjectionWithPendingEvents(command.threadId, events),
-            parentRunId: completionCohortRunId,
-            disposition: "stopped",
-            now,
-          });
-        });
+      const stopCompletionCohort = () => stopCompletionCohorts(completionCohortRunId, now);
 
       const emitEvent = emit(events, command);
       const interruptRequestItem: OrchestrationV2TurnItem = {
@@ -8929,6 +8948,22 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "run.interrupt":
         cancelUnsettledEffects = yield* dispatchRunInterrupt(command, events, effects);
+        // Stop also stops every delegated task under the thread once it commits. A command
+        // holds only its own thread's lock, so the walk runs as an effect.
+        if (command.stopDelegatedTasks === true) {
+          yield* Ref.update(effects, (existing) => [
+            ...existing,
+            {
+              id: `effect:${command.commandId}:delegated-tasks.stop`,
+              commandId: command.commandId,
+              threadId: command.threadId,
+              request: {
+                type: "delegated-tasks.stop",
+                ...(command.reason === undefined ? {} : { reason: command.reason }),
+              },
+            } satisfies PendingOrchestrationEffectV2,
+          ]);
+        }
         break;
       case "queued-message.promote-to-steer":
         yield* dispatchQueuedMessagePromoteToSteer(command, events, effects);

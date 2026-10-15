@@ -32,6 +32,7 @@ import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderTurnControlServiceV2 } from "./ProviderTurnControlService.ts";
 import { ProviderTurnStartServiceV2 } from "./ProviderTurnStartService.ts";
 import { RuntimeRequestServiceV2 } from "./RuntimeRequestService.ts";
+import { ThreadManagementService } from "./ThreadManagementService.ts";
 import { ThreadTitleRegenerationService } from "./ThreadTitleRegenerationService.ts";
 import { ThreadWorkspaceMoveService } from "./ThreadWorkspaceMoveService.ts";
 
@@ -90,6 +91,7 @@ export const executorLayer: Layer.Layer<
   | RuntimeRequestServiceV2
   | ThreadTitleRegenerationService
   | BrowserTakeoverService
+  | ThreadManagementService
 > = Layer.effect(
   OrchestrationEffectExecutorV2,
   Effect.gen(function* () {
@@ -104,6 +106,7 @@ export const executorLayer: Layer.Layer<
     const threadTitleRegeneration = yield* ThreadTitleRegenerationService;
     const threadWorkspaceMove = yield* Effect.serviceOption(ThreadWorkspaceMoveService);
     const browserTakeover = yield* BrowserTakeoverService;
+    const threads = yield* ThreadManagementService;
     return OrchestrationEffectExecutorV2.of({
       execute: (effect) => {
         switch (effect.request.type) {
@@ -416,6 +419,23 @@ export const executorLayer: Layer.Layer<
               ),
             );
           }
+          case "delegated-tasks.stop":
+            return threads
+              .stopDelegatedTasks({
+                threadId: effect.threadId,
+                commandId: effect.commandId,
+                reason: effect.request.reason,
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationEffectExecutionError({
+                      effectId: effect.id,
+                      effectType: effect.request.type,
+                      cause,
+                    }),
+                ),
+              );
         }
       },
     });

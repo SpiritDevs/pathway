@@ -18,6 +18,14 @@ Codex task names appear as readable labels. For example, `audit_server` appears 
 
 Only subagents started through Pathway appear in Lineage. If an agent starts another provider's command-line tool itself, for example running `codex exec` in a terminal command, that work shows only as background work, without a provider, model, or child conversation. Claude agents can't do this in Pathway: the command is blocked and the agent is told to delegate the work as a subagent instead. If you have a project note or memory telling an agent to run `codex exec` or `claude -p`, update it to ask for a subagent.
 
+## Stopping subagents
+
+When you stop an agent, the subagents it started through Pathway stop too, and so do theirs. The agent is not woken later by results from subagents that were still working. Stopping a subagent from its own conversation stops it and everything it started, and leaves its parent running. Editing a message to restart an answer doesn't stop subagents.
+
+An agent can cancel a subagent it started. That stops the subagent the same way, including work it took on after reporting back. A subagent's finished result stays readable.
+
+Work started on another machine keeps running when you stop the agent. Stop it from its own conversation.
+
 ## Work on another machine
 
 An agent can also start work on another of your machines. For example, you can ask an agent on your laptop to investigate something on your desktop. The agent sees which machines and projects you can use, and starts a conversation in the project you choose, acting as you. That conversation runs on the other machine, and the agent can read it and send it messages. It is listed in the Lineage section of the agent's conversation rather than in your threads list, and its own Lineage links back to the agent's conversation.

@@ -9075,6 +9075,7 @@ function ChatViewContent(props: ChatViewProps) {
       environmentId,
       input: {
         threadId: activeThread.id,
+        stopDelegatedTasks: true,
       },
     });
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
