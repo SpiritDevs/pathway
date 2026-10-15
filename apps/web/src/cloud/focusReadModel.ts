@@ -1,6 +1,7 @@
 import { managedRelaySessionAtom } from "@spiritdevs/client-runtime/relay";
 import {
   ALL_FOCUS_ID,
+  CONVERSATIONS_FOCUS_ID,
   focusAssignmentsAtom,
   focusIdForThread,
   focusListAtom,
@@ -347,27 +348,41 @@ function notificationFocusIds(input: {
   ]);
 }
 
-/** Raises each Focus's seen mark to its newest notification; returns `seenAt` itself when nothing moved. */
-export function markFocusesSeen(input: {
+/**
+ * Raises a Focus's seen mark to the newest notification among those its view displayed, and drops
+ * marks for Focuses no longer in `knownFocuses`. Returns `seenAt` itself when nothing changed.
+ */
+export function markFocusSeen(input: {
   readonly seenAt: FocusSeenAt;
-  readonly focusIds: ReadonlyArray<ActiveFocusId>;
+  readonly focusId: ActiveFocusId;
   readonly notifications: ReadonlyArray<FocusNotification>;
   readonly focuses: ReadonlyArray<Pick<Focus, "id" | "includeConversations">>;
   readonly assignments: ReadonlyArray<Pick<FocusAssignment, "focusId" | "projectKey">>;
+  /** The loaded Focus definitions, or null while they are unknown and nothing can be pruned. */
+  readonly knownFocuses: ReadonlyArray<Pick<Focus, "id">> | null;
 }): FocusSeenAt {
-  let next: Record<string, number> | null = null;
-  for (const [notification, focusId] of notificationFocusIds(input)) {
-    if (!input.focusIds.includes(focusId)) continue;
-    if (notification.createdAt <= ((next ?? input.seenAt)[focusId] ?? 0)) continue;
-    next ??= { ...input.seenAt };
-    next[focusId] = notification.createdAt;
+  let newest = input.seenAt[input.focusId] ?? 0;
+  if (input.focusId !== ALL_FOCUS_ID) {
+    for (const [notification, focusId] of notificationFocusIds(input)) {
+      if (focusId === input.focusId && notification.createdAt > newest) {
+        newest = notification.createdAt;
+      }
+    }
   }
-  return next ?? input.seenAt;
+  const known = input.knownFocuses;
+  const keep = (id: string) =>
+    known === null || id === CONVERSATIONS_FOCUS_ID || known.some((focus) => focus.id === id);
+  const ids = Object.keys(input.seenAt);
+  if (newest === (input.seenAt[input.focusId] ?? 0) && ids.every(keep)) return input.seenAt;
+  const next: Record<string, number> = {};
+  for (const id of ids) if (keep(id)) next[id] = input.seenAt[id]!;
+  if (newest > 0) next[input.focusId] = newest;
+  return next;
 }
 
 /**
- * Focus tabs holding a new notification (unread and not yet seen in the tray) that arrived after
- * the user last had that Focus open. The open Focus and All never carry the dot.
+ * Focus tabs holding an unread notification, not yet seen in the tray, newer than anything that
+ * Focus's view has displayed on this device. The open Focus and All never carry the dot.
  */
 export function unseenFocusIds(input: {
   readonly notifications: ReadonlyArray<FocusNotification>;
@@ -459,11 +474,49 @@ const focusSeenAtOverridesAtom = Atom.make<ReadonlyMap<string, FocusSeenAt>>(new
   Atom.withLabel("focuses:seen-at-overrides"),
 );
 
-const focusSeenAtAtom = Atom.make((get): FocusSeenAt => {
-  const scope = get(activeFocusAccountScopeAtom);
-  if (scope === null) return EMPTY_FOCUS_SEEN_AT;
-  return get(focusSeenAtOverridesAtom).get(scope) ?? readFocusSeenAt(scope, ambientLocalStorage());
-}).pipe(Atom.withLabel("focuses:seen-at"));
+/**
+ * Each Focus's seen mark. Write the notifications a visible Focus view rendered to acknowledge
+ * them; selecting a Focus alone acknowledges nothing.
+ */
+export const focusSeenAtAtom = Atom.writable(
+  (get): FocusSeenAt => {
+    const scope = get(activeFocusAccountScopeAtom);
+    if (scope === null) return EMPTY_FOCUS_SEEN_AT;
+    return (
+      get(focusSeenAtOverridesAtom).get(scope) ?? readFocusSeenAt(scope, ambientLocalStorage())
+    );
+  },
+  (
+    context,
+    view: {
+      readonly focusId: ActiveFocusId;
+      readonly notifications: ReadonlyArray<FocusNotification>;
+    },
+  ) => {
+    const scope = context.get(activeFocusAccountScopeAtom);
+    if (scope === null) return;
+    const seenAt = context.get(focusSeenAtAtom);
+    const nextSeenAt = markFocusSeen({
+      seenAt,
+      focusId: view.focusId,
+      notifications: view.notifications,
+      focuses: context.get(focusListAtom),
+      assignments: context.get(focusAssignmentsAtom),
+      knownFocuses:
+        context.get(focusReadModelReadinessAtom) === "ready" ? context.get(focusListAtom) : null,
+    });
+    if (nextSeenAt === seenAt) return;
+    try {
+      ambientLocalStorage()?.setItem(focusSeenAtStorageKey(scope), JSON.stringify(nextSeenAt));
+    } catch {
+      // The mark still applies for this session if persistence is unavailable.
+    }
+    context.set(
+      focusSeenAtOverridesAtom,
+      new Map(context.get(focusSeenAtOverridesAtom)).set(scope, nextSeenAt),
+    );
+  },
+).pipe(Atom.withLabel("focuses:seen-at"));
 
 export const activeFocusIdAtom = Atom.writable(
   (get) => {
@@ -493,28 +546,6 @@ export const activeFocusIdAtom = Atom.writable(
   },
   (context, requestedId: ActiveFocusId) => {
     const scope = context.get(activeFocusAccountScopeAtom);
-    if (scope !== null) {
-      // Opening a Focus, and leaving one that gained notifications while open, both count as seeing it.
-      const seenAt = context.get(focusSeenAtAtom);
-      const nextSeenAt = markFocusesSeen({
-        seenAt,
-        focusIds: [context.get(activeFocusIdAtom), requestedId],
-        notifications: context.get(focusNotificationsAtom),
-        focuses: context.get(focusListAtom),
-        assignments: context.get(focusAssignmentsAtom),
-      });
-      if (nextSeenAt !== seenAt) {
-        try {
-          ambientLocalStorage()?.setItem(focusSeenAtStorageKey(scope), JSON.stringify(nextSeenAt));
-        } catch {
-          // The mark still applies for this session if persistence is unavailable.
-        }
-        context.set(
-          focusSeenAtOverridesAtom,
-          new Map(context.get(focusSeenAtOverridesAtom)).set(scope, nextSeenAt),
-        );
-      }
-    }
     const overrides = persistActiveFocusSelection({
       scope,
       requestedId,

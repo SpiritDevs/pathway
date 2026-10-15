@@ -24,7 +24,7 @@ import {
 import { ThreadAlertBell } from "./ThreadAlertBell";
 import { SidebarThreadRowShell, type SortableThreadRowBag } from "./sidebar/SidebarThreadRowShell";
 import { threadAlertPoliciesAtom } from "../threadAlerts/state";
-import { useAtom, useAtomValue } from "@effect/atom-react";
+import { useAtom, useAtomSet, useAtomValue } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
 import {
   DndContext,
@@ -288,6 +288,7 @@ import {
   focusListAtom,
   focusMutationsAtom,
   focusNotificationsAtom,
+  focusSeenAtAtom,
   focusUnreadCountAtom,
   threadHasUnreadNotificationAtom,
   unreadNotificationThreadKeysAtom,
@@ -2238,7 +2239,7 @@ export default function Sidebar() {
   );
   const startWorkIssuesByThread = useStartWorkIssuesByThread();
   const router = useRouter();
-  const { isMobile, setOpenMobile } = useSidebar();
+  const { isMobile, open, openMobile, hoverRevealed, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const threadDetailsKeyShortcuts = useMemo(
     () =>
@@ -2531,6 +2532,14 @@ export default function Sidebar() {
     retainedClassifications.current = { scope: threadScope, states: changeRequestStateByKey };
   const retainedStates = retainedClassifications.current.states;
   const threadListReadiness = useAtomValue(threadListReadinessAtom);
+  // Only a shown, loaded Focus view acknowledges notifications, and only the ones it rendered.
+  const acknowledgeFocusView = useAtomSet(focusSeenAtAtom);
+  const focusViewShown =
+    threadListReadiness === "ready" && (isMobile ? openMobile : open || hoverRevealed);
+  useEffect(() => {
+    if (!focusViewShown) return;
+    acknowledgeFocusView({ focusId: activeFocusId, notifications: focusNotifications });
+  }, [acknowledgeFocusView, activeFocusId, focusNotifications, focusViewShown]);
   const handleChangeRequestState = useCallback(
     (threadKey: string, value: ThreadChangeRequestState, failed = false) => {
       setChangeRequestStateByKey((current) =>

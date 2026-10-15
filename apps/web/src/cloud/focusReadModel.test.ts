@@ -31,8 +31,9 @@ import {
   writeActiveFocusId,
   type ActiveFocusStorage,
   activeFocusIdAtom,
+  focusSeenAtAtom,
   focusSeenAtStorageKey,
-  markFocusesSeen,
+  markFocusSeen,
   readFocusSeenAt,
   unseenFocusIds,
   unseenFocusIdsAtom,
@@ -312,7 +313,13 @@ describe("unseen Focus dots", () => {
       ...overrides,
     };
   }
-  const base = { locallyRead: new Set<string>(), focuses, assignments, seenAt: {} };
+  const base = {
+    locallyRead: new Set<string>(),
+    focuses,
+    assignments,
+    seenAt: {},
+    knownFocuses: null,
+  };
 
   it("marks the Focus holding a new notification, never the open Focus or All", () => {
     const notifications = [
@@ -346,11 +353,9 @@ describe("unseen Focus dots", () => {
 
   it("clears once the Focus is seen and returns when something newer arrives", () => {
     const first = [notification("first", PROJECT, 10), notification("other", PERSONAL_PROJECT, 12)];
-    const seenAt = markFocusesSeen({ ...base, notifications: first, focusIds: [WORK] });
+    const seenAt = markFocusSeen({ ...base, notifications: first, focusId: WORK });
     expect(seenAt).toEqual({ [WORK]: 10 });
-    expect(markFocusesSeen({ ...base, seenAt, notifications: first, focusIds: [WORK] })).toBe(
-      seenAt,
-    );
+    expect(markFocusSeen({ ...base, seenAt, notifications: first, focusId: WORK })).toBe(seenAt);
     expect(
       unseenFocusIds({ ...base, seenAt, notifications: first, activeFocusId: ALL_FOCUS_ID }),
     ).toEqual(new Set([PERSONAL]));
@@ -374,12 +379,20 @@ describe("unseen Focus dots", () => {
     expect(readFocusSeenAt("account-c", null)).toEqual({});
   });
 
-  it("clears a Focus's dot from any entry point that selects it, and remembers it", () => {
-    const { storage, values } = memoryStorage();
-    vi.stubGlobal("window", { localStorage: storage });
-    const registry = AtomRegistry.make();
-    const unmount = registry.mount(unseenFocusIdsAtom);
-    try {
+  it("drops marks for deleted Focuses once the Focus list is loaded", () => {
+    const seenAt = { [WORK]: 10, "focus-deleted": 5, [CONVERSATIONS_FOCUS_ID]: 3 };
+    expect(markFocusSeen({ ...base, seenAt, notifications: [], focusId: WORK })).toBe(seenAt);
+    expect(
+      markFocusSeen({ ...base, seenAt, notifications: [], focusId: WORK, knownFocuses: focuses }),
+    ).toEqual({ [WORK]: 10, [CONVERSATIONS_FOCUS_ID]: 3 });
+  });
+
+  describe("acknowledging a Focus view", () => {
+    function setup() {
+      const { storage, values } = memoryStorage();
+      vi.stubGlobal("window", { localStorage: storage });
+      const registry = AtomRegistry.make();
+      const unmount = registry.mount(unseenFocusIdsAtom);
       registry.set(managedRelaySessionAtom, {
         accountId: "account-a",
         readClerkToken: () => {
@@ -387,25 +400,65 @@ describe("unseen Focus dots", () => {
         },
       });
       registry.set(focusReadModelAtom, { ...READ_MODEL, focuses, assignments });
-      registry.set(focusNotificationsAtom, [notification("work", PROJECT, 10)]);
-      expect(registry.get(unseenFocusIdsAtom)).toEqual(new Set([WORK]));
-
-      registry.set(activeFocusIdAtom, WORK);
-      expect(registry.get(unseenFocusIdsAtom).size).toBe(0);
-      registry.set(focusNotificationsAtom, [
-        notification("work", PROJECT, 10),
-        notification("while-open", PROJECT, 11),
-      ]);
-      registry.set(activeFocusIdAtom, PERSONAL);
-      expect(registry.get(unseenFocusIdsAtom).size).toBe(0);
-      expect(JSON.parse(values.get(focusSeenAtStorageKey("account-a"))!)).toEqual({ [WORK]: 11 });
-
-      registry.set(focusNotificationsAtom, [notification("later", PROJECT, 12)]);
-      expect(registry.get(unseenFocusIdsAtom)).toEqual(new Set([WORK]));
-    } finally {
-      unmount();
-      registry.dispose();
-      vi.unstubAllGlobals();
+      return {
+        registry,
+        values,
+        dispose: () => {
+          unmount();
+          registry.dispose();
+          vi.unstubAllGlobals();
+        },
+      };
     }
+
+    it("clears a Focus's dot once its view shows the notification, and remembers it", () => {
+      const { registry, values, dispose } = setup();
+      try {
+        const shown = [notification("work", PROJECT, 10)];
+        registry.set(focusNotificationsAtom, shown);
+        expect(registry.get(unseenFocusIdsAtom)).toEqual(new Set([WORK]));
+
+        registry.set(activeFocusIdAtom, WORK);
+        registry.set(focusSeenAtAtom, { focusId: WORK, notifications: shown });
+        registry.set(activeFocusIdAtom, PERSONAL);
+        expect(registry.get(unseenFocusIdsAtom).size).toBe(0);
+        expect(JSON.parse(values.get(focusSeenAtStorageKey("account-a"))!)).toEqual({
+          [WORK]: 10,
+        });
+
+        registry.set(focusNotificationsAtom, [...shown, notification("later", PROJECT, 12)]);
+        expect(registry.get(unseenFocusIdsAtom)).toEqual(new Set([WORK]));
+      } finally {
+        dispose();
+      }
+    });
+
+    it("does not acknowledge a Focus selected while its view is hidden", () => {
+      const { registry, dispose } = setup();
+      try {
+        // Work is selected but the thread sidebar is hidden (Settings), so nothing renders it.
+        registry.set(activeFocusIdAtom, WORK);
+        registry.set(focusNotificationsAtom, [notification("work", PROJECT, 10)]);
+        registry.set(activeFocusIdAtom, PERSONAL);
+        expect(registry.get(unseenFocusIdsAtom)).toEqual(new Set([WORK]));
+      } finally {
+        dispose();
+      }
+    });
+
+    it("does not acknowledge a notification that arrived after the view last rendered", () => {
+      const { registry, dispose } = setup();
+      try {
+        const shown = [notification("work", PROJECT, 10)];
+        registry.set(focusNotificationsAtom, shown);
+        registry.set(activeFocusIdAtom, WORK);
+        registry.set(focusSeenAtAtom, { focusId: WORK, notifications: shown });
+        registry.set(focusNotificationsAtom, [...shown, notification("unrendered", PROJECT, 11)]);
+        registry.set(activeFocusIdAtom, PERSONAL);
+        expect(registry.get(unseenFocusIdsAtom)).toEqual(new Set([WORK]));
+      } finally {
+        dispose();
+      }
+    });
   });
 });
