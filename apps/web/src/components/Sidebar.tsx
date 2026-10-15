@@ -156,6 +156,7 @@ import { useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
+import { usePageVisible } from "../hooks/usePageVisible";
 import { useEnvironment, useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { pendingDraftSendHold } from "../lib/pendingDraftSend";
 import {
@@ -2532,14 +2533,6 @@ export default function Sidebar() {
     retainedClassifications.current = { scope: threadScope, states: changeRequestStateByKey };
   const retainedStates = retainedClassifications.current.states;
   const threadListReadiness = useAtomValue(threadListReadinessAtom);
-  // Only a shown, loaded Focus view acknowledges notifications, and only the ones it rendered.
-  const acknowledgeFocusView = useAtomSet(focusSeenAtAtom);
-  const focusViewShown =
-    threadListReadiness === "ready" && (isMobile ? openMobile : open || hoverRevealed);
-  useEffect(() => {
-    if (!focusViewShown) return;
-    acknowledgeFocusView({ focusId: activeFocusId, notifications: focusNotifications });
-  }, [acknowledgeFocusView, activeFocusId, focusNotifications, focusViewShown]);
   const handleChangeRequestState = useCallback(
     (threadKey: string, value: ThreadChangeRequestState, failed = false) => {
       setChangeRequestStateByKey((current) =>
@@ -2889,6 +2882,42 @@ export default function Sidebar() {
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
   const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
   const isSearchingThreads = threadSearchQuery.trim().length > 0;
+  // Only a shown, loaded view of the whole Focus acknowledges notifications, and only the ones it
+  // rendered; search, the project picker, or the company scope can hide some of them.
+  const acknowledgeFocusView = useAtomSet(focusSeenAtAtom);
+  const pageVisible = usePageVisible();
+  const focusViewShown =
+    threadListReadiness === "ready" &&
+    pageVisible &&
+    (isMobile ? openMobile : open || hoverRevealed);
+  const focusViewNarrowed = isSearchingThreads || projectScopeKey !== null;
+  const notificationInFocusView = useCallback(
+    (notification: FocusNotification) => {
+      const projectKey = focusNotificationProjectKey(notification);
+      return projectKey === null
+        ? threadTitlesByKey.has(
+            scopedThreadKey(scopeThreadRef(notification.environmentId, notification.threadId)),
+          )
+        : visibleFocusProjectKeys.has(projectKey);
+    },
+    [threadTitlesByKey, visibleFocusProjectKeys],
+  );
+  useEffect(() => {
+    acknowledgeFocusView({
+      focusId: activeFocusId,
+      notifications: focusNotifications,
+      shown: focusViewShown,
+      narrowed: focusViewNarrowed,
+      inView: notificationInFocusView,
+    });
+  }, [
+    acknowledgeFocusView,
+    activeFocusId,
+    focusNotifications,
+    focusViewNarrowed,
+    focusViewShown,
+    notificationInFocusView,
+  ]);
   // The header search rests as an icon and stays open while focused or holding a query.
   const [threadSearchFocused, setThreadSearchFocused] = useState(false);
   const threadSearchExpanded = threadSearchFocused || isSearchingThreads;

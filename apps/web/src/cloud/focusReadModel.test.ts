@@ -3,6 +3,7 @@ import { managedRelaySessionAtom } from "@spiritdevs/client-runtime/relay";
 import {
   CONVERSATIONS_FOCUS_ID,
   focusReadModelAtom,
+  type ActiveFocusId,
 } from "@spiritdevs/client-runtime/state/focuses";
 import { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
 import {
@@ -32,6 +33,7 @@ import {
   type ActiveFocusStorage,
   activeFocusIdAtom,
   focusSeenAtAtom,
+  type FocusView,
   focusSeenAtStorageKey,
   markFocusSeen,
   readFocusSeenAt,
@@ -396,7 +398,42 @@ describe("unseen Focus dots", () => {
     ).toEqual({ [WORK]: 10, [CONVERSATIONS_FOCUS_ID]: 3 });
   });
 
+  it("holds a Focus's mark while the view hides an unread notification newer than it", () => {
+    const OTHER_PROJECT = FocusProjectKey.make("environment-a:project-c");
+    const workAssignments = [
+      ...assignments,
+      { focusId: WORK, projectKey: OTHER_PROJECT, createdAt: 1, updatedAt: 1 },
+    ];
+    const inView = (candidate: FocusNotification) => candidate.projectKey === PROJECT;
+    const input = { ...base, assignments: workAssignments, focusId: WORK, inView };
+    const hidden = notification("other-company", OTHER_PROJECT, 10);
+    const shown = notification("shown", PROJECT, 12);
+    expect(markFocusSeen({ ...input, notifications: [hidden, shown] })).toBe(base.seenAt);
+    // Read or already-covered hidden notifications cannot light a dot, so they do not hold it.
+    expect(
+      markFocusSeen({ ...input, notifications: [{ ...hidden, isRead: true }, shown] }),
+    ).toEqual({ [WORK]: 12 });
+    expect(
+      markFocusSeen({ ...input, seenAt: { [WORK]: 10 }, notifications: [hidden, shown] }),
+    ).toEqual({ [WORK]: 12 });
+  });
+
   describe("acknowledging a Focus view", () => {
+    function view(
+      focusId: ActiveFocusId,
+      notifications: ReadonlyArray<FocusNotification>,
+      overrides: Partial<FocusView> = {},
+    ): FocusView {
+      return {
+        focusId,
+        notifications,
+        shown: true,
+        narrowed: false,
+        inView: () => true,
+        ...overrides,
+      };
+    }
+
     function setup() {
       const { storage, values } = memoryStorage();
       vi.stubGlobal("window", { localStorage: storage });
@@ -428,7 +465,7 @@ describe("unseen Focus dots", () => {
         expect(registry.get(unseenFocusIdsAtom)).toEqual(new Set([WORK]));
 
         registry.set(activeFocusIdAtom, WORK);
-        registry.set(focusSeenAtAtom, { focusId: WORK, notifications: shown });
+        registry.set(focusSeenAtAtom, view(WORK, shown));
         registry.set(activeFocusIdAtom, PERSONAL);
         expect(registry.get(unseenFocusIdsAtom).size).toBe(0);
         expect(JSON.parse(values.get(focusSeenAtStorageKey("account-a"))!)).toEqual({
@@ -461,8 +498,70 @@ describe("unseen Focus dots", () => {
         const shown = [notification("work", PROJECT, 10)];
         registry.set(focusNotificationsAtom, shown);
         registry.set(activeFocusIdAtom, WORK);
-        registry.set(focusSeenAtAtom, { focusId: WORK, notifications: shown });
+        registry.set(focusSeenAtAtom, view(WORK, shown));
         registry.set(focusNotificationsAtom, [...shown, notification("unrendered", PROJECT, 11)]);
+        registry.set(activeFocusIdAtom, PERSONAL);
+        expect(registry.get(unseenFocusIdsAtom)).toEqual(new Set([WORK]));
+      } finally {
+        dispose();
+      }
+    });
+
+    it("does not acknowledge a notification that arrived while the page was hidden", () => {
+      const { registry, dispose } = setup();
+      try {
+        const shown = [notification("work", PROJECT, 10)];
+        registry.set(focusNotificationsAtom, shown);
+        registry.set(activeFocusIdAtom, WORK);
+        registry.set(focusSeenAtAtom, view(WORK, shown));
+        // A background tab or minimized window re-renders the view without anyone seeing it.
+        const background = [...shown, notification("background", PROJECT, 11)];
+        registry.set(focusNotificationsAtom, background);
+        registry.set(focusSeenAtAtom, view(WORK, background, { shown: false }));
+        registry.set(activeFocusIdAtom, PERSONAL);
+        expect(registry.get(unseenFocusIdsAtom)).toEqual(new Set([WORK]));
+      } finally {
+        dispose();
+      }
+    });
+
+    it("does not acknowledge while search or the project picker narrows the view", () => {
+      const { registry, dispose } = setup();
+      try {
+        const notifications = [notification("work", PROJECT, 10)];
+        registry.set(focusNotificationsAtom, notifications);
+        registry.set(activeFocusIdAtom, WORK);
+        registry.set(focusSeenAtAtom, view(WORK, notifications, { narrowed: true }));
+        registry.set(activeFocusIdAtom, PERSONAL);
+        expect(registry.get(unseenFocusIdsAtom)).toEqual(new Set([WORK]));
+      } finally {
+        dispose();
+      }
+    });
+
+    it("does not acknowledge a notification the company scope hides", () => {
+      const { registry, dispose } = setup();
+      try {
+        // Work spans two projects; the active company only shows PROJECT.
+        const OTHER_PROJECT = FocusProjectKey.make("environment-a:project-c");
+        registry.set(focusReadModelAtom, {
+          ...READ_MODEL,
+          focuses,
+          assignments: [
+            ...assignments,
+            { focusId: WORK, projectKey: OTHER_PROJECT, createdAt: 1, updatedAt: 1 },
+          ],
+        });
+        const notifications = [
+          notification("elsewhere", OTHER_PROJECT, 10),
+          notification("here", PROJECT, 12),
+        ];
+        registry.set(focusNotificationsAtom, notifications);
+        registry.set(activeFocusIdAtom, WORK);
+        registry.set(
+          focusSeenAtAtom,
+          view(WORK, notifications, { inView: (candidate) => candidate.projectKey === PROJECT }),
+        );
         registry.set(activeFocusIdAtom, PERSONAL);
         expect(registry.get(unseenFocusIdsAtom)).toEqual(new Set([WORK]));
       } finally {

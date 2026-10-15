@@ -351,6 +351,8 @@ function notificationFocusIds(input: {
 /**
  * Raises a Focus's seen mark to the newest notification among those its view displayed, and drops
  * marks for Focuses no longer in `knownFocuses`. Returns `seenAt` itself when nothing changed.
+ * The mark is a single timestamp, so it stays put while any unread notification of the Focus newer
+ * than it is outside `inView`: advancing past a visible one would cover the hidden one too.
  */
 export function markFocusSeen(input: {
   readonly seenAt: FocusSeenAt;
@@ -360,13 +362,19 @@ export function markFocusSeen(input: {
   readonly assignments: ReadonlyArray<Pick<FocusAssignment, "focusId" | "projectKey">>;
   /** The loaded Focus definitions, or null while they are unknown and nothing can be pruned. */
   readonly knownFocuses: ReadonlyArray<Pick<Focus, "id">> | null;
+  /** Whether the view can show a notification's thread; omitted when it shows the whole Focus. */
+  readonly inView?: (notification: FocusNotification) => boolean;
 }): FocusSeenAt {
-  let newest = input.seenAt[input.focusId] ?? 0;
+  const mark = input.seenAt[input.focusId] ?? 0;
+  let newest = mark;
   if (input.focusId !== ALL_FOCUS_ID) {
     for (const [notification, focusId] of notificationFocusIds(input)) {
-      if (focusId === input.focusId && notification.createdAt > newest) {
-        newest = notification.createdAt;
+      if (focusId !== input.focusId || notification.createdAt <= mark) continue;
+      if (!notification.isRead && input.inView?.(notification) === false) {
+        newest = mark;
+        break;
       }
+      newest = Math.max(newest, notification.createdAt);
     }
   }
   const known = input.knownFocuses;
@@ -473,9 +481,22 @@ const focusSeenAtOverridesAtom = Atom.make<ReadonlyMap<string, FocusSeenAt>>(new
   Atom.withLabel("focuses:seen-at-overrides"),
 );
 
+/** What the thread sidebar currently shows of the active Focus. */
+export interface FocusView {
+  readonly focusId: ActiveFocusId;
+  /** The notification snapshot the view rendered with. */
+  readonly notifications: ReadonlyArray<FocusNotification>;
+  /** The loaded thread list is on screen in a visible page. */
+  readonly shown: boolean;
+  /** Search or the project picker hides part of the Focus. */
+  readonly narrowed: boolean;
+  /** Whether the active company's view can show a notification's thread. */
+  readonly inView: (notification: FocusNotification) => boolean;
+}
+
 /**
- * Each Focus's seen mark. Write the notifications a visible Focus view rendered to acknowledge
- * them; selecting a Focus alone acknowledges nothing.
+ * Each Focus's seen mark. Write the Focus view whenever it changes; only a shown, unnarrowed view
+ * acknowledges, and only the notifications it rendered. Selecting a Focus alone acknowledges nothing.
  */
 export const focusSeenAtAtom = Atom.writable(
   (get): FocusSeenAt => {
@@ -485,15 +506,9 @@ export const focusSeenAtAtom = Atom.writable(
       get(focusSeenAtOverridesAtom).get(scope) ?? readFocusSeenAt(scope, ambientLocalStorage())
     );
   },
-  (
-    context,
-    view: {
-      readonly focusId: ActiveFocusId;
-      readonly notifications: ReadonlyArray<FocusNotification>;
-    },
-  ) => {
+  (context, view: FocusView) => {
     const scope = context.get(activeFocusAccountScopeAtom);
-    if (scope === null) return;
+    if (scope === null || !view.shown || view.narrowed) return;
     const seenAt = context.get(focusSeenAtAtom);
     const nextSeenAt = markFocusSeen({
       seenAt,
@@ -503,6 +518,7 @@ export const focusSeenAtAtom = Atom.writable(
       assignments: context.get(focusAssignmentsAtom),
       knownFocuses:
         context.get(focusReadModelReadinessAtom) === "ready" ? context.get(focusListAtom) : null,
+      inView: view.inView,
     });
     if (nextSeenAt === seenAt) return;
     try {
