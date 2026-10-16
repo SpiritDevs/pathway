@@ -65,6 +65,80 @@ export function structuredValuePreview(text: string, showAll: boolean): string {
     : text.slice(-STRUCTURED_VALUE_PREVIEW_CHARS);
 }
 
+const PREVIEW_BUDGET_EXHAUSTED = Symbol("PREVIEW_BUDGET_EXHAUSTED");
+
+/**
+ * The head of `JSON.stringify(value, null, 2)`, formatted only up to `limit`
+ * characters: a megabyte tool input costs a preview's worth of work, not a
+ * full serialization that is then thrown away.
+ */
+export function formatStructuredValuePreview(
+  value: unknown,
+  limit = STRUCTURED_VALUE_PREVIEW_CHARS,
+): { readonly text: string; readonly truncated: boolean } {
+  const parts: string[] = [];
+  let length = 0;
+  const write = (part: string) => {
+    parts.push(part);
+    length += part.length;
+    if (length > limit) throw PREVIEW_BUDGET_EXHAUSTED;
+  };
+  // Mirrors JSON.stringify: toJSON first, then undefined, functions and
+  // symbols are dropped from objects and become null in arrays.
+  const resolve = (raw: unknown, key: string): unknown => {
+    const resolved =
+      raw !== null &&
+      typeof raw === "object" &&
+      typeof (raw as { toJSON?: unknown }).toJSON === "function"
+        ? (raw as { toJSON: (key: string) => unknown }).toJSON(key)
+        : raw;
+    return resolved === undefined || typeof resolved === "function" || typeof resolved === "symbol"
+      ? undefined
+      : resolved;
+  };
+  const writeString = (text: string) => {
+    // Escaping only grows a string, so this slice still overruns the budget.
+    const remaining = limit - length;
+    write(JSON.stringify(text.length > remaining ? text.slice(0, remaining) : text));
+  };
+  const writeValue = (resolved: unknown, indent: string): void => {
+    if (typeof resolved === "string") return writeString(resolved);
+    if (typeof resolved === "number")
+      return write(Number.isFinite(resolved) ? `${resolved}` : "null");
+    if (resolved === null || typeof resolved !== "object") return write(`${resolved}`);
+    const inner = `${indent}  `;
+    if (Array.isArray(resolved)) {
+      if (resolved.length === 0) return write("[]");
+      write("[");
+      for (let index = 0; index < resolved.length; index += 1) {
+        write(index === 0 ? `\n${inner}` : `,\n${inner}`);
+        writeValue(resolve(resolved[index], `${index}`) ?? null, inner);
+      }
+      return write(`\n${indent}]`);
+    }
+    let empty = true;
+    for (const key in resolved) {
+      if (!Object.hasOwn(resolved, key)) continue;
+      const child = resolve((resolved as Record<string, unknown>)[key], key);
+      if (child === undefined) continue;
+      write(empty ? `{\n${inner}` : `,\n${inner}`);
+      empty = false;
+      writeString(key);
+      write(": ");
+      writeValue(child, inner);
+    }
+    return write(empty ? "{}" : `\n${indent}}`);
+  };
+  try {
+    const resolved = resolve(value, "");
+    if (resolved !== undefined) writeValue(resolved, "");
+    return { text: parts.join(""), truncated: false };
+  } catch (error) {
+    if (error !== PREVIEW_BUDGET_EXHAUSTED) throw error;
+    return { text: parts.join("").slice(0, limit), truncated: true };
+  }
+}
+
 function StructuredValue({
   value,
   outputPreview,
@@ -78,15 +152,20 @@ function StructuredValue({
   const [fullText, setFullText] = useState<string>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
-  const text = useMemo(
-    () => (typeof value === "string" ? value : JSON.stringify(value, null, 2)),
-    [value],
-  );
-  if (!text) return null;
-  const preview =
-    fullText ?? (outputPreview === undefined ? structuredValuePreview(text, showAll) : text);
-  const canExpand =
-    fullText === undefined && (outputPreview !== undefined || preview.length < text.length);
+  // Objects are serialized whole only after "Show all"; closing the inspector releases that copy.
+  const local = useMemo(() => {
+    if (typeof value === "string") {
+      const text = outputPreview === undefined ? structuredValuePreview(value, showAll) : value;
+      return { text, truncated: text.length < value.length };
+    }
+    return showAll
+      ? { text: JSON.stringify(value, null, 2) ?? "", truncated: false }
+      : formatStructuredValuePreview(value);
+  }, [outputPreview, showAll, value]);
+  const preview = fullText ?? local.text;
+  if (!preview) return null;
+  const canExpand = fullText === undefined && (outputPreview !== undefined || local.truncated);
+  const totalChars = outputPreview?.totalBytes ?? (typeof value === "string" ? value.length : null);
   return (
     <div className="space-y-1">
       {canExpand ? (
@@ -113,7 +192,9 @@ function StructuredValue({
         >
           {loading
             ? "Loading output…"
-            : `Show all ${Math.ceil((outputPreview?.totalBytes ?? text.length) / 1024)} KB`}
+            : totalChars === null
+              ? "Show all"
+              : `Show all ${Math.ceil(totalChars / 1024)} KB`}
         </button>
       ) : null}
       {error ? (

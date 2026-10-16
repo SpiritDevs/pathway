@@ -24,6 +24,7 @@ vi.mock("../../state/v2ItemSupport", () => ({ useV2ItemSupport: () => EMPTY_V2_I
 vi.mock("../ChatMarkdown", () => ({ default: () => null }));
 
 import {
+  formatStructuredValuePreview,
   STRUCTURED_VALUE_PREVIEW_CHARS,
   structuredValuePreview,
   V2ItemInspector,
@@ -98,6 +99,72 @@ describe("structuredValuePreview", () => {
     expect(output.endsWith(preview)).toBe(true);
     expect(structuredValuePreview(output, true)).toBe(output);
   });
+});
+
+describe("formatStructuredValuePreview", () => {
+  it("matches JSON.stringify for values within the budget", () => {
+    const value = {
+      text: 'quote " and \u2028 newline\n',
+      count: 3,
+      ratio: Number.NaN,
+      flag: false,
+      none: null,
+      skipped: undefined,
+      fn: () => 1,
+      at: new Date(0),
+      custom: { toJSON: (key: string) => `custom:${key}` },
+      empty: { list: [], object: {}, onlyUndefined: { gone: undefined } },
+      list: [1, undefined, () => 2, "two", [{ nested: true }]],
+    };
+    expect(formatStructuredValuePreview(value)).toEqual({
+      text: JSON.stringify(value, null, 2),
+      truncated: false,
+    });
+    expect(formatStructuredValuePreview("plain")).toEqual({ text: '"plain"', truncated: false });
+    expect(formatStructuredValuePreview(undefined)).toEqual({ text: "", truncated: false });
+  });
+
+  it("keeps the head of a large string without formatting all of it", () => {
+    const value = { arguments: { path: "notes.md", content: "x".repeat(4_000_000) } };
+    const preview = formatStructuredValuePreview(value);
+    expect(preview.truncated).toBe(true);
+    expect(preview.text).toHaveLength(STRUCTURED_VALUE_PREVIEW_CHARS);
+    expect(JSON.stringify(value, null, 2).startsWith(preview.text)).toBe(true);
+  });
+
+  it("stops visiting a wide array once the budget is spent", () => {
+    const visit = vi.fn(() => "entry");
+    const value = Array.from({ length: 100_000 }, () => ({ toJSON: visit }));
+    const preview = formatStructuredValuePreview(value);
+    expect(preview.truncated).toBe(true);
+    expect(JSON.stringify(value, null, 2).startsWith(preview.text)).toBe(true);
+    visit.mockClear();
+    formatStructuredValuePreview(value);
+    // Each entry adds 11 characters (`,\n  "entry"`), so only ~1,800 of 100,000 are touched.
+    expect(visit.mock.calls.length).toBeLessThan(2_000);
+  });
+});
+
+it("previews a large object input and serializes it whole only on request", async () => {
+  const input = { arguments: { content: "y".repeat(100_000) } };
+  if (row.item.type !== "command_execution") throw new Error("Expected command");
+  const { output: _output, outputPreview: _outputPreview, ...base } = row.item;
+  const dynamicTool: OrchestrationV2ProjectedTurnItem = {
+    ...row,
+    item: { ...base, type: "dynamic_tool", toolName: "write", input },
+  };
+  await act(async () => {
+    renderer = create(view(dynamicTool));
+  });
+  const inputText = () => renderer!.root.findAllByType("pre")[0]!.props.children;
+  const showAll = () =>
+    renderer!.root.findAllByType("button").find((button) => button.props.children === "Show all");
+  expect(inputText()).toHaveLength(STRUCTURED_VALUE_PREVIEW_CHARS);
+  await act(async () => {
+    showAll()!.props.onClick();
+  });
+  expect(inputText()).toBe(JSON.stringify(input, null, 2));
+  expect(showAll()).toBeUndefined();
 });
 
 it("keeps both preview edges and fetches inherited output only when expanded", async () => {
