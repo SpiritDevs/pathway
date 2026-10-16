@@ -43,8 +43,11 @@ export const POSIX_FILE_ROOT_PREFIXES = [
   "/workspace/",
   "/workspaces/",
 ] as const;
+// The label stops at any bracket, so an unmatched `[` scans only to the next
+// bracket rather than to the end of the message. Bracket-heavy output (logs,
+// quoted code) otherwise makes discovery quadratic.
 const MARKDOWN_LINK_HREF_PATTERN =
-  /\[[^\]]*]\(\s*(?:<([^>\n]+)>|([^\s)]+))(?:\s+["'][^"']*["'])?\s*\)/g;
+  /\[[^[\]]*]\(\s*(?:<([^>\n]+)>|([^\s)]+))(?:\s+["'][^"']*["'])?\s*\)/g;
 
 export interface MarkdownFileLinkMeta {
   filePath: string;
