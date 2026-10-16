@@ -79,11 +79,14 @@ private struct PathwayIssueMarkdownBlockView: View, Equatable {
                 inline(block.text).foregroundStyle(.secondary)
             }.fixedSize(horizontal: false, vertical: true)
         case .code(let language):
+            // Huge blocks show their head and tail; the actions keep the whole block reachable.
+            let shortened = PathwayTextPreview.shortened(block.text)
             VStack(alignment: .leading, spacing: 8) {
                 if !language.isEmpty { Text(language).font(.caption).foregroundStyle(.secondary) }
                 ScrollView(.horizontal) {
-                    Text(block.text).font(.callout.monospaced()).fixedSize(horizontal: true, vertical: false)
+                    Text(shortened ?? block.text).font(.callout.monospaced()).fixedSize(horizontal: true, vertical: false)
                 }
+                if shortened != nil { PathwayFullTextActions(title: language.isEmpty ? "Code" : language, text: block.text) }
             }.padding(14).background(.quaternary, in: .rect(cornerRadius: 12))
         case .divider:
             Divider()

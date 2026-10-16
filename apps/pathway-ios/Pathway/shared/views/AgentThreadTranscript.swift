@@ -736,23 +736,20 @@ struct AgentTranscriptEventContent: View {
     }
 }
 
+/// Huge tool output shows its head and tail; Copy and the reader still return the full text.
 struct AgentTranscriptCodeBlock: View {
     let text: String
     var body: some View {
-        ScrollView(.horizontal) {
-            Text(Self.displayText(text)).font(.caption.monospaced()).textSelection(.enabled)
-                .fixedSize(horizontal: true, vertical: false).padding(12)
+        let shortened = PathwayTextPreview.shortened(text)
+        VStack(alignment: .leading, spacing: 8) {
+            ScrollView(.horizontal) {
+                Text(shortened ?? text).font(.caption.monospaced()).textSelection(.enabled)
+                    .fixedSize(horizontal: true, vertical: false).padding(12)
+            }
+            .background(.quaternary, in: .rect(cornerRadius: 12))
+            .contextMenu { Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = text } }
+            if shortened != nil { PathwayFullTextActions(title: "Output", text: text) }
         }
-        .background(.quaternary, in: .rect(cornerRadius: 12))
-        .contextMenu { Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = text } }
-    }
-
-    /// One Text lays out every glyph on the main thread, so huge tool output shows its head and tail.
-    /// Copy still returns the full text.
-    nonisolated static func displayText(_ text: String, limit: Int = 20_000) -> String {
-        // The UTF-8 length is O(1) and bounds the character count, which is only measured for large text.
-        guard text.utf8.count > limit, text.count > limit else { return text }
-        return "\(text.prefix(limit / 2))\n\n… Output shortened for display. Copy to get the full text. …\n\n\(text.suffix(limit / 2))"
     }
 }
 

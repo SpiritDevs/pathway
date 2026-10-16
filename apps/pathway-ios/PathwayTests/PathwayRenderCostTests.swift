@@ -101,19 +101,49 @@ struct PathwayRenderCostTests {
         #expect(cache.blocks(for: "Again") == PathwayIssueMarkdownBlock.parse("Again"))
     }
 
-    @Test func hugeToolOutputKeepsHeadAndTailForDisplay() {
+    @Test func hugeTextKeepsHeadAndTailForDisplay() {
         let short = String(repeating: "a", count: 100)
-        #expect(AgentTranscriptCodeBlock.displayText(short, limit: 100) == short)
+        #expect(PathwayTextPreview.shortened(short, limit: 100) == nil)
 
         let long = "HEAD" + String(repeating: "x", count: 10_000) + "TAIL"
-        let shown = AgentTranscriptCodeBlock.displayText(long, limit: 1_000)
-        #expect(shown.hasPrefix("HEAD"))
-        #expect(shown.hasSuffix("TAIL"))
-        #expect(shown.count < 1_200)
+        let shown = PathwayTextPreview.shortened(long, limit: 1_000)
+        #expect(shown?.hasPrefix("HEAD") == true)
+        #expect(shown?.hasSuffix("TAIL") == true)
+        #expect(shown?.contains("Shortened for display") == true)
+        #expect((shown?.count ?? .max) < 1_200)
 
-        // Multibyte text can exceed the byte limit without exceeding the character limit.
+        // Multibyte text can exceed the byte limit without exceeding the scalar limit.
         let emoji = String(repeating: "🙂", count: 500)
-        #expect(AgentTranscriptCodeBlock.displayText(emoji, limit: 1_000) == emoji)
+        #expect(PathwayTextPreview.shortened(emoji, limit: 1_000) == nil)
+
+        // One character carrying many combining marks is still bounded in bytes.
+        let combining = "e" + String(repeating: "\u{301}", count: 100_000)
+        #expect(combining.count == 1)
+        let bounded = PathwayTextPreview.shortened(combining, limit: 1_000)
+        #expect((bounded?.utf8.count ?? .max) < 1_000 * 4 + PathwayTextPreview.marker.utf8.count)
+    }
+
+    @Test func hugeMarkdownCodeBlocksDisplayBoundedAndCopyExactly() throws {
+        let line = String(repeating: "x", count: 262_144)
+        let single = try #require(PathwayIssueMarkdownBlock.parse("```swift\n\(line)\n```").first)
+        #expect(single.kind == .code("swift"))
+        #expect(single.text == line)
+        #expect((PathwayTextPreview.shortened(single.text)?.unicodeScalars.count ?? .max) <= 20_000 + PathwayTextPreview.marker.unicodeScalars.count)
+
+        // Leading spaces, tabs and a trailing blank line all survive for Copy.
+        let lines = (0..<30_000).map { "  line \($0)\t" }.joined(separator: "\n") + "\n"
+        let many = try #require(PathwayIssueMarkdownBlock.parse("```\n\(lines)\n```").first)
+        #expect(many.text == lines)
+        #expect(PathwayTextPreview.shortened(many.text) != nil)
+
+        let ordinary = try #require(PathwayIssueMarkdownBlock.parse("```\nlet a = 1\n```").first)
+        #expect(PathwayTextPreview.shortened(ordinary.text) == nil)
+
+        // The full reader lays out bounded rows that still join back into the exact text.
+        let rows = PathwayTextPreview.rows(line + "\n\nend", width: 2_000)
+        #expect(rows.allSatisfy { $0.unicodeScalars.count <= 2_000 })
+        #expect(rows.suffix(2) == ["", "end"])
+        #expect(rows.dropLast(2).joined() == line)
     }
 
     @Test func repeatedProviderStatusesDoNotInvalidateRows() {
