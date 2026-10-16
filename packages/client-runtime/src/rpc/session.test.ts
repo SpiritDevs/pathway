@@ -10,6 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Socket from "effect/unstable/socket/Socket";
 
@@ -73,6 +74,10 @@ class TestWebSocket {
 
   serverMessage(data: string) {
     this.emit("message", { data, type: "message" });
+  }
+
+  fail() {
+    this.emit("error", { type: "error" });
   }
 
   private emit(type: SocketEventType, event: SocketEvent) {
@@ -140,6 +145,7 @@ const RpcRequest = Schema.TaggedStruct("Request", {
 });
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const decodeRpcRequest = Schema.decodeUnknownSync(RpcRequest);
+const isRpcRequest = Schema.is(RpcRequest);
 const encodeJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const encodeServerConfig = Schema.encodeSync(ServerConfig);
 const ENCODED_SERVER_CONFIG = encodeServerConfig(SERVER_CONFIG);
@@ -190,6 +196,23 @@ const awaitRequest = Effect.fn("TestRpcSessionFactory.awaitRequest")(function* (
     yield* Effect.yieldNow;
   }
   return yield* Effect.die(new Error("Expected the RPC protocol to send a request."));
+});
+
+const awaitNewRequest = Effect.fn("TestRpcSessionFactory.awaitNewRequest")(function* (
+  socket: TestWebSocket,
+  tag: string,
+  fromIndex: number,
+) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    for (const sent of socket.sent.slice(fromIndex)) {
+      const message = decodeJson(sent);
+      if (isRpcRequest(message) && message.tag === tag) {
+        return message;
+      }
+    }
+    yield* Effect.yieldNow;
+  }
+  return yield* Effect.die(new Error(`Expected the RPC protocol to send ${tag}.`));
 });
 
 const completeInitialConfig = Effect.fn("TestRpcSessionFactory.completeInitialConfig")(function* (
@@ -311,6 +334,123 @@ describe("RpcSessionFactory", () => {
       const error = yield* Fiber.join(closedFiber);
       expect(error).toBeInstanceOf(ConnectionTransientError);
       expect(error).toMatchObject({ reason: "transport" });
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("keeps a session alive while unary responses arrive without pongs", () =>
+    Effect.gen(function* () {
+      const { factory, sockets } = yield* makeFactory();
+      const session = yield* factory.connect(PREPARED);
+      const readyFiber = yield* Effect.forkChild(session.ready);
+      const closedFiber = yield* Effect.forkChild(Effect.flip(session.closed));
+      const socket = yield* awaitSocket(sockets);
+
+      socket.open();
+      yield* completeInitialConfig(socket);
+      yield* Fiber.join(readyFiber);
+
+      for (let index = 0; index < 10; index += 1) {
+        yield* TestClock.adjust("4 seconds");
+        const sentBefore = socket.sent.length;
+        const probeFiber = yield* Effect.forkChild(session.probe);
+        const request = yield* awaitNewRequest(socket, WS_METHODS.serverProbe, sentBefore);
+        socket.serverMessage(
+          encodeJson({
+            _tag: "Exit",
+            requestId: request.id,
+            exit: { _tag: "Success", value: {} },
+          }),
+        );
+        yield* Fiber.join(probeFiber);
+      }
+      expect(closedFiber.pollUnsafe()).toBeUndefined();
+
+      // Silence after the last response still closes within the finite deadline.
+      yield* TestClock.adjust("15 seconds");
+      expect(closedFiber.pollUnsafe()).toBeUndefined();
+      yield* TestClock.adjust("5 seconds");
+      const error = yield* Fiber.join(closedFiber);
+      expect(error).toMatchObject({ reason: "transport" });
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("keeps a session alive while stream chunks arrive without pongs", () =>
+    Effect.gen(function* () {
+      const { factory, sockets } = yield* makeFactory();
+      const session = yield* factory.connect(PREPARED);
+      const readyFiber = yield* Effect.forkChild(session.ready);
+      const closedFiber = yield* Effect.forkChild(Effect.flip(session.closed));
+      const socket = yield* awaitSocket(sockets);
+
+      socket.open();
+      yield* completeInitialConfig(socket);
+      yield* Fiber.join(readyFiber);
+
+      const received: unknown[] = [];
+      yield* Effect.forkChild(
+        Stream.runForEach(session.client[WS_METHODS.subscribeServerConfig]({}), (event) =>
+          Effect.sync(() => received.push(event)),
+        ),
+      );
+      const request = yield* awaitNewRequest(socket, WS_METHODS.subscribeServerConfig, 1);
+
+      for (let index = 0; index < 10; index += 1) {
+        yield* TestClock.adjust("4 seconds");
+        socket.serverMessage(
+          encodeJson({
+            _tag: "Chunk",
+            requestId: request.id,
+            values: [{ version: 1, type: "snapshot", config: ENCODED_SERVER_CONFIG }],
+          }),
+        );
+        yield* Effect.yieldNow;
+      }
+      expect(received).toHaveLength(10);
+      expect(closedFiber.pollUnsafe()).toBeUndefined();
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("closes a silent session exactly once", () =>
+    Effect.gen(function* () {
+      const { factory, sockets } = yield* makeFactory();
+      const session = yield* factory.connect(PREPARED);
+      const readyFiber = yield* Effect.forkChild(session.ready);
+      const closedFiber = yield* Effect.forkChild(Effect.flip(session.closed));
+      const socket = yield* awaitSocket(sockets);
+
+      socket.open();
+      yield* completeInitialConfig(socket);
+      yield* Fiber.join(readyFiber);
+
+      yield* TestClock.adjust("20 seconds");
+      const error = yield* Fiber.join(closedFiber);
+      expect(error).toMatchObject({ reason: "transport" });
+
+      yield* TestClock.adjust("1 minute");
+      expect(yield* Effect.flip(session.closed)).toBe(error);
+      expect(sockets).toHaveLength(1);
+      expect(socket.readyState).toBe(TestWebSocket.CLOSED);
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("closes immediately on a socket error", () =>
+    Effect.gen(function* () {
+      const { factory, sockets } = yield* makeFactory();
+      const session = yield* factory.connect(PREPARED);
+      const readyFiber = yield* Effect.forkChild(session.ready);
+      const socket = yield* awaitSocket(sockets);
+
+      socket.open();
+      yield* completeInitialConfig(socket);
+      yield* Fiber.join(readyFiber);
+
+      socket.fail();
+      const error = yield* Effect.flip(session.closed);
+      expect(error).toMatchObject({
+        reason: "transport",
+        message: "Test environment disconnected.",
+      });
+      expect(socket.readyState).toBe(TestWebSocket.CLOSED);
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
 
