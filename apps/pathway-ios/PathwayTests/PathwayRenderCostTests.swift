@@ -26,6 +26,81 @@ struct PathwayRenderCostTests {
         #expect(before.last != after.last)
     }
 
+    @Test func appendedMarkdownMatchesAFullParseAtEveryCharacter() {
+        let document = """
+        # Plan
+        Intro paragraph with **bold**
+        continued here.
+
+        Title
+        =====
+        Sub
+        ---
+        - one
+          - nested
+        1. first
+        - [ ] task
+        - [x] done
+        > quoted
+        > more
+        para
+        ***
+        after divider
+        ```swift
+        let a = 1
+
+        print(a)
+        ```
+        ~~~
+        tilde
+        ~~~
+        Closing paragraph\r\nwith CRLF.
+
+        """
+        let cache = PathwayMarkdownBlockCache()
+        var prefix = ""
+        for character in document {
+            prefix.append(character)
+            #expect(cache.blocks(for: prefix) == PathwayIssueMarkdownBlock.parse(prefix), "after \(prefix.count) characters")
+        }
+        // A later character can reinterpret the last line: a divider becoming text, or a paragraph a setext heading.
+        for (start, appended) in [("para\n***", "x"), ("Title\n--", "-"), ("text\n", "==="), ("- a\n", "---"), ("```\ncode\n``", "`\nafter")] {
+            let incremental = PathwayMarkdownBlockCache()
+            _ = incremental.blocks(for: start)
+            #expect(incremental.blocks(for: start + appended) == PathwayIssueMarkdownBlock.parse(start + appended), "\(start) + \(appended)")
+        }
+    }
+
+    @Test func chunkedAppendsOnlyParseTheUnfinishedTail() {
+        let paragraphs = (0..<2_000).map { "Paragraph \($0) with some **inline** words." }.joined(separator: "\n\n")
+        let cache = PathwayMarkdownBlockCache()
+        _ = cache.blocks(for: paragraphs)
+        #expect(cache.parsedLines == 3_999)
+        var text = paragraphs + "\n\n"
+        for chunk in ["Streaming", " more", " words", "\n", "next line", "\n\n", "- item", "\n```", "swift\nlet x", " = 1"] {
+            text += chunk
+            #expect(cache.blocks(for: text) == PathwayIssueMarkdownBlock.parse(text))
+            #expect(cache.parsedLines <= 4, "\(chunk) reparsed \(cache.parsedLines) lines")
+        }
+        // A closed fence ends its block, so text streaming below it does not reparse the code.
+        text += "\n```\nAfter"
+        _ = cache.blocks(for: text)
+        text += " the code"
+        #expect(cache.blocks(for: text) == PathwayIssueMarkdownBlock.parse(text))
+        #expect(cache.parsedLines == 1)
+    }
+
+    @Test func editedOrReplacedMarkdownParsesAgain() {
+        let cache = PathwayMarkdownBlockCache()
+        _ = cache.blocks(for: "# One\n\n- [ ] task\n- [ ] other")
+        let toggled = "# One\n\n- [x] task\n- [ ] other"
+        #expect(cache.blocks(for: toggled) == PathwayIssueMarkdownBlock.parse(toggled))
+        #expect(cache.parsedLines == 4)
+        #expect(cache.blocks(for: "Replaced") == PathwayIssueMarkdownBlock.parse("Replaced"))
+        #expect(cache.blocks(for: "") == [])
+        #expect(cache.blocks(for: "Again") == PathwayIssueMarkdownBlock.parse("Again"))
+    }
+
     @Test func hugeToolOutputKeepsHeadAndTailForDisplay() {
         let short = String(repeating: "a", count: 100)
         #expect(AgentTranscriptCodeBlock.displayText(short, limit: 100) == short)
