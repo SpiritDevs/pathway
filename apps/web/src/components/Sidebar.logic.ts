@@ -1173,14 +1173,17 @@ export type SidebarThreadDetailsState = { readonly open: boolean; readonly keybo
  * The keyboard opens the card through its popover handle (`imperative-action`). Once it has, hover
  * no longer drives the card: a hover open still pending from before the key, or the mouseleave of
  * the hover that first opened it, would hand the card back to hover, which turns off Base UI's focus
- * manager. The row cancels those synchronously so Base UI keeps its keyboard state. A missing
- * reason is the multi-PR badge, which opens the card in place.
+ * manager. The row cancels those synchronously so Base UI keeps its keyboard state. A press on the
+ * row navigates, so the row cancels Base UI's press open too, which would otherwise pin a hovered
+ * card open after the pointer leaves. A missing reason is the multi-PR badge, which opens the card
+ * in place.
  */
 export function nextSidebarThreadDetailsState(
   current: SidebarThreadDetailsState,
   open: boolean,
   reason: string | undefined,
 ): SidebarThreadDetailsState | null {
+  if (open && reason === "trigger-press") return null;
   if (current.open && current.keyboard && reason === "trigger-hover") return null;
   if (!open) return { open: false, keyboard: current.keyboard };
   return { open: true, keyboard: reason === "imperative-action" };

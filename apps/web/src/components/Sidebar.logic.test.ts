@@ -2228,6 +2228,15 @@ describe("nextSidebarThreadDetailsState", () => {
     expect(nextSidebarThreadDetailsState(hovered, false, "trigger-hover")).toEqual(closed);
   });
 
+  it("cancels a row press so a hovered card stays hover-only", () => {
+    const hovered = run([true, "trigger-hover"]);
+    expect(nextSidebarThreadDetailsState(hovered, true, "trigger-press")).toBeNull();
+    expect(nextSidebarThreadDetailsState(closed, true, "trigger-press")).toBeNull();
+    expect(run([true, "trigger-hover"], [true, "trigger-press"], [false, "trigger-hover"])).toEqual(
+      closed,
+    );
+  });
+
   it("cancels a hover open still pending when the key opened the card", () => {
     const keyboard = run([true, "imperative-action"]);
     expect(nextSidebarThreadDetailsState(keyboard, true, "trigger-hover")).toBeNull();
