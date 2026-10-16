@@ -16,6 +16,8 @@ import {
   type RunId,
 } from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
+import type { EnvironmentConnectionPhase } from "@spiritdevs/client-runtime/connection";
+import type { ServerUpdateState } from "@spiritdevs/client-runtime/state/server";
 import { presentThreadShell } from "@spiritdevs/client-runtime/state/shell";
 import type { EnvironmentThreadState } from "@spiritdevs/client-runtime/state/threads";
 import { modelSelectionsEqual } from "@spiritdevs/shared/model";
@@ -110,6 +112,25 @@ export function hasEnvironmentReconnectWarningGraceElapsed(
   elapsedEnvironmentId: EnvironmentId | null,
 ): boolean {
   return activeEnvironmentId !== null && activeEnvironmentId === elapsedEnvironmentId;
+}
+
+/**
+ * Which environment banners the composer shows. A cached version mismatch is
+ * never read as evidence of an update: only a running update hides reconnect
+ * blips, and the connection banner otherwise keeps its reason and actions.
+ */
+export function resolveEnvironmentComposerBanners(input: {
+  readonly unavailablePhase: EnvironmentConnectionPhase | null;
+  readonly updateStatus: ServerUpdateState["status"];
+  readonly showVersionMismatch: boolean;
+}): { readonly connection: boolean; readonly serverVersion: boolean } {
+  const reconnecting =
+    input.unavailablePhase === "connecting" || input.unavailablePhase === "reconnecting";
+  return {
+    connection:
+      input.unavailablePhase !== null && !(input.updateStatus === "running" && reconnecting),
+    serverVersion: input.updateStatus !== "idle" || input.showVersionMismatch,
+  };
 }
 
 export function startNewThreadForProject(

@@ -43,6 +43,7 @@ import {
   reconcileRetainedMountedThreadIds,
   resolveEditableV2UserMessageId,
   resolveDraftEnvironmentProjectRef,
+  resolveEnvironmentComposerBanners,
   resolveRetryableV2UserMessageId,
   resolveThreadProjectionWorkingPresentation,
   resolveThreadStopAction,
@@ -61,6 +62,71 @@ const environmentId = EnvironmentId.make("environment-local");
 const projectId = ProjectId.make("project-1");
 const threadId = ThreadId.make("thread-1");
 const now = "2026-03-29T00:00:00.000Z";
+
+describe("resolveEnvironmentComposerBanners", () => {
+  it("keeps the connection banner for every unavailable phase when a version mismatch is cached", () => {
+    for (const phase of ["connecting", "reconnecting", "offline", "error", "available"] as const) {
+      expect(
+        resolveEnvironmentComposerBanners({
+          unavailablePhase: phase,
+          updateStatus: "idle",
+          showVersionMismatch: true,
+        }),
+      ).toEqual({ connection: true, serverVersion: true });
+    }
+  });
+
+  it("keeps a dismissed version mismatch hidden while reconnecting", () => {
+    expect(
+      resolveEnvironmentComposerBanners({
+        unavailablePhase: "reconnecting",
+        updateStatus: "idle",
+        showVersionMismatch: false,
+      }),
+    ).toEqual({ connection: true, serverVersion: false });
+  });
+
+  it("shows nothing for a connected environment without update news", () => {
+    expect(
+      resolveEnvironmentComposerBanners({
+        unavailablePhase: null,
+        updateStatus: "idle",
+        showVersionMismatch: false,
+      }),
+    ).toEqual({ connection: false, serverVersion: false });
+  });
+
+  it("lets a running update hide reconnect blips but not hard failures", () => {
+    for (const phase of ["connecting", "reconnecting"] as const) {
+      expect(
+        resolveEnvironmentComposerBanners({
+          unavailablePhase: phase,
+          updateStatus: "running",
+          showVersionMismatch: false,
+        }),
+      ).toEqual({ connection: false, serverVersion: true });
+    }
+    for (const phase of ["offline", "error"] as const) {
+      expect(
+        resolveEnvironmentComposerBanners({
+          unavailablePhase: phase,
+          updateStatus: "running",
+          showVersionMismatch: false,
+        }),
+      ).toEqual({ connection: true, serverVersion: true });
+    }
+  });
+
+  it("keeps a failed update and the connection reason visible together", () => {
+    expect(
+      resolveEnvironmentComposerBanners({
+        unavailablePhase: "reconnecting",
+        updateStatus: "failed",
+        showVersionMismatch: false,
+      }),
+    ).toEqual({ connection: true, serverVersion: true });
+  });
+});
 
 describe("resolveDraftEnvironmentProjectRef", () => {
   const activeProject = { environmentId, id: projectId };
