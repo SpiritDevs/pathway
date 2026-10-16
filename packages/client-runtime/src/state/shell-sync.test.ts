@@ -30,6 +30,7 @@ import * as Persistence from "../platform/persistence.ts";
 import * as RpcSession from "../rpc/session.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import {
+  type EnvironmentShellState,
   makeEnvironmentShellState,
   SHELL_PERSIST_MIN_INTERVAL,
   ShellSnapshotLoader,
@@ -66,6 +67,88 @@ function session(client: WsRpcProtocolClient): RpcSession.RpcSession {
     closed: Effect.never,
   };
 }
+
+// A shell fed from a scripted stream whose cache saves through `saveShell`.
+const makeShellHarness = Effect.fn("makeShellHarness")(function* (
+  saveShell: Persistence.EnvironmentCacheStore["Service"]["saveShell"],
+) {
+  const events = yield* Queue.unbounded<OrchestrationV2ShellStreamItem>();
+  const client = {
+    [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: () => Stream.fromQueue(events),
+  } as unknown as WsRpcProtocolClient;
+  const supervisorState = yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE);
+  const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+    target: TARGET,
+    state: supervisorState,
+    session: yield* SubscriptionRef.make(Option.some(session(client))),
+    prepared: yield* SubscriptionRef.make(Option.some(PREPARED)),
+    connect: Effect.void,
+    disconnect: Effect.void,
+    retryNow: Effect.void,
+  } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
+  const cache = Persistence.EnvironmentCacheStore.of({
+    loadShell: () => Effect.succeed(Option.none()),
+    saveShell,
+    loadThread: () => Effect.succeed(Option.none()),
+    saveThread: () => Effect.void,
+    removeThread: () => Effect.void,
+    loadServerConfig: () => Effect.succeed(Option.none()),
+    saveServerConfig: () => Effect.void,
+    loadVcsRefs: () => Effect.succeed(Option.none()),
+    saveVcsRefs: () => Effect.void,
+    removeVcsRefs: () => Effect.void,
+    clearVcsRefs: () => Effect.void,
+    clear: () => Effect.void,
+  });
+  const shellState = yield* makeEnvironmentShellState().pipe(
+    Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+    Effect.provideService(Persistence.EnvironmentCacheStore, cache),
+    Effect.provideService(
+      ShellSnapshotLoader,
+      ShellSnapshotLoader.of({ load: () => Effect.succeed(Option.none()) }),
+    ),
+  );
+  const awaitShell = (predicate: (state: EnvironmentShellState) => boolean) =>
+    SubscriptionRef.changes(shellState).pipe(Stream.filter(predicate), Stream.runHead);
+  const awaitSequence = (sequence: number) =>
+    awaitShell((state) =>
+      Option.exists(state.snapshot, (snapshot) => snapshot.snapshotSequence === sequence),
+    );
+  const setPhase = (phase: "connecting" | "available") =>
+    SubscriptionRef.update(supervisorState, (current) => ({
+      ...current,
+      desired: phase === "connecting",
+      network: "online" as const,
+      phase,
+      stage: phase === "connecting" ? ("synchronizing" as const) : null,
+      generation: current.generation + 1,
+    }));
+
+  return {
+    // Each step returns once the shell has applied it.
+    start: Queue.offer(events, { kind: "snapshot", snapshot: LIVE_SHELL_SNAPSHOT }).pipe(
+      Effect.andThen(awaitSequence(1)),
+    ),
+    update: (sequence: number) =>
+      Queue.offer(events, {
+        kind: "project.updated",
+        sequence,
+        project: { ...v2Project, title: `Update ${sequence}` },
+      }).pipe(Effect.andThen(awaitSequence(sequence))),
+    connect: setPhase("connecting").pipe(
+      Effect.andThen(awaitShell((state) => state.status === "synchronizing")),
+    ),
+    disconnect: setPhase("available").pipe(
+      Effect.andThen(awaitShell((state) => state.status === "cached")),
+    ),
+  };
+});
+
+// Step the clock so each timer's follow-up work runs before time moves on.
+const advanceSeconds = (seconds: number) =>
+  Effect.forEach(Array.from({ length: seconds }), () => TestClock.adjust("1 second"), {
+    discard: true,
+  });
 
 describe("environment shell synchronization", () => {
   it.effect("publishes live state before persistence and preserves it when ready", () =>
@@ -485,7 +568,7 @@ describe("environment shell synchronization", () => {
     }),
   );
 
-  it.effect("re-persists same-sequence enrichment when an older in-flight save completes", () =>
+  it.effect("persists same-sequence enrichment that lands during an older in-flight save", () =>
     Effect.gen(function* () {
       const repositoryIdentity = {
         canonicalKey: "github.com/example/repo",
@@ -507,7 +590,7 @@ describe("environment shell synchronization", () => {
       };
 
       const events = yield* Queue.unbounded<OrchestrationV2ShellStreamItem>();
-      const saved = yield* Ref.make<ReadonlyArray<OrchestrationV2ShellSnapshot>>([]);
+      const saved = yield* Queue.unbounded<OrchestrationV2ShellSnapshot>();
       const unenrichedSaveStarted = yield* Deferred.make<void>();
       const releaseUnenrichedSave = yield* Deferred.make<void>();
       const client = {
@@ -534,7 +617,7 @@ describe("environment shell synchronization", () => {
               yield* Deferred.succeed(unenrichedSaveStarted, undefined);
               yield* Deferred.await(releaseUnenrichedSave);
             }
-            yield* Ref.update(saved, (values) => [...values, snapshot]);
+            yield* Queue.offer(saved, snapshot);
           }),
         loadThread: () => Effect.succeed(Option.none()),
         saveThread: () => Effect.void,
@@ -578,7 +661,7 @@ describe("environment shell synchronization", () => {
       );
 
       // Disconnect flush starts an immediate persist of the unenriched snapshot
-      // (debounced path needs TestClock advancement; flush does not).
+      // (throttled path needs TestClock advancement; flush does not).
       yield* SubscriptionRef.set(supervisorState, {
         desired: false,
         network: "online",
@@ -606,19 +689,14 @@ describe("environment shell synchronization", () => {
         Stream.runHead,
       );
 
-      // Completing the older same-sequence save must re-persist the latest object.
       yield* Deferred.succeed(releaseUnenrichedSave, undefined);
-      for (let index = 0; index < 100; index += 1) {
-        const values = yield* Ref.get(saved);
-        if (values.length > 0 && values.at(-1)?.projects[0]?.repositoryIdentity != null) {
-          break;
-        }
-        yield* Effect.yieldNow;
-      }
+      expect((yield* Queue.take(saved)).projects[0]?.repositoryIdentity).toBeNull();
 
-      const finalSaved = (yield* Ref.get(saved)).at(-1);
-      expect(finalSaved?.snapshotSequence).toBe(1);
-      expect(finalSaved?.projects[0]?.repositoryIdentity).toEqual(repositoryIdentity);
+      // The next throttled save must still treat the same-sequence object as new.
+      yield* TestClock.adjust("1 second");
+      const enrichedSave = yield* Queue.take(saved);
+      expect(enrichedSave.snapshotSequence).toBe(1);
+      expect(enrichedSave.projects[0]?.repositoryIdentity).toEqual(repositoryIdentity);
     }),
   );
 
@@ -835,15 +913,9 @@ describe("environment shell synchronization", () => {
           Stream.runHead,
         );
 
-      // Step the clock so each timer's follow-up work runs before time moves on.
-      const advance = (seconds: number) =>
-        Effect.forEach(Array.from({ length: seconds }), () => TestClock.adjust("1 second"), {
-          discard: true,
-        });
-
       yield* Queue.offer(events, { kind: "snapshot", snapshot: LIVE_SHELL_SNAPSHOT });
       yield* awaitSequence(1);
-      yield* advance(1);
+      yield* advanceSeconds(1);
       const first = yield* Queue.take(saved);
       expect(first.sequence).toBe(1);
 
@@ -853,12 +925,145 @@ describe("environment shell synchronization", () => {
         project: { ...v2Project, title: "Renamed" },
       });
       yield* awaitSequence(2);
-      yield* advance(40);
+      yield* advanceSeconds(40);
       const second = yield* Queue.take(saved);
       expect(second.sequence).toBe(2);
       expect(second.at - first.at).toBeGreaterThanOrEqual(
         Duration.toMillis(SHELL_PERSIST_MIN_INTERVAL),
       );
+    }),
+  );
+
+  it.effect("waits for the next interval to save updates that land during a save", () =>
+    Effect.gen(function* () {
+      const started = yield* Queue.unbounded<number>();
+      const releaseSave = yield* Deferred.make<void>();
+      const shell = yield* makeShellHarness((_environmentId, snapshot) =>
+        Queue.offer(started, snapshot.snapshotSequence).pipe(
+          Effect.andThen(Deferred.await(releaseSave)),
+        ),
+      );
+
+      yield* shell.start;
+      yield* advanceSeconds(1);
+      expect(yield* Queue.take(started)).toBe(1);
+
+      yield* shell.update(2);
+      yield* shell.update(3);
+      yield* Deferred.succeed(releaseSave, undefined);
+      yield* advanceSeconds(Duration.toSeconds(SHELL_PERSIST_MIN_INTERVAL) - 5);
+      expect(yield* Queue.size(started)).toBe(0);
+
+      yield* advanceSeconds(10);
+      expect(yield* Queue.take(started)).toBe(3);
+      expect(yield* Queue.size(started)).toBe(0);
+    }),
+  );
+
+  it.effect("saves the newest snapshot once per interval under a steady stream", () =>
+    Effect.gen(function* () {
+      const newestSequence = yield* Ref.make(0);
+      const saves = yield* Ref.make<
+        ReadonlyArray<{ readonly sequence: number; readonly newest: number; readonly at: number }>
+      >([]);
+      const shell = yield* makeShellHarness((_environmentId, snapshot) =>
+        Effect.gen(function* () {
+          const save = {
+            sequence: snapshot.snapshotSequence,
+            newest: yield* Ref.get(newestSequence),
+            at: yield* Clock.currentTimeMillis,
+          };
+          yield* Ref.update(saves, (values) => [...values, save]);
+        }),
+      );
+      const intervalMillis = Duration.toMillis(SHELL_PERSIST_MIN_INTERVAL);
+
+      // Updates every 250 ms never leave a 500 ms quiet gap.
+      yield* shell.start;
+      yield* Ref.set(newestSequence, 1);
+      for (let sequence = 2; sequence <= (2 * intervalMillis + 10_000) / 250; sequence += 1) {
+        yield* TestClock.adjust("250 millis");
+        yield* shell.update(sequence);
+        yield* Ref.set(newestSequence, sequence);
+      }
+
+      const values = yield* Ref.get(saves);
+      expect(values).toHaveLength(3);
+      for (const [index, save] of values.entries()) {
+        expect(save.sequence).toBe(save.newest);
+        const previous = values[index - 1];
+        if (previous !== undefined) {
+          expect(save.at - previous.at).toBeGreaterThanOrEqual(intervalMillis);
+        }
+      }
+    }),
+  );
+
+  it.effect("retries an unchanged snapshot after a failed save", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0);
+      const saved = yield* Queue.unbounded<number>();
+      const shell = yield* makeShellHarness((_environmentId, snapshot) =>
+        Ref.getAndUpdate(attempts, (count) => count + 1).pipe(
+          Effect.flatMap((attempt) =>
+            attempt === 0
+              ? Effect.fail(
+                  new Persistence.ConnectionPersistenceError({
+                    operation: "save-shell",
+                    message: "Storage is unavailable.",
+                  }),
+                )
+              : Queue.offer(saved, snapshot.snapshotSequence),
+          ),
+        ),
+      );
+
+      yield* shell.start;
+      yield* advanceSeconds(1);
+      expect(yield* Ref.get(attempts)).toBe(1);
+
+      yield* shell.disconnect;
+      expect(yield* Queue.take(saved)).toBe(1);
+    }),
+  );
+
+  it.effect("serializes disconnect flushes behind an in-flight save", () =>
+    Effect.gen(function* () {
+      const started = yield* Ref.make<ReadonlyArray<number>>([]);
+      const saved = yield* Queue.unbounded<number>();
+      const inFlight = yield* Ref.make(0);
+      const maxInFlight = yield* Ref.make(0);
+      const firstSaveStarted = yield* Deferred.make<void>();
+      const releaseSaves = yield* Deferred.make<void>();
+      const shell = yield* makeShellHarness((_environmentId, snapshot) =>
+        Effect.gen(function* () {
+          const running = yield* Ref.updateAndGet(inFlight, (count) => count + 1);
+          yield* Ref.update(maxInFlight, (max) => Math.max(max, running));
+          yield* Ref.update(started, (values) => [...values, snapshot.snapshotSequence]);
+          yield* Deferred.succeed(firstSaveStarted, undefined);
+          yield* Deferred.await(releaseSaves);
+          yield* Ref.update(inFlight, (count) => count - 1);
+          yield* Queue.offer(saved, snapshot.snapshotSequence);
+        }),
+      );
+
+      yield* shell.start;
+      yield* shell.disconnect;
+      yield* Deferred.await(firstSaveStarted);
+
+      // Flap while the first flush is blocked, then land newer content.
+      yield* shell.connect;
+      yield* shell.disconnect;
+      yield* shell.connect;
+      yield* shell.disconnect;
+      yield* shell.update(2);
+      yield* shell.disconnect;
+
+      yield* Deferred.succeed(releaseSaves, undefined);
+      expect(yield* Queue.take(saved)).toBe(1);
+      expect(yield* Queue.take(saved)).toBe(2);
+      expect(yield* Ref.get(started)).toEqual([1, 2]);
+      expect(yield* Ref.get(maxInFlight)).toBe(1);
     }),
   );
 });

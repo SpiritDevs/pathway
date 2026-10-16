@@ -11,6 +11,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
@@ -79,53 +80,48 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
   const latestLiveSnapshot = yield* Ref.make<Option.Option<OrchestrationV2ShellSnapshot>>(
     Option.none(),
   );
-  const persistence = yield* Queue.sliding<OrchestrationV2ShellSnapshot>(1);
+  const savedSnapshot = yield* Ref.make<OrchestrationV2ShellSnapshot | null>(null);
+  const persistLock = yield* Semaphore.make(1);
+  const persistRequests = yield* Queue.sliding<void>(1);
 
-  const persist = Effect.fn("EnvironmentShellState.persist")(function* (
-    snapshot: OrchestrationV2ShellSnapshot,
-  ) {
-    let nextSnapshot = snapshot;
-    while (true) {
-      yield* cache.saveShell(environmentId, nextSnapshot).pipe(
-        Effect.catch((error) =>
-          Effect.logWarning("Could not persist environment shell cache.").pipe(
-            Effect.annotateLogs({
-              environmentId,
-              ...safeErrorLogAttributes(error),
-            }),
-          ),
-        ),
-      );
-
-      const latestSnapshot = yield* Ref.get(latestLiveSnapshot);
-      // Same sequence can still mean newer content (e.g. repository enrichment).
-      if (Option.isNone(latestSnapshot) || latestSnapshot.value === nextSnapshot) {
-        return;
-      }
-      nextSnapshot = latestSnapshot.value;
-    }
-  });
-
-  const flushLiveShellSnapshot = Effect.gen(function* () {
-    const snapshot = yield* Ref.get(latestLiveSnapshot);
-    if (Option.isNone(snapshot)) {
+  // Saves the newest live snapshot unless it is already saved. The lock keeps
+  // one save in flight, so throttled saves and disconnect/teardown flushes never
+  // overlap, and flushes queued behind a save of the same snapshot skip.
+  const persist = Effect.fn("EnvironmentShellState.persist")(function* () {
+    const latest = yield* Ref.get(latestLiveSnapshot);
+    // Same sequence can still mean newer content (e.g. repository enrichment),
+    // so compare by identity.
+    if (Option.isNone(latest) || latest.value === (yield* Ref.get(savedSnapshot))) {
       return;
     }
-    yield* persist(snapshot.value);
-  });
+    // Only a successful write counts as saved, so a later save retries a failed one.
+    yield* cache.saveShell(environmentId, latest.value).pipe(
+      Effect.andThen(Ref.set(savedSnapshot, latest.value)),
+      Effect.catch((error) =>
+        Effect.logWarning("Could not persist environment shell cache.").pipe(
+          Effect.annotateLogs({
+            environmentId,
+            ...safeErrorLogAttributes(error),
+          }),
+        ),
+      ),
+    );
+  }, persistLock.withPermits(1));
 
   // Register before scoped worker fibers so reverse finalizer order interrupts
   // those fibers first and this flush sees a stable latestLiveSnapshot.
-  yield* Effect.addFinalizer(() => flushLiveShellSnapshot);
+  yield* Effect.addFinalizer(() => persist());
 
-  // Encoding a large shell takes milliseconds on the UI thread, and the cache
-  // only seeds first paint (new sessions reload the authoritative snapshot), so
-  // save at most once per interval. Disconnect and teardown flush the latest.
-  yield* Stream.fromQueue(persistence).pipe(
-    Stream.debounce("500 millis"),
-    Stream.runForEach((snapshot) =>
-      persist(snapshot).pipe(Effect.andThen(Effect.sleep(SHELL_PERSIST_MIN_INTERVAL))),
-    ),
+  // Encoding a large shell takes ~100 ms on the UI thread, and the cache only
+  // seeds first paint (new sessions reload the authoritative snapshot), so this
+  // worker saves at most once per interval: let a burst settle, save the newest
+  // snapshot, then rest. Updates during the rest collapse into one request.
+  // Disconnect and teardown flush the latest outside the interval.
+  yield* Queue.take(persistRequests).pipe(
+    Effect.andThen(Effect.sleep("500 millis")),
+    Effect.andThen(persist()),
+    Effect.andThen(Effect.sleep(SHELL_PERSIST_MIN_INTERVAL)),
+    Effect.forever,
     Effect.forkScoped,
   );
 
@@ -136,7 +132,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         status: shellStatusForSnapshot(current.snapshot),
       })),
     ),
-    Effect.andThen(flushLiveShellSnapshot.pipe(Effect.forkScoped)),
+    Effect.andThen(persist().pipe(Effect.forkScoped)),
     Effect.asVoid,
   );
   const setSynchronizing = SubscriptionRef.update(state, (current) => ({
@@ -218,7 +214,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         yield* Ref.set(lastAuthoritativeSession, session);
       }
     }
-    yield* Queue.offer(persistence, nextSnapshot);
+    yield* Queue.offer(persistRequests, undefined);
   });
 
   const foregroundResubscriptions = Option.match(wakeups, {
