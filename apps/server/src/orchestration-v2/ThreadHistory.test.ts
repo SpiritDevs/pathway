@@ -22,6 +22,7 @@ import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { ProjectionStoreV2, layer as projectionStoreLayer } from "./ProjectionStore.ts";
 import { readToolOutput, threadProjectionPayload } from "./ThreadPayload.ts";
 import {
+  THREAD_REPLAY_MAX_BYTES,
   narrowHistoryPageSupport,
   threadHistoryNeedsSnapshot,
   threadProjectionExists,
@@ -424,6 +425,28 @@ it.layer(TestLayer)("bounded thread history", (it) => {
         const snapshot = yield* store.getThreadSnapshot(seeded.threadId, { limit: 5 });
         assert.equal(snapshot.snapshotSequence, 3000);
       }),
+  );
+
+  it.effect("resets a short backlog whose stored JSON exceeds the replay byte budget", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.make("thread:heavy-backlog");
+      const insert = (sequence: number, payloadBytes: number) => {
+        const payload = JSON.stringify({ output: "x".repeat(payloadBytes - 13) });
+        return sql`INSERT INTO orchestration_events (sequence, event_id, aggregate_kind, stream_id, stream_version, event_type, occurred_at, actor_kind, payload_json, metadata_json, application_event_version)
+          VALUES (${sequence}, ${`heavy:${sequence}`}, 'thread', ${threadId}, ${sequence}, 'message.updated', '2026-09-19T01:00:00Z', 'system', ${payload}, '{}', 2)`;
+      };
+      const half = THREAD_REPLAY_MAX_BYTES / 2;
+      // Each row also stores a 2-byte '{}' metadata column.
+      yield* insert(1, half - 2);
+      yield* insert(2, half - 2);
+      yield* insert(3, 13);
+      yield* insert(4, THREAD_REPLAY_MAX_BYTES);
+      assert.isFalse(yield* threadHistoryNeedsSnapshot(threadId, 0, 2));
+      assert.isTrue(yield* threadHistoryNeedsSnapshot(threadId, 0, 3));
+      assert.isFalse(yield* threadHistoryNeedsSnapshot(threadId, 2, 3));
+      assert.isTrue(yield* threadHistoryNeedsSnapshot(threadId, 3, 4));
+    }),
   );
 
   it.effect("finds resume targets exactly where the thread shell exists", () =>

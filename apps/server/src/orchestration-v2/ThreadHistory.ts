@@ -12,7 +12,19 @@ import type {
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-/** A large reconnect replaces replay with a recent snapshot; global sequence gaps are not a count. */
+/** Most events a thread resume replays; a longer backlog resets with a snapshot. */
+export const THREAD_REPLAY_MAX_EVENTS = 250;
+/**
+ * Most stored JSON a thread resume reads and decodes. Event count alone admits
+ * tens of MB when tool output is large; a typical event is about 1.5 KB.
+ */
+export const THREAD_REPLAY_MAX_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Whether a reconnect must reset with a snapshot instead of replaying: too many
+ * missed events or too many stored bytes, measured in SQL before any row is
+ * decoded. Global sequence gaps belong to other threads, so they are not counted.
+ */
 export const threadHistoryNeedsSnapshot = Effect.fn("threadHistoryNeedsSnapshot")(function* (
   threadId: ThreadId,
   afterSequence: number,
@@ -21,14 +33,21 @@ export const threadHistoryNeedsSnapshot = Effect.fn("threadHistoryNeedsSnapshot"
   if (afterSequence > throughSequence) return true;
   const sql = yield* SqlClient.SqlClient;
   // Unary `+` keeps SQLite on the (aggregate_kind, stream_id, sequence) index.
-  const backlog = yield* sql<{ sequence: number }>`
-    SELECT sequence FROM orchestration_events
-    WHERE +application_event_version = 2 AND aggregate_kind = 'thread'
-      AND stream_id = ${threadId}
-      AND sequence > ${afterSequence} AND sequence <= ${throughSequence}
-    ORDER BY sequence LIMIT 251
+  const [backlog] = yield* sql<{ readonly events: number; readonly bytes: number }>`
+    SELECT COUNT(*) AS events,
+      COALESCE(SUM(length(CAST(payload_json AS BLOB)) + length(CAST(metadata_json AS BLOB))), 0) AS bytes
+    FROM (
+      SELECT payload_json, metadata_json FROM orchestration_events
+      WHERE +application_event_version = 2 AND aggregate_kind = 'thread'
+        AND stream_id = ${threadId}
+        AND sequence > ${afterSequence} AND sequence <= ${throughSequence}
+      ORDER BY sequence LIMIT ${THREAD_REPLAY_MAX_EVENTS + 1}
+    )
   `;
-  return backlog.length > 250;
+  return (
+    (backlog?.events ?? 0) > THREAD_REPLAY_MAX_EVENTS ||
+    (backlog?.bytes ?? 0) > THREAD_REPLAY_MAX_BYTES
+  );
 });
 
 /**
