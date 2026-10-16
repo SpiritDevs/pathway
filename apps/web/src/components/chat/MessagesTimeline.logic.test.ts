@@ -1,6 +1,16 @@
-import { MessageId, RunId, ThreadId } from "@spiritdevs/contracts";
+import {
+  MessageId,
+  RunId,
+  ThreadId,
+  TurnItemId,
+  type OrchestrationV2ProjectedTurnItem,
+} from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
-import { withOptimisticWorkspacePreparation, type TimelineEntry } from "../../session-logic";
+import {
+  deriveTimelineEntriesFromVisibleTurnItems,
+  withOptimisticWorkspacePreparation,
+  type TimelineEntry,
+} from "../../session-logic";
 import { describe, expect, it } from "vite-plus/test";
 import {
   computeStableMessagesTimelineRows,
@@ -1826,6 +1836,102 @@ describe("computeStableMessagesTimelineRows", () => {
 
     expect(reordered).not.toBe(initial);
     expect(reordered.result).toEqual([initial.result[1], initial.result[0]]);
+  });
+});
+
+describe("work rows across projection updates", () => {
+  const threadId = ThreadId.make("work-row-thread");
+  // The projection replaces a row only when its item changes, so tests reuse rows as it does.
+  const commandRow = (
+    id: string,
+    ordinal: number,
+    state: { status: "running" | "completed"; output?: string } = { status: "running" },
+  ): OrchestrationV2ProjectedTurnItem => {
+    const at = DateTime.makeUnsafe(`2026-01-01T00:00:0${ordinal}.000Z`);
+    const itemId = TurnItemId.make(id);
+    return {
+      position: ordinal,
+      visibility: "local",
+      sourceThreadId: threadId,
+      sourceItemId: itemId,
+      item: {
+        id: itemId,
+        threadId,
+        runId: null,
+        nodeId: null,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal,
+        status: state.status,
+        title: null,
+        startedAt: at,
+        completedAt: state.status === "completed" ? at : null,
+        updatedAt: at,
+        type: "command_execution",
+        input: `run ${id}`,
+        ...(state.output === undefined ? {} : { output: state.output }),
+      },
+    };
+  };
+  const rowsFor = (visibleTurnItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem>) =>
+    deriveMessagesTimelineRows({
+      timelineEntries: deriveTimelineEntriesFromVisibleTurnItems({
+        visibleTurnItems,
+        optimisticMessages: [],
+      }),
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+  const stabilize = (rows: MessagesTimelineRow[]) =>
+    computeStableMessagesTimelineRows(rows, { byId: new Map(), result: [] });
+  const groupedEntries = (row: MessagesTimelineRow | undefined) =>
+    row?.kind === "work" ? row.groupedEntries : [];
+
+  it("keeps an unchanged group when a rebuild recreates its entries", () => {
+    const items = [commandRow("read", 1), commandRow("edit", 2), commandRow("test", 3)];
+    const first = rowsFor(items);
+    const initial = stabilize(first);
+    const rebuilt = rowsFor([...items]);
+
+    expect(groupedEntries(rebuilt[0])[0]).not.toBe(groupedEntries(first[0])[0]);
+    expect(computeStableMessagesTimelineRows(rebuilt, initial)).toBe(initial);
+  });
+
+  it.each([
+    ["finishes", { status: "completed", output: "ok" }],
+    ["streams output", { status: "running", output: "partial" }],
+  ] as const)("replaces the group when one of its tools %s", (_, state) => {
+    const read = commandRow("read", 1);
+    const test = commandRow("test", 3);
+    const initial = stabilize(rowsFor([read, commandRow("edit", 2), test]));
+
+    const next = computeStableMessagesTimelineRows(
+      rowsFor([read, commandRow("edit", 2, state), test]),
+      initial,
+    );
+
+    expect(next.result[0]).not.toBe(initial.result[0]);
+    expect(groupedEntries(next.result[0])[1]).toMatchObject({ detail: state.output });
+  });
+
+  it("replaces the group when entries join or leave it", () => {
+    const items = [commandRow("read", 1), commandRow("edit", 2)];
+    const initial = stabilize(rowsFor(items));
+
+    const joined = computeStableMessagesTimelineRows(
+      rowsFor([...items, commandRow("test", 3)]),
+      initial,
+    );
+    expect(joined.result[0]).not.toBe(initial.result[0]);
+    expect(groupedEntries(joined.result[0])).toHaveLength(3);
+
+    const left = computeStableMessagesTimelineRows(rowsFor(items), joined);
+    expect(left.result[0]).not.toBe(joined.result[0]);
+    expect(groupedEntries(left.result[0])).toHaveLength(2);
   });
 });
 

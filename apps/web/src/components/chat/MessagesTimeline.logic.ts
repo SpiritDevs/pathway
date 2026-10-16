@@ -2,7 +2,6 @@ import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 import { ChatAttachment } from "@spiritdevs/contracts";
 import { turnItemIsWorkspacePreparation } from "@spiritdevs/client-runtime/state/turn-item-presentation";
-import * as Equal from "effect/Equal";
 import {
   formatDuration,
   timelineEntryIsPersistentResourceCard,
@@ -980,8 +979,15 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
       );
     }
 
-    case "work":
-      return Equal.equals(a.groupedEntries, (b as typeof a).groupedEntries);
+    case "work": {
+      const bw = b as typeof a;
+      return (
+        a.groupedEntries.length === bw.groupedEntries.length &&
+        a.groupedEntries.every((entry, index) =>
+          isWorkLogEntryUnchanged(entry, bw.groupedEntries[index]),
+        )
+      );
+    }
 
     case "message": {
       const bm = b as typeof a;
@@ -1008,6 +1014,16 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
       );
     }
   }
+}
+
+/**
+ * Work entries are rebuilt on every projection update, but each derives all of
+ * its fields from its projected row, and the projection never mutates a row in
+ * place. The same row therefore means an unchanged entry; a new row may still
+ * hold the same item. Comparing rows avoids walking large tool payloads.
+ */
+function isWorkLogEntryUnchanged(a: WorkLogEntry, b: WorkLogEntry | undefined): boolean {
+  return a === b || (a.projectedItem !== undefined && a.projectedItem === b?.projectedItem);
 }
 
 export function isGeneratedQuestionReply(
