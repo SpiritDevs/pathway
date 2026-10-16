@@ -115,6 +115,7 @@ import * as ThreadManagementService from "./orchestration-v2/ThreadManagementSer
 import { threadEventPayload, threadProjectionPayload } from "./orchestration-v2/ThreadPayload.ts";
 import { ProjectionStoreThreadNotFoundError } from "./orchestration-v2/ProjectionStore.ts";
 import {
+  THREAD_REPLAY_MAX_EVENTS,
   threadHistoryNeedsSnapshot,
   threadProjectionExists,
 } from "./orchestration-v2/ThreadHistory.ts";
@@ -1136,6 +1137,7 @@ const makeWsRpcLayer = (
                 threadId: input.threadId,
                 afterSequence,
                 throughSequence,
+                limit: THREAD_REPLAY_MAX_EVENTS,
               })
               .pipe(
                 Stream.map((stored) => ({
@@ -1183,24 +1185,23 @@ const makeWsRpcLayer = (
                   }),
               ),
             );
-            // Count only a bounded prefix: global sequence gaps also contain other threads.
-            const resetHistory =
-              input.history === undefined
-                ? false
-                : yield* threadHistoryNeedsSnapshot(
-                    input.threadId,
-                    input.afterSequence,
-                    highWater,
-                  ).pipe(
-                    Effect.mapError(
-                      (cause) =>
-                        new OrchestrationV2GetThreadProjectionError({
-                          threadId: input.threadId,
-                          message: `Failed to inspect thread ${input.threadId} replay`,
-                          cause,
-                        }),
-                    ),
-                  );
+            // Every resume checks the backlog before reading it. Only a backlog the
+            // guard admits is replayed, so the replay reaches the high-water mark
+            // before the completion marker; anything larger resets with a snapshot.
+            const resetHistory = yield* threadHistoryNeedsSnapshot(
+              input.threadId,
+              input.afterSequence,
+              highWater,
+            ).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationV2GetThreadProjectionError({
+                    threadId: input.threadId,
+                    message: `Failed to inspect thread ${input.threadId} replay`,
+                    cause,
+                  }),
+              ),
+            );
             if (!resetHistory) {
               return Stream.concat(
                 Stream.concat(replayThrough(input.afterSequence, highWater), completionMarker),
