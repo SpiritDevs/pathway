@@ -21,6 +21,13 @@ struct PathwayThreadStatusTests {
         #expect(status(runStatus: "completed") == .ready)
     }
 
+    @Test func backgroundWorkKeepsTheThreadWorkingUntilItNeedsTheUser() {
+        #expect(status(runStatus: "waiting") == .working)
+        #expect(status(runStatus: "completed", background: true) == .working)
+        #expect(status(request: "user_input", runStatus: "completed", background: true) == .question)
+        #expect(status(runStatus: "completed", subagentRequest: "user_input", background: true) == .question)
+    }
+
     @Test func subagentRequestsWakeTheThreadAboveThem() {
         let parent = makeAgentThread(id: "parent", snoozedUntil: "2099-01-01T00:00:00.000Z")
         var review = makeAgentThread(id: "review", parentThreadId: "parent",
@@ -48,9 +55,9 @@ struct PathwayThreadStatusTests {
 
     private func status(request: String? = nil, hasPlan: Bool = false,
                         runStatus: String = "running", held: Bool = false,
-                        subagentRequest: String? = nil) -> PathwayThreadStatus {
+                        subagentRequest: String? = nil, background: Bool = false) -> PathwayThreadStatus {
         PathwayThreadStatus(requestKind: request, hasPlan: hasPlan, runStatus: runStatus,
                             hasActiveRun: false, hasError: false, hasAllowanceHold: held,
-                            subagentRequest: subagentRequest)
+                            subagentRequest: subagentRequest, hasBackgroundWork: background)
     }
 }

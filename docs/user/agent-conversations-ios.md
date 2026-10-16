@@ -46,7 +46,7 @@ The menu's **Lineage** section lists the thread this one is listed under and the
 
 A thread still waiting to start includes **Cancel queued thread** in that same menu. This action disappears once the environment accepts the thread. Stop a running agent with the composer’s Stop control. Finished queue entries can be removed from the thread list.
 
-Thread rows show compact status labels so you can scan for Working, Preparing, Queued, Waiting, Question, Approval, Review plan, Failed, Stopped, or Ready. A pending question or approval takes priority over background work. Status labels use text as well as color and update with the environment's thread state.
+Thread rows show compact status labels so you can scan for Working, Preparing, Queued, Question, Approval, Review plan, Failed, Stopped, or Ready. A thread whose agent has replied but still has background work or subagents running shows Working. A pending question or approval takes priority over background work. Status labels use text as well as color and update with the environment's thread state.
 
 The notification bell is hidden when there are no notifications. It appears when notifications arrive; read notifications remain accessible from the bell.
 

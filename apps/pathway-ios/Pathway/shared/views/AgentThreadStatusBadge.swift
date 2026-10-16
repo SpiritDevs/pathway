@@ -11,7 +11,8 @@ struct AgentThreadStatusBadge: View {
             runStatus: thread.shell.activityRunStatus ?? thread.shell.status,
             hasActiveRun: thread.shell.activeRunId != nil, hasError: thread.shell.lastError != nil,
             hasAllowanceHold: thread.shell.allowanceHold != nil,
-            subagentRequest: thread.pendingSubagentRequest)
+            subagentRequest: thread.pendingSubagentRequest,
+            hasBackgroundWork: !(thread.shell.pendingBackgroundTasks ?? []).isEmpty)
     }
 
     private var color: Color {
@@ -20,7 +21,7 @@ struct AgentThreadStatusBadge: View {
         case .approval, .needsYou: .orange
         case .working, .preparing, .queued: .blue
         case .failed: .red
-        case .waiting, .waitingForAllowance, .stopped, .ready: .secondary
+        case .waitingForAllowance, .stopped, .ready: .secondary
         }
     }
 

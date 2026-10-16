@@ -1241,8 +1241,8 @@ const SidebarThreadRowContent = memo(function SidebarThreadRowContent(
         }
       : status === "waiting"
         ? {
-            // Waiting is calm background presence (post-settle background
-            // roster), not active progress, so the label keeps full strength.
+            // Waiting is a usage-allowance hold, not active progress, so the
+            // label keeps full strength.
             label: "Waiting",
             icon: null,
             className: "text-muted-foreground",

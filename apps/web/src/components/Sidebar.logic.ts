@@ -214,7 +214,6 @@ export interface ThreadStatusPill {
     | "Completed"
     | "Pending Approval"
     | "Awaiting Input"
-    | "Waiting"
     | "Plan Ready";
   colorClass: string;
   dotClass: string;
@@ -226,7 +225,6 @@ const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   "Awaiting Input": 4,
   Working: 3,
   Connecting: 3,
-  Waiting: 2.5,
   "Plan Ready": 2,
   Completed: 1,
 };
@@ -549,10 +547,10 @@ export function resolveThreadRowClassName(input: {
 // Six visual states, three colors: color is reserved for "act now"
 // (approval), "in motion" (working), and "broken" (failed). Ready is the
 // unlabeled resting state — the agent stopped and is waiting on the user,
-// whether it finished, asked a question, or proposed a plan. Waiting
-// (runtime status "idle") is the agent stopped with background tasks still
-// open: not the user's turn yet, so it renders grey like working, not as a
-// false Done.
+// whether it finished, asked a question, or proposed a plan. A thread whose
+// turn ended with background tasks still open (runtime status "idle") is
+// still working: it reads as Working until a question or approval needs the
+// user. Waiting is only a usage-allowance hold.
 // Unread completion is tracked separately: it describes whether a ready
 // thread needs attention, not what the thread is currently doing. Subagent
 // rows are hidden, so a thread also shows what a subagent below it waits on.
@@ -573,12 +571,11 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
   if (thread.runtime?.allowanceHold) return "waiting";
   if (
     thread.runtime !== null &&
-    ["preparing", "queued", "starting", "running", "waiting"].includes(thread.runtime.status)
+    ["preparing", "queued", "starting", "running", "waiting", "idle"].includes(
+      thread.runtime.status,
+    )
   ) {
     return "working";
-  }
-  if (thread.runtime?.status === "idle") {
-    return "waiting";
   }
   if (thread.runtime?.status === "failed") {
     return "failed";
@@ -794,7 +791,8 @@ export function resolveWorkingStartedAt(
   thread: Pick<SidebarThreadSummary, "latestRun" | "runtime">,
 ): string | null {
   const run = thread.latestRun;
-  if (run && run.completedAt === null) {
+  // Background work counts from the turn that started it.
+  if (run && (run.completedAt === null || thread.runtime?.status === "idle")) {
     return firstValidTimestamp(run.startedAt, run.requestedAt, thread.runtime?.updatedAt);
   }
   return firstValidTimestamp(thread.runtime?.updatedAt);
@@ -842,7 +840,11 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  if (thread.runtime?.status === "running" || thread.runtime?.status === "waiting") {
+  if (
+    thread.runtime?.status === "running" ||
+    thread.runtime?.status === "waiting" ||
+    (thread.pendingBackgroundTasks?.length ?? 0) > 0
+  ) {
     return {
       label: "Working",
       colorClass: "text-sky-600 dark:text-sky-300/80",
@@ -861,15 +863,6 @@ export function resolveThreadStatusPill(input: {
       colorClass: "text-sky-600 dark:text-sky-300/80",
       dotClass: "bg-sky-500 dark:bg-sky-300/80",
       pulse: true,
-    };
-  }
-
-  if ((thread.pendingBackgroundTasks?.length ?? 0) > 0) {
-    return {
-      label: "Waiting",
-      colorClass: "text-sidebar-muted-foreground",
-      dotClass: "bg-sidebar-muted-foreground",
-      pulse: false,
     };
   }
 

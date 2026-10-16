@@ -927,11 +927,11 @@ describe("resolveSidebarThreadStatus", () => {
     ).toBe("approval");
   });
 
-  it("leaves Working while a hidden subagent below waits on the user, approvals first", () => {
+  it("stays Working on background work until a hidden subagent waits on the user", () => {
     const waiting = { ...idle, runtime: { ...runtime, status: "idle" as const } };
     expect(resolveSidebarThreadStatus({ ...idle, runtime })).toBe("working");
     expect(resolveSidebarThreadStatus({ ...waiting, pendingSubagentRequest: null })).toBe(
-      "waiting",
+      "working",
     );
     expect(
       resolveSidebarThreadStatus({ ...idle, runtime, pendingSubagentRequest: "approval" as const }),
@@ -976,7 +976,7 @@ describe("resolveSidebarThreadStatus", () => {
         ...idle,
         runtime: { ...runtime, status: "idle" as const, lastError: "persisted" },
       }),
-    ).toBe("waiting");
+    ).toBe("working");
   });
 
   it("defaults to ready with no runtime", () => {
@@ -1214,6 +1214,15 @@ describe("resolveWorkingStartedAt", () => {
     ).toBe("2026-03-09T10:02:00.000Z");
   });
 
+  it("counts background work from the turn that started it", () => {
+    expect(
+      resolveWorkingStartedAt({
+        latestRun: makeLatestRun(),
+        runtime: { ...runtime, status: "idle" as const, activeRunId: null },
+      }),
+    ).toBe("2026-03-09T10:00:00.000Z");
+  });
+
   it("skips a malformed startedAt instead of returning it", () => {
     expect(
       resolveWorkingStartedAt({
@@ -1340,7 +1349,7 @@ describe("resolveThreadStatusPill", () => {
     ).toMatchObject({ label: "Working", pulse: true });
   });
 
-  it("shows waiting for an idle thread with pending background tasks", () => {
+  it("shows working for an idle thread with pending background tasks", () => {
     expect(
       resolveThreadStatusPill({
         thread: {
@@ -1353,12 +1362,7 @@ describe("resolveThreadStatusPill", () => {
           },
         },
       }),
-    ).toMatchObject({
-      label: "Waiting",
-      colorClass: "text-sidebar-muted-foreground",
-      dotClass: "bg-sidebar-muted-foreground",
-      pulse: false,
-    });
+    ).toMatchObject({ label: "Working", pulse: true });
   });
 
   it("keeps an active turn working when background tasks are also present", () => {
@@ -1509,38 +1513,6 @@ describe("resolveProjectStatusIndicator", () => {
         },
       ]),
     ).toMatchObject({ label: "Plan Ready", dotClass: "bg-violet-500" });
-  });
-
-  it("ranks waiting below active work and above plan-ready", () => {
-    const waiting = {
-      label: "Waiting" as const,
-      colorClass: "text-sidebar-muted-foreground",
-      dotClass: "bg-sidebar-muted-foreground",
-      pulse: false,
-    };
-
-    expect(
-      resolveProjectStatusIndicator([
-        waiting,
-        {
-          label: "Working",
-          colorClass: "text-sky-600",
-          dotClass: "bg-sky-500",
-          pulse: true,
-        },
-      ]),
-    ).toMatchObject({ label: "Working" });
-    expect(
-      resolveProjectStatusIndicator([
-        {
-          label: "Plan Ready",
-          colorClass: "text-violet-600",
-          dotClass: "bg-violet-500",
-          pulse: false,
-        },
-        waiting,
-      ]),
-    ).toMatchObject({ label: "Waiting" });
   });
 });
 
