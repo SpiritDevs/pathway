@@ -20,7 +20,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { ProjectionStoreV2, layer as projectionStoreLayer } from "./ProjectionStore.ts";
-import { readToolOutput, threadProjectionPayload } from "./ThreadPayload.ts";
+import { readItemDetail, threadProjectionPayload } from "./ThreadPayload.ts";
 import {
   narrowHistoryPageSupport,
   threadHistoryNeedsSnapshot,
@@ -224,13 +224,14 @@ it.layer(TestLayer)("bounded thread history", (it) => {
         const encoded = yield* encodeWireSnapshot({ ...snapshot, projection: compact });
         assert.isBelow(Buffer.byteLength(encoded), Buffer.byteLength(legacy) / 2);
         assert.isFalse("item" in compact.visibleTurnItems[0]!);
-        assert.deepEqual(yield* readToolOutput(threadId, item.id), {
+        assert.deepEqual(yield* readItemDetail(threadId, item.id), {
           text: output,
           totalBytes: Buffer.byteLength(output),
           format: "text",
         });
-        assert.isNull(yield* readToolOutput(ThreadId.make("another-thread"), item.id));
-        assert.isNull(yield* readToolOutput(threadId, TurnItemId.make("missing")));
+        assert.isNull(yield* readItemDetail(ThreadId.make("another-thread"), item.id));
+        assert.isNull(yield* readItemDetail(threadId, TurnItemId.make("missing")));
+        assert.isNull(yield* readItemDetail(threadId, item.id, "diffStr"));
         assert.equal(
           (yield* store.getThreadProjection(threadId)).turnItems.find((row) => row.id === item.id)
             ?.type,
@@ -367,12 +368,12 @@ it.layer(TestLayer)("bounded thread history", (it) => {
         if (preview?.type !== "command_execution")
           return assert.fail("Expected inherited output preview");
         assert.equal(preview.outputPreview?.totalBytes, Buffer.byteLength(output));
-        assert.deepEqual(yield* readToolOutput(source.threadId, inheritedTool.id), {
+        assert.deepEqual(yield* readItemDetail(source.threadId, inheritedTool.id), {
           text: output,
           totalBytes: Buffer.byteLength(output),
           format: "text",
         });
-        assert.isNull(yield* readToolOutput(nested.threadId, inheritedTool.id));
+        assert.isNull(yield* readItemDetail(nested.threadId, inheritedTool.id));
         yield* store.apply({
           id: EventId.make("source-rollback"),
           threadId: source.threadId,

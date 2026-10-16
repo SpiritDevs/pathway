@@ -1,6 +1,7 @@
 import { Fragment, type ReactNode, useState } from "react";
 import * as DateTime from "effect/DateTime";
 import type {
+  EnvironmentId,
   OrchestrationV2Run,
   OrchestrationV2Subagent,
   OrchestrationV2TurnItem,
@@ -38,6 +39,7 @@ import { formatShortTimestamp } from "../../timestampFormat";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { PROVIDER_ICON_BY_PROVIDER, getTriggerDisplayModelName } from "./providerIconUtils";
 import { AgentElapsed } from "./AgentElapsed";
+import { loadItemDetail, showAllLabel, useFullItemDetail } from "./itemDetail";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { readLocalApi } from "../../localApi";
@@ -91,6 +93,7 @@ export type HandoffTimelineRun = Pick<
 export type SubagentTimelineModel = Pick<OrchestrationV2Subagent, "id" | "model">;
 
 export function V2LifecycleRow(props: {
+  readonly environmentId: EnvironmentId;
   readonly item: OrchestrationV2TurnItem;
   readonly createdAt: string;
   readonly timestampFormat: TimestampFormat;
@@ -303,6 +306,7 @@ export function V2LifecycleRow(props: {
   if (item.type === "subagent") {
     return (
       <SubagentCard
+        environmentId={props.environmentId}
         items={[item]}
         providerStatuses={props.providerStatuses}
         subagents={props.subagents}
@@ -506,6 +510,7 @@ export function summarizeSubagentStatuses(
  * two or more gets a count + status summary header.
  */
 export function SubagentCard(props: {
+  readonly environmentId: EnvironmentId;
   readonly items: ReadonlyArray<SubagentTurnItem>;
   readonly providerStatuses: ReadonlyArray<ServerProvider>;
   readonly subagents: ReadonlyArray<SubagentTimelineModel>;
@@ -530,6 +535,7 @@ export function SubagentCard(props: {
       {props.items.map((item) => (
         <SubagentRow
           key={item.id}
+          environmentId={props.environmentId}
           item={item}
           providerStatuses={props.providerStatuses}
           // The item only records the instance; the model lives on the
@@ -538,6 +544,41 @@ export function SubagentCard(props: {
           onOpenThread={props.onOpenThread}
         />
       ))}
+    </div>
+  );
+}
+
+/** A settled result; a previewed one offers its complete text from the environment. */
+function SubagentResult(props: {
+  readonly environmentId: EnvironmentId;
+  readonly item: SubagentTurnItem;
+  readonly result: string;
+}) {
+  const { resultPreview } = props.item;
+  const full = useFullItemDetail(() => loadItemDetail(props.environmentId, props.item, "result"));
+  return (
+    <div className="mx-2 mb-1.5 space-y-1">
+      {resultPreview !== undefined && full.fullText === undefined ? (
+        <button
+          type="button"
+          className="text-[11px] text-muted-foreground underline"
+          disabled={full.loading}
+          onClick={full.expand}
+        >
+          {full.loading ? "Loading…" : showAllLabel(resultPreview.totalBytes)}
+        </button>
+      ) : null}
+      {full.failed ? (
+        <p role="alert" className="text-[11px] text-destructive">
+          Could not load the full result. Try again.
+        </p>
+      ) : null}
+      <p
+        data-v2-subagent-result="true"
+        className="max-h-64 overflow-auto rounded-md bg-muted/30 px-2.5 py-2 text-xs leading-relaxed whitespace-pre-wrap break-words text-muted-foreground"
+      >
+        {full.fullText?.trim() ?? props.result}
+      </p>
     </div>
   );
 }
@@ -574,6 +615,7 @@ function SubagentAvatar(props: {
  * read in full in place.
  */
 function SubagentRow(props: {
+  readonly environmentId: EnvironmentId;
   readonly item: SubagentTurnItem;
   readonly providerStatuses: ReadonlyArray<ServerProvider>;
   readonly model: string | null | undefined;
@@ -687,12 +729,12 @@ function SubagentRow(props: {
         )}
       </div>
       {resultOpen && fullResult !== null ? (
-        <p
-          data-v2-subagent-result="true"
-          className="mx-2 mb-1.5 max-h-64 overflow-auto rounded-md bg-muted/30 px-2.5 py-2 text-xs leading-relaxed whitespace-pre-wrap break-words text-muted-foreground"
-        >
-          {fullResult}
-        </p>
+        <SubagentResult
+          key={DateTime.toEpochMillis(item.updatedAt)}
+          environmentId={props.environmentId}
+          item={item}
+          result={fullResult}
+        />
       ) : null}
     </div>
   );

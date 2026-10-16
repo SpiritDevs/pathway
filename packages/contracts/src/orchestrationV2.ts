@@ -1123,19 +1123,35 @@ export const OrchestrationV2WorkspacePreparation = Schema.Struct({
 });
 export type OrchestrationV2WorkspacePreparation = typeof OrchestrationV2WorkspacePreparation.Type;
 
-/** Metadata for an inline output preview; complete output stays on the environment. */
+/**
+ * Metadata for an inline preview of a large item field, carried as `<field>Preview`.
+ * The complete value stays on the environment and is fetched by field on demand.
+ */
 export const OrchestrationV2ToolOutputPreview = Schema.Struct({
   totalBytes: NonNegativeInt,
   format: Schema.Literals(["text", "json"]),
 });
 export type OrchestrationV2ToolOutputPreview = typeof OrchestrationV2ToolOutputPreview.Type;
 
+/** Item fields compact payloads may shorten; each has a matching `<field>Preview` key. */
+export const OrchestrationV2ItemDetailField = Schema.Literals([
+  "output",
+  "input",
+  "diffStr",
+  "oldStr",
+  "newStr",
+  "prompt",
+  "progress",
+  "result",
+]);
+export type OrchestrationV2ItemDetailField = typeof OrchestrationV2ItemDetailField.Type;
+
 export const OrchestrationV2ToolOutput = Schema.Struct({
   ...OrchestrationV2ToolOutputPreview.fields,
   text: Schema.String,
 });
 
-/** References deduplicate visible items; compact payloads also bound tool output. */
+/** References deduplicate visible items; compact payloads also bound large item fields. */
 export const OrchestrationV2ThreadPayloadFormat = Schema.Literals(["references-v1", "compact-v1"]);
 export type OrchestrationV2ThreadPayloadFormat = typeof OrchestrationV2ThreadPayloadFormat.Type;
 
@@ -1191,6 +1207,9 @@ export const OrchestrationV2TurnItem = Schema.Union([
     diffStr: Schema.optional(Schema.String),
     oldStr: Schema.optional(Schema.String),
     newStr: Schema.optional(Schema.String),
+    diffStrPreview: Schema.optionalKey(OrchestrationV2ToolOutputPreview),
+    oldStrPreview: Schema.optionalKey(OrchestrationV2ToolOutputPreview),
+    newStrPreview: Schema.optionalKey(OrchestrationV2ToolOutputPreview),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -1327,12 +1346,16 @@ export const OrchestrationV2TurnItem = Schema.Union([
     prompt: Schema.String,
     progress: Schema.optional(Schema.String),
     result: Schema.NullOr(Schema.String),
+    promptPreview: Schema.optionalKey(OrchestrationV2ToolOutputPreview),
+    progressPreview: Schema.optionalKey(OrchestrationV2ToolOutputPreview),
+    resultPreview: Schema.optionalKey(OrchestrationV2ToolOutputPreview),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
     type: Schema.Literal("dynamic_tool"),
     toolName: Schema.NullOr(TrimmedNonEmptyString),
     input: Schema.Unknown,
+    inputPreview: Schema.optionalKey(OrchestrationV2ToolOutputPreview),
     output: Schema.optional(Schema.Unknown),
     outputPreview: Schema.optionalKey(OrchestrationV2ToolOutputPreview),
   }),
@@ -2016,6 +2039,9 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     diffStr: Schema.optional(Schema.String),
     oldStr: Schema.optional(Schema.String),
     newStr: Schema.optional(Schema.String),
+    diffStrPreview: Schema.optionalKey(OrchestrationV2ToolOutputPreview),
+    oldStrPreview: Schema.optionalKey(OrchestrationV2ToolOutputPreview),
+    newStrPreview: Schema.optionalKey(OrchestrationV2ToolOutputPreview),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
@@ -2149,12 +2175,16 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     prompt: Schema.String,
     progress: Schema.optional(Schema.String),
     result: Schema.NullOr(Schema.String),
+    promptPreview: Schema.optionalKey(OrchestrationV2ToolOutputPreview),
+    progressPreview: Schema.optionalKey(OrchestrationV2ToolOutputPreview),
+    resultPreview: Schema.optionalKey(OrchestrationV2ToolOutputPreview),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
     type: Schema.Literal("dynamic_tool"),
     toolName: Schema.NullOr(TrimmedNonEmptyString),
     input: Schema.Unknown,
+    inputPreview: Schema.optionalKey(OrchestrationV2ToolOutputPreview),
     output: Schema.optional(Schema.Unknown),
     outputPreview: Schema.optionalKey(OrchestrationV2ToolOutputPreview),
   }),

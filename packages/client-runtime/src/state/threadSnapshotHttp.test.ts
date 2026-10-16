@@ -18,7 +18,7 @@ import { ManagedRelayDpopSigner, type ManagedRelayDpopProofInput } from "../rela
 import { v2Now, v2Projection, v2ThreadId } from "./orchestrationV2TestFixtures.ts";
 import {
   fetchEnvironmentThreadSnapshot,
-  fetchEnvironmentToolOutput,
+  fetchEnvironmentItemDetail,
   ThreadSnapshotLoader,
   threadSnapshotLoaderLayer,
 } from "./threadSnapshotHttp.ts";
@@ -160,7 +160,7 @@ describe("thread history HTTP requests", () => {
           );
         };
         const itemId = TurnItemId.make("item:opaque/+?&=id");
-        const output = yield* fetchEnvironmentToolOutput({
+        const output = yield* fetchEnvironmentItemDetail({
           prepared: {
             ...PREPARED,
             httpAuthorization: { _tag: "Dpop", accessToken: "test-access" },
@@ -180,6 +180,39 @@ describe("thread history HTTP requests", () => {
           { method: "GET", url: calls[0]!.href, accessToken: "test-access" },
         ]);
       }),
+  );
+
+  it.effect("fetches another previewed field with the field in the signed URL", () =>
+    Effect.gen(function* () {
+      const calls: URL[] = [];
+      const proofs: ManagedRelayDpopProofInput[] = [];
+      const signer = ManagedRelayDpopSigner.of({
+        thumbprint: Effect.succeed("test-thumbprint"),
+        createProof: (input) =>
+          Effect.sync(() => {
+            proofs.push(input);
+            return "test-proof";
+          }),
+      });
+      const fetchFn: typeof fetch = (request) => {
+        calls.push(new URL(String(request)));
+        return Promise.resolve(
+          Response.json({ text: "complete diff", totalBytes: 13, format: "text" }),
+        );
+      };
+      const detail = yield* fetchEnvironmentItemDetail({
+        prepared: { ...PREPARED, httpAuthorization: { _tag: "Dpop", accessToken: "test-access" } },
+        threadId: v2ThreadId,
+        itemId: TurnItemId.make("item:diff"),
+        field: "diffStr",
+      }).pipe(
+        Effect.provideService(ManagedRelayDpopSigner, signer),
+        Effect.provide(remoteHttpClientLayer(fetchFn)),
+      );
+      expect(detail.text).toBe("complete diff");
+      expect(calls[0]!.searchParams.get("field")).toBe("diffStr");
+      expect(proofs).toEqual([{ method: "GET", url: calls[0]!.href, accessToken: "test-access" }]);
+    }),
   );
 
   it.effect(

@@ -1,4 +1,5 @@
 import type {
+  OrchestrationV2ItemDetailField,
   OrchestrationV2ThreadDetailSnapshot,
   OrchestrationV2ThreadHistoryRequest,
   ThreadId,
@@ -159,33 +160,43 @@ export const threadSnapshotLoaderLayer: Layer.Layer<
   }),
 );
 
-/** Uses the same environment credentials and relay proof as snapshot loading. */
-export const fetchEnvironmentToolOutput = Effect.fn(
-  "clientRuntime.state.fetchEnvironmentToolOutput",
+/**
+ * Fetches the complete value of one previewed item field. Uses the same environment
+ * credentials and relay proof as snapshot loading.
+ */
+export const fetchEnvironmentItemDetail = Effect.fn(
+  "clientRuntime.state.fetchEnvironmentItemDetail",
 )(function* (input: {
   readonly prepared: PreparedConnection;
   readonly threadId: ThreadId;
   readonly itemId: TurnItemId;
+  readonly field?: OrchestrationV2ItemDetailField;
 }) {
   const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
-  const endpoint = environmentEndpointUrl(
-    input.prepared.httpBaseUrl,
-    `/api/orchestration/threads/${encodeURIComponent(input.threadId)}/items/${encodeURIComponent(input.itemId)}/output`,
+  const requestUrl = new URL(
+    environmentEndpointUrl(
+      input.prepared.httpBaseUrl,
+      `/api/orchestration/threads/${encodeURIComponent(input.threadId)}/items/${encodeURIComponent(input.itemId)}/output`,
+    ),
   );
+  // Output is the default, which keeps the request identical for older servers.
+  const query = input.field === undefined || input.field === "output" ? {} : { field: input.field };
+  if (query.field !== undefined) requestUrl.searchParams.set("field", query.field);
   const client = yield* makeEnvironmentHttpApiClient(input.prepared.httpBaseUrl);
   const headers = yield* buildEnvironmentAuthHeaders(
     input.prepared.httpAuthorization,
     "GET",
-    endpoint,
+    requestUrl.href,
     signer,
   );
   return yield* executeEnvironmentHttpRequest(
-    endpoint,
+    requestUrl.href,
     DEFAULT_TOOL_OUTPUT_TIMEOUT_MS,
     withEnvironmentCredentials(
       input.prepared.httpAuthorization,
       client.orchestration.toolOutput({
         params: { threadId: input.threadId, itemId: input.itemId },
+        query,
         headers,
       }),
     ),

@@ -1,6 +1,6 @@
-import { fetchEnvironmentToolOutput } from "@spiritdevs/client-runtime/state/threads";
 import type {
   EnvironmentId,
+  OrchestrationV2ItemDetailField,
   OrchestrationV2ProjectedTurnItem,
   OrchestrationV2ToolOutputPreview,
   RunId,
@@ -10,13 +10,12 @@ import * as DateTime from "effect/DateTime";
 import { ExternalLinkIcon, GitBranchIcon, RotateCcwIcon } from "lucide-react";
 import { memo, type ReactNode, useMemo, useState } from "react";
 
-import { runtime } from "../../lib/runtime";
-import { readPreparedConnection } from "../../state/session";
 import { useV2ItemSupport } from "../../state/v2ItemSupport";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
 import { Button } from "../ui/button";
 import ChatMarkdown from "../ChatMarkdown";
 import { resolveExternalWebLinkHref } from "./externalLinkContextMenu";
+import { loadItemDetail, showAllLabel, useFullItemDetail } from "./itemDetail";
 
 interface V2ItemInspectorProps {
   readonly projectedItem: OrchestrationV2ProjectedTurnItem;
@@ -67,62 +66,44 @@ export function structuredValuePreview(text: string, showAll: boolean): string {
 
 function StructuredValue({
   value,
-  outputPreview,
+  preview,
   loadFull,
 }: {
   readonly value: unknown;
-  readonly outputPreview?: OrchestrationV2ToolOutputPreview | undefined;
+  /** Set when the environment sent only the edges of a larger value. */
+  readonly preview?: OrchestrationV2ToolOutputPreview | undefined;
   readonly loadFull?: (() => Promise<string>) | undefined;
 }) {
   const [showAll, setShowAll] = useState(false);
-  const [fullText, setFullText] = useState<string>();
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string>();
+  const full = useFullItemDetail(loadFull);
   const text = useMemo(
     () => (typeof value === "string" ? value : JSON.stringify(value, null, 2)),
     [value],
   );
   if (!text) return null;
-  const preview =
-    fullText ?? (outputPreview === undefined ? structuredValuePreview(text, showAll) : text);
+  const shown =
+    full.fullText ?? (preview === undefined ? structuredValuePreview(text, showAll) : text);
   const canExpand =
-    fullText === undefined && (outputPreview !== undefined || preview.length < text.length);
+    full.fullText === undefined && (preview !== undefined || shown.length < text.length);
   return (
     <div className="space-y-1">
       {canExpand ? (
         <button
           type="button"
           className="text-[11px] text-muted-foreground underline"
-          disabled={loading}
-          onClick={async () => {
-            if (outputPreview === undefined) {
-              setShowAll(true);
-              return;
-            }
-            if (loadFull === undefined) return;
-            setLoading(true);
-            setError(undefined);
-            try {
-              setFullText(await loadFull());
-            } catch {
-              setError("Could not load full output. Try again.");
-            } finally {
-              setLoading(false);
-            }
-          }}
+          disabled={full.loading}
+          onClick={() => (preview === undefined ? setShowAll(true) : full.expand())}
         >
-          {loading
-            ? "Loading output…"
-            : `Show all ${Math.ceil((outputPreview?.totalBytes ?? text.length) / 1024)} KB`}
+          {full.loading ? "Loading…" : showAllLabel(preview?.totalBytes ?? text.length)}
         </button>
       ) : null}
-      {error ? (
+      {full.failed ? (
         <p role="alert" className="text-[11px] text-destructive">
-          {error}
+          Could not load the full text. Try again.
         </p>
       ) : null}
       <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/50 bg-background/60 p-2 font-mono text-[11px] leading-relaxed text-muted-foreground select-text">
-        {preview}
+        {shown}
       </pre>
     </div>
   );
@@ -135,18 +116,9 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
     sourceThreadId: props.projectedItem.sourceThreadId,
     sourceItemId: props.projectedItem.sourceItemId,
   });
-  const loadFullOutput = async () => {
-    const prepared = readPreparedConnection(props.environmentId);
-    if (prepared === null) throw new Error("The environment is disconnected.");
-    const output = await runtime.runPromise(
-      fetchEnvironmentToolOutput({
-        prepared,
-        threadId: item.threadId,
-        itemId: item.id,
-      }),
-    );
-    return output.text;
-  };
+  const loadFull = (field: OrchestrationV2ItemDetailField) => () =>
+    loadItemDetail(props.environmentId, item, field);
+  const revision = `${item.id}:${DateTime.toEpochMillis(item.updatedAt)}`;
   const duration = durationLabel(item.startedAt, item.completedAt);
   const latestAttempt = support.attempts.at(-1) ?? null;
   const runtimeRequest = support.runtimeRequest;
@@ -230,10 +202,10 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
           <StructuredValue value={item.input} />
           {item.output !== undefined ? (
             <StructuredValue
-              key={`${item.id}:${DateTime.toEpochMillis(item.updatedAt)}`}
+              key={revision}
               value={item.output}
-              outputPreview={item.outputPreview}
-              loadFull={loadFullOutput}
+              preview={item.outputPreview}
+              loadFull={loadFull("output")}
             />
           ) : null}
           {item.exitCode !== undefined ? (
@@ -264,7 +236,21 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
               Open diff
             </Button>
           ) : null}
-          {item.diffStr ? <StructuredValue value={item.diffStr} /> : null}
+          {item.diffStr ? (
+            <StructuredValue
+              key={revision}
+              value={item.diffStr}
+              preview={item.diffStrPreview}
+              loadFull={loadFull("diffStr")}
+            />
+          ) : item.newStr ? (
+            <StructuredValue
+              key={revision}
+              value={item.newStr}
+              preview={item.newStrPreview}
+              loadFull={loadFull("newStr")}
+            />
+          ) : null}
         </div>
       ) : null}
 
@@ -319,7 +305,12 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
             <p className="mb-1 text-[10px] font-medium tracking-wide uppercase text-muted-foreground">
               Input
             </p>
-            <StructuredValue value={item.input} />
+            <StructuredValue
+              key={revision}
+              value={item.input}
+              preview={item.inputPreview}
+              loadFull={loadFull("input")}
+            />
           </div>
           {item.output !== undefined ? (
             <div>
@@ -327,10 +318,10 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
                 Output
               </p>
               <StructuredValue
-                key={`${item.id}:${DateTime.toEpochMillis(item.updatedAt)}`}
+                key={revision}
                 value={item.output}
-                outputPreview={item.outputPreview}
-                loadFull={loadFullOutput}
+                preview={item.outputPreview}
+                loadFull={loadFull("output")}
               />
             </div>
           ) : null}

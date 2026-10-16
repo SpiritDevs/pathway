@@ -1,10 +1,18 @@
 import { assert, it } from "@effect/vitest";
-import { EventId, ThreadId, TurnItemId, type OrchestrationV2TurnItem } from "@spiritdevs/contracts";
+import {
+  EventId,
+  NodeId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  ThreadId,
+  TurnItemId,
+  type OrchestrationV2TurnItem,
+} from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
 import {
-  previewToolOutput,
+  itemDetail,
+  previewItemDetails,
   threadEventPayload,
-  toolOutput,
   TOOL_OUTPUT_INLINE_BYTES,
 } from "./ThreadPayload.ts";
 
@@ -33,9 +41,9 @@ const command = (
 
 it("leaves small outputs unchanged and bounds oversized output by bytes with both edges", () => {
   const small = command("x".repeat(TOOL_OUTPUT_INLINE_BYTES));
-  assert.strictEqual(previewToolOutput(small), small);
+  assert.strictEqual(previewItemDetails(small), small);
   const original = command(`first\n${"💬".repeat(100_000)}\nlast`);
-  const preview = previewToolOutput(original);
+  const preview = previewItemDetails(original);
   assert.equal(preview.type, "command_execution");
   if (preview.type !== "command_execution") return;
   assert.equal(preview.outputPreview?.totalBytes, Buffer.byteLength(original.output!));
@@ -57,13 +65,13 @@ it("previews structured dynamic output without changing its complete stored valu
     input: {},
     output,
   };
-  const preview = previewToolOutput(item);
+  const preview = previewItemDetails(item);
   if (preview.type !== "dynamic_tool") return assert.fail("Expected dynamic tool");
   assert.equal(preview.outputPreview?.format, "json");
   assert.equal(preview.outputPreview?.totalBytes, Buffer.byteLength(JSON.stringify(output)));
   assert.isString(preview.output);
   assert.strictEqual(item.output, output);
-  assert.deepEqual(toolOutput(item), {
+  assert.deepEqual(itemDetail(item, "output"), {
     text: JSON.stringify(output),
     totalBytes: Buffer.byteLength(JSON.stringify(output)),
     format: "json",
@@ -85,4 +93,73 @@ it("bounds live and replay item events only for compact-v1 subscribers", () => {
   if (compact.type !== "turn-item.updated") return;
   assert.isBelow(JSON.stringify(compact.payload).length, 9_000);
   assert.equal(event.payload.output!.length, 100_000);
+});
+
+const huge = `first\n${"💬".repeat(500_000)}\nlast`;
+const base = (() => {
+  const { input: _, output: __, type: ___, ...rest } = command("");
+  return rest;
+})();
+
+it("bounds file-change bodies, dynamic input and subagent text and keeps them retrievable", () => {
+  const fileChange: OrchestrationV2TurnItem = {
+    ...base,
+    type: "file_change",
+    fileName: "src/large.ts",
+    diffStr: huge,
+    oldStr: "small",
+    newStr: huge,
+  };
+  const input = { path: "src/large.ts", content: huge };
+  const dynamic: OrchestrationV2TurnItem = {
+    ...base,
+    type: "dynamic_tool",
+    toolName: "write",
+    input,
+    output: "ok",
+  };
+  const subagent: OrchestrationV2TurnItem = {
+    ...base,
+    type: "subagent",
+    subagentId: NodeId.make("node:1"),
+    origin: "app_owned",
+    driver: ProviderDriverKind.make("codex"),
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    childThreadId: null,
+    prompt: "Review the change",
+    progress: huge,
+    result: huge,
+  };
+  for (const item of [fileChange, dynamic, subagent]) {
+    const preview = previewItemDetails(item);
+    assert.isBelow(Buffer.byteLength(JSON.stringify(preview)), 30_000);
+    assert.isFalse(JSON.stringify(preview).includes("�"));
+  }
+
+  const diff = previewItemDetails(fileChange);
+  if (diff.type !== "file_change") return assert.fail("Expected file change");
+  assert.deepEqual(diff.diffStrPreview, { totalBytes: Buffer.byteLength(huge), format: "text" });
+  assert.isDefined(diff.newStrPreview);
+  assert.equal(diff.oldStr, "small");
+  assert.isUndefined(diff.oldStrPreview);
+  assert.isTrue(diff.diffStr!.startsWith("first\n") && diff.diffStr!.endsWith("\nlast"));
+  assert.equal(itemDetail(fileChange, "diffStr")?.text, huge);
+
+  const tool = previewItemDetails(dynamic);
+  if (tool.type !== "dynamic_tool") return assert.fail("Expected dynamic tool");
+  assert.equal(tool.inputPreview?.format, "json");
+  assert.isString(tool.input);
+  assert.equal(tool.output, "ok");
+  assert.isUndefined(tool.outputPreview);
+  assert.strictEqual(dynamic.input, input);
+  assert.equal(itemDetail(dynamic, "input")?.text, JSON.stringify(input));
+
+  const agent = previewItemDetails(subagent);
+  if (agent.type !== "subagent") return assert.fail("Expected subagent");
+  assert.equal(agent.prompt, "Review the change");
+  assert.isUndefined(agent.promptPreview);
+  assert.equal(agent.resultPreview?.totalBytes, Buffer.byteLength(huge));
+  assert.equal(agent.progressPreview?.totalBytes, Buffer.byteLength(huge));
+  assert.equal(itemDetail(subagent, "result")?.text, huge);
+  assert.isNull(itemDetail(subagent, "diffStr"));
 });
