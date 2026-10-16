@@ -48,6 +48,24 @@ describe("extractMarkdownLinkHrefs", () => {
       ),
     ).toEqual(["apps/web/src/markdown-links.ts", "https://example.com"]);
   });
+
+  it("finds links after unmatched and nested opening brackets", () => {
+    expect(
+      extractMarkdownLinkHrefs(
+        "[unfinished\n[also unfinished [see [the file](src/a.ts) and [x] [notes](<docs/b c.md>)",
+      ),
+    ).toEqual(["src/a.ts", "docs/b c.md"]);
+  });
+
+  it("scans bracket-heavy output in linear time", () => {
+    // Quadratic label scanning took over a second at 176k characters; at eight
+    // times that size a regression runs for over a minute and blows the timeout.
+    const output = "[unfinished log field\n".repeat(64_000);
+    expect(extractMarkdownLinkHrefs(`\`\`\`text\n${output}\`\`\`\n[after](src/after.ts)`)).toEqual([
+      "src/after.ts",
+    ]);
+    expect(extractMarkdownLinkHrefs(output)).toEqual([]);
+  });
 });
 
 describe("shouldOpenMarkdownFileLinkInEditor", () => {
