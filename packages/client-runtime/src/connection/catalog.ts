@@ -3,6 +3,7 @@ import {
   EnvironmentId,
   type ExecutionEnvironmentDescriptor,
 } from "@spiritdevs/contracts";
+import { isLoopbackHost } from "@spiritdevs/shared/preview";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
@@ -51,6 +52,30 @@ export interface ConnectionCatalogEntry {
 
 export interface ConnectionCatalogFreshness {
   readonly lastSeenAt: number | null;
+}
+
+function isLoopbackUrl(url: string): boolean {
+  return URL.canParse(url) && isLoopbackHost(new URL(url).hostname);
+}
+
+/**
+ * True when the entry's socket never leaves this machine, so the platform's
+ * online/offline hint says nothing about whether it is reachable. SSH is
+ * excluded: its loopback port is a tunnel to a remote host.
+ */
+export function connectionEntryIsLoopback(entry: ConnectionCatalogEntry): boolean {
+  switch (entry.target._tag) {
+    case "PrimaryConnectionTarget":
+      return isLoopbackUrl(entry.target.wsBaseUrl);
+    case "BearerConnectionTarget":
+      return Option.exists(
+        entry.profile,
+        (profile) => profile._tag === "BearerConnectionProfile" && isLoopbackUrl(profile.wsBaseUrl),
+      );
+    case "RelayConnectionTarget":
+    case "SshConnectionTarget":
+      return false;
+  }
 }
 
 export class BearerConnectionCredential extends Schema.TaggedClass<BearerConnectionCredential>()(

@@ -37,6 +37,18 @@ const TARGET = new PrimaryConnectionTarget({
   wsBaseUrl: "wss://environment.example.test",
 });
 
+const LOCAL_TARGET = new PrimaryConnectionTarget({
+  environmentId: TARGET.environmentId,
+  label: TARGET.label,
+  httpBaseUrl: "http://127.0.0.1:3773",
+  wsBaseUrl: "ws://127.0.0.1:3773",
+});
+
+const LOCAL_ENTRY: ConnectionCatalogEntry = {
+  target: LOCAL_TARGET,
+  profile: Option.none(),
+};
+
 const RELAY_TARGET = new RelayConnectionTarget({
   environmentId: TARGET.environmentId,
   label: TARGET.label,
@@ -641,6 +653,60 @@ describe("EnvironmentSupervisor", () => {
         (state) => state.phase === "connected" && state.generation === 2,
       );
       expect(yield* Ref.get(harness.sessionCount)).toBe(2);
+    }),
+  );
+
+  it.effect("keeps a live loopback session through an offline hint", () =>
+    Effect.gen(function* () {
+      const probed = yield* Deferred.make<void>();
+      const harness = yield* makeHarness({
+        probe: () => Deferred.succeed(probed, undefined),
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(LOCAL_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(Effect.provide(harness.dependencies));
+
+      yield* awaitState(
+        supervisor.state,
+        (state) => state.phase === "connected" && state.generation === 1,
+      );
+      const session = yield* SubscriptionRef.get(supervisor.session);
+      yield* harness.setNetworkStatus("offline");
+      // The probe only runs if the lease monitor is still alive after the
+      // offline signal it received first.
+      yield* harness.wake("application-active");
+      yield* Deferred.await(probed);
+
+      expect(yield* SubscriptionRef.get(supervisor.state)).toMatchObject({
+        phase: "connected",
+        generation: 1,
+      });
+      expect(yield* SubscriptionRef.get(supervisor.session)).toBe(session);
+      expect(yield* Ref.get(harness.releaseCount)).toBe(0);
+
+      // A real socket close still recovers, even while the hint says offline.
+      yield* harness.closeLatestSession();
+      yield* awaitState(supervisor.state, (state) => state.phase === "backoff");
+      yield* TestClock.adjust("3 seconds");
+      yield* awaitState(
+        supervisor.state,
+        (state) => state.phase === "connected" && state.generation === 2,
+      );
+      expect(yield* Ref.get(harness.releaseCount)).toBe(1);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("connects to a loopback environment while the platform reports offline", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ networkStatus: "offline" });
+      const supervisor = yield* EnvironmentSupervisor.make(LOCAL_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(Effect.provide(harness.dependencies));
+
+      const connected = yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+
+      expect(connected).toMatchObject({ network: "offline", generation: 1 });
+      expect(yield* Ref.get(harness.prepareCount)).toBe(1);
     }),
   );
 
