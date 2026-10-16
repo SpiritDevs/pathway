@@ -6,6 +6,8 @@ For a compatible desktop host, confirm the update to let Pathway check its confi
 
 The same bar shows a spinner and the current step: **Checking for updates…**, **Downloading update…**, **Installing update…**, then **Reconnecting…**. It clears after Pathway reconnects and verifies the installed version. If the update fails, the bar shows the reason and offers **Retry update**. If installation fails before the app quits, Pathway keeps its windows open and attempts to restart its stopped servers.
 
+A version difference alone does not mean an update is running. If an environment disconnects while no update is in progress, the bar shows the connection status and its reason with **Reconnect** and **Environments**, next to any version notice you have not dismissed.
+
 Older desktop hosts show instructions to update the app on that machine. Update them locally once to enable remote updates in subsequent releases. Development builds and installations without an available automatic update feed cannot install a desktop update this way.
 
 Background-service environments continue to use their server update flow. Environments that cannot update remotely offer a command to run on the host.
