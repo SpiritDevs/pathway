@@ -252,6 +252,8 @@ final class PathwayAgentThreadModel {
     typealias Request = @MainActor (String, JSONValue) async throws -> JSONValue
     private(set) var connectionState: PathwayThreadConnectionState = .idle
     private(set) var items: [PathwayTimelineItem] = []
+    /// Record every mutation of `items` here; the transcript layout relies on it to skip unchanged history.
+    @ObservationIgnored private(set) var itemChanges = PathwayTimelineChanges()
     var questionDrafts: [String: PathwayQuestionDraft] = [:]
     var questionAttachmentStores: [String: PathwayNewThreadAttachments] = [:]
     var restoringQuestionAttachments: Set<String> = []
@@ -413,7 +415,7 @@ final class PathwayAgentThreadModel {
             guard let self else { return }
             await restoreDraft()
             if persistsLocalState, let cached = await cache.load(threadID: thread.id), items.isEmpty {
-                items = cached; connectionState = .cached
+                items = cached; itemChanges.restructure(); connectionState = .cached
             }
             guard !Task.isCancelled else { return }
             let environment = environment
@@ -904,6 +906,7 @@ final class PathwayAgentThreadModel {
         guard let object = projection.objectValue else { return }
         projectionCollections = object.compactMapValues(\.arrayValue)
         items = (object["visibleTurnItems"]?.arrayValue ?? []).compactMap { $0.objectValue?["item"].flatMap(PathwayTimelineItem.init(json:)) }.sorted(by: Self.order)
+        itemChanges.restructure()
         runs = (object["runs"]?.arrayValue ?? []).compactMap(PathwayThreadRun.init)
         Task { await reconcileQueuedEdit() }
         subagents = (object["subagents"]?.arrayValue ?? []).compactMap(PathwayThreadSubagent.init)
@@ -950,7 +953,8 @@ final class PathwayAgentThreadModel {
                     let previous = items[index]
                     items[index] = item
                     // Streaming text updates retain their position; only ordering changes sort.
-                    if Self.order(previous, item) || Self.order(item, previous) { items.sort(by: Self.order) }
+                    if Self.order(previous, item) || Self.order(item, previous) { items.sort(by: Self.order); itemChanges.restructure() }
+                    else { itemChanges.update(item.id) }
                 } else {
                     var lower = 0, upper = items.count
                     while lower < upper {
@@ -958,10 +962,13 @@ final class PathwayAgentThreadModel {
                         if Self.order(items[middle], item) { lower = middle + 1 } else { upper = middle }
                     }
                     items.insert(item, at: lower)
+                    itemChanges.restructure()
                 }
                 persist()
             } else if type == "run.created" || type == "run.updated", let run = PathwayThreadRun(payload) {
                 if let index = runs.firstIndex(where: { $0.id == run.id }) { runs[index] = run } else { runs.append(run) }
+                // Runs decide which queued messages show and which turns fold; rollback also removes items.
+                itemChanges.restructure()
                 deriveActiveRun()
                 Task { await reconcileQueuedEdit() }
                 if run.status == "rolled_back" { items.removeAll { $0.runID == run.id }; persist() }

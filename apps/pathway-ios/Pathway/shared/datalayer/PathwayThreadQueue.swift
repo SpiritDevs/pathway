@@ -12,14 +12,20 @@ extension PathwayAgentThreadModel {
 
     /// Pending messages live in the queue sheet until they start, rather than filling the transcript.
     var transcriptItems: [PathwayTimelineItem] {
+        guard let isVisible = transcriptVisibility() else { return items }
+        return items.filter(isVisible)
+    }
+
+    /// The transcript filter for the current runs, or nil when every item shows.
+    func transcriptVisibility() -> ((PathwayTimelineItem) -> Bool)? {
         let queued = runs.filter { $0.status == "queued" }
         let cancelled = runs.filter { $0.status == "cancelled" }
-        guard !queued.isEmpty || !cancelled.isEmpty else { return items }
+        guard !queued.isEmpty || !cancelled.isEmpty else { return nil }
         let queuedRunIDs = Set(queued.map(\.id))
         let queuedMessageIDs = Set(queued.compactMap(\.userMessageID))
         let cancelledRunIDs = Set(cancelled.map(\.id))
         let cancelledMessageIDs = Set(cancelled.compactMap(\.userMessageID))
-        return items.filter { item in
+        return { item in
             guard item.isUserMessage else { return true }
             if item.runID.map(queuedRunIDs.contains) == true || item.messageID.map(queuedMessageIDs.contains) == true { return false }
             let wasQueued = item.fields["inputIntent"]?.stringValue == "queued_turn"
