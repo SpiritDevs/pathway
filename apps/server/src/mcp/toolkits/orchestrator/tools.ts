@@ -140,7 +140,7 @@ export const TaskStatusTool = Tool.make("task_status", {
 
 export const TaskAnswerTool = Tool.make("task_answer", {
   description:
-    "Answer a question a delegated task is waiting on, listed in task_status pendingQuestions. Answer yourself when the decision is within the work you delegated, such as widening its allowed paths or approving a retry. When it needs the user's judgement, ask the user first and relay their answer here. The child resumes with the answer; follow it with pathway_thread_wait on childThreadId to read its reply.",
+    "Answer a question a delegated task is waiting on, listed in task_status pendingQuestions. Answer yourself when the decision is within the work you delegated, such as widening its allowed paths or approving a retry. When it needs the user's judgement, ask the user with your question tool first, not in a plain reply, and relay their answer here. The child resumes with the answer; follow it with pathway_thread_wait on childThreadId to read its reply.",
   parameters: OrchestratorMcpTaskAnswerInput,
   success: OrchestratorMcpTaskAnswerResult,
   failure: OrchestratorMcpFailure,
