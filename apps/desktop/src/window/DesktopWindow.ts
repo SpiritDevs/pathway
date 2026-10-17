@@ -36,6 +36,7 @@ import {
 import * as PreviewManager from "../preview/Manager.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopChildWindows from "./DesktopChildWindows.ts";
+import { rendererDiagnosticText } from "./rendererDiagnosticText.ts";
 
 const TITLEBAR_HEIGHT = 40;
 const TITLEBAR_COLOR = "#01000000"; // #00000000 does not work correctly on Linux
@@ -869,12 +870,67 @@ export const make = Effect.gen(function* () {
         window.setTitle(environment.displayName);
       }
     });
+    // Browser policy failures can happen before an asset request reaches the
+    // server. Keep subframe failures and console evidence in the desktop trace.
+    window.webContents.on("console-message", (details) => {
+      if (details.level !== "warning" && details.level !== "error") return;
+      const frame = details.frame;
+      const annotations = {
+        windowRole: role.kind,
+        level: details.level,
+        message: rendererDiagnosticText(details.message),
+        sourceId: rendererDiagnosticText(details.sourceId),
+        lineNumber: details.lineNumber,
+        ...(frame?.detached === false
+          ? { frameProcessId: frame.processId, frameRoutingId: frame.routingId }
+          : {}),
+      };
+      void runPromise(
+        logWindowWarning("renderer console message", annotations).pipe(
+          Effect.withSpan("desktop.window.rendererConsoleMessage", { attributes: annotations }),
+        ),
+      );
+    });
+    window.webContents.on(
+      "did-fail-provisional-load",
+      (
+        _event,
+        errorCode,
+        errorDescription,
+        validatedURL,
+        isMainFrame,
+        frameProcessId,
+        frameRoutingId,
+      ) => {
+        const annotations = {
+          windowRole: role.kind,
+          errorCode,
+          errorDescription: rendererDiagnosticText(errorDescription),
+          url: rendererDiagnosticText(validatedURL),
+          isMainFrame,
+          frameProcessId,
+          frameRoutingId,
+        };
+        void runPromise(
+          logWindowWarning("renderer provisional load failed", annotations).pipe(
+            Effect.withSpan("desktop.window.rendererProvisionalLoadFailed", {
+              attributes: annotations,
+            }),
+          ),
+        );
+      },
+    );
     window.webContents.on(
       "did-fail-load",
-      (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
-        if (!isMainFrame) {
-          return;
-        }
+      (
+        _event,
+        errorCode,
+        errorDescription,
+        validatedURL,
+        isMainFrame,
+        frameProcessId,
+        frameRoutingId,
+      ) => {
         const retryInMs =
           environment.isDevelopment &&
           isRetryableDevelopmentRendererLoadFailure({
@@ -885,13 +941,21 @@ export const make = Effect.gen(function* () {
           })
             ? scheduleDevelopmentLoadRetry()
             : undefined;
+        const annotations = {
+          windowRole: role.kind,
+          errorCode,
+          errorDescription: rendererDiagnosticText(errorDescription),
+          url: rendererDiagnosticText(validatedURL),
+          isMainFrame,
+          frameProcessId,
+          frameRoutingId,
+          ...(retryInMs === undefined ? {} : { retryInMs }),
+        };
         void runPromise(
-          logWindowWarning(`${role.kind === "main" ? "main" : "torn-out"} window failed to load`, {
-            errorCode,
-            errorDescription,
-            url: validatedURL,
-            ...(retryInMs === undefined ? {} : { retryInMs }),
-          }),
+          logWindowWarning(
+            `${role.kind === "main" ? "main" : "torn-out"} window failed to load`,
+            annotations,
+          ).pipe(Effect.withSpan("desktop.window.rendererLoadFailed", { attributes: annotations })),
         );
       },
     );
