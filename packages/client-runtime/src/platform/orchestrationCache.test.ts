@@ -4,8 +4,11 @@ import {
   EnvironmentId,
   MessageId,
   RuntimeRequestId,
+  ThreadId,
   TurnItemId,
   type OrchestrationV2ShellSnapshot,
+  type OrchestrationV2ThreadProjection,
+  type OrchestrationV2TurnItem,
 } from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -35,6 +38,52 @@ const encodeStoredShellSnapshotJson = Schema.encodeSync(StoredShellSnapshotJson)
 const decodeStoredShellSnapshotJson = Schema.decodeUnknownSync(StoredShellSnapshotJson);
 const encodeStoredThreadSnapshotJson = Schema.encodeSync(StoredThreadSnapshotJson);
 const decodeStoredThreadSnapshotJson = Schema.decodeUnknownSync(StoredThreadSnapshotJson);
+
+const turnItem = (id: string, threadId = v2ThreadId): OrchestrationV2TurnItem => ({
+  id: TurnItemId.make(id),
+  threadId,
+  runId: null,
+  nodeId: null,
+  providerThreadId: null,
+  providerTurnId: null,
+  nativeItemRef: null,
+  parentItemId: null,
+  ordinal: 1,
+  type: "command_execution",
+  status: "completed",
+  title: null,
+  input: "example",
+  output: `${id} output`,
+  startedAt: v2Now,
+  completedAt: v2Now,
+  updatedAt: v2Now,
+});
+
+const inherited = turnItem("inherited", ThreadId.make("thread-source"));
+const synthetic = turnItem("synthetic");
+const local = [turnItem("local-1"), turnItem("local-2")];
+const projectionWithRows: OrchestrationV2ThreadProjection = {
+  ...v2Projection,
+  turnItems: local,
+  visibleTurnItems: [inherited, synthetic, ...local].map((item, position) => ({
+    position,
+    visibility: position === 0 ? "inherited" : position === 1 ? "synthetic" : "local",
+    sourceThreadId: item.threadId,
+    sourceItemId: item.id,
+    item,
+  })),
+};
+const encodeThread = (projection: OrchestrationV2ThreadProjection) =>
+  encodeStoredThreadSnapshotJson({
+    schemaVersion: ORCHESTRATION_CACHE_SCHEMA_VERSION,
+    environmentId,
+    threadId: v2ThreadId,
+    snapshot: {
+      snapshotSequence: 7,
+      projection,
+      history: { hasOlder: true, hasNewer: false, beforeCursor: local[0]!.id, index: [] },
+    },
+  });
 
 class TestCacheDecodeError extends Schema.TaggedErrorClass<TestCacheDecodeError>()(
   "TestCacheDecodeError",
@@ -143,7 +192,7 @@ describe("orchestration cache envelopes", () => {
       });
       expect(() =>
         decodeStoredThreadSnapshotJson(
-          encodedThread.replace('"schemaVersion":4', '"schemaVersion":3'),
+          encodedThread.replace('"schemaVersion":5', '"schemaVersion":4'),
         ),
       ).toThrow();
     }),
@@ -169,6 +218,68 @@ describe("orchestration cache envelopes", () => {
         }),
       );
 
+      expect(Option.isNone(result)).toBe(true);
+      expect(discardCount).toBe(1);
+    }),
+  );
+
+  it("stores each thread item body once and restores shared item identity", () => {
+    const encoded = encodeThread(projectionWithRows);
+    const stored = JSON.parse(encoded).snapshot.projection;
+    expect(
+      stored.visibleTurnItems.every((row: object) => !("item" in row)),
+      "visible rows store references only",
+    ).toBe(true);
+    expect(stored.turnItems.map((item: { id: string }) => item.id)).toEqual(["local-1", "local-2"]);
+    expect(stored.referencedTurnItems.map((item: { id: string }) => item.id)).toEqual([
+      "inherited",
+      "synthetic",
+    ]);
+
+    const decoded = decodeStoredThreadSnapshotJson(encoded).snapshot;
+    const { projection } = decoded;
+    expect(projection).toEqual(projectionWithRows);
+    expect(projection).not.toHaveProperty("payloadFormat");
+    expect(projection).not.toHaveProperty("referencedTurnItems");
+    expect(projection.visibleTurnItems[2]!.item).toBe(projection.turnItems[0]);
+    expect(projection.visibleTurnItems[3]!.item).toBe(projection.turnItems[1]);
+    expect(projection.turnItems).not.toContainEqual(inherited);
+    expect(projection.turnItems).not.toContainEqual(synthetic);
+    expect(decoded.snapshotSequence).toBe(7);
+    expect(decoded.history).toEqual({
+      hasOlder: true,
+      hasNewer: false,
+      beforeCursor: "local-1",
+      index: [],
+    });
+  });
+
+  it("rejects a cached visible row whose item reference is missing", () => {
+    const encoded = encodeThread(projectionWithRows).replace(
+      '"sourceItemId":"local-2"',
+      '"sourceItemId":"missing"',
+    );
+    expect(() => decodeStoredThreadSnapshotJson(encoded)).toThrow(
+      "Missing visible turn item missing",
+    );
+  });
+
+  it.effect("discards thread caches written by the previous duplicated-item format", () =>
+    Effect.gen(function* () {
+      let discardCount = 0;
+      const previous = encodeThread(projectionWithRows).replace(
+        '"schemaVersion":5',
+        '"schemaVersion":4',
+      );
+      const result = yield* decodeOrDiscardOrchestrationCache(
+        Effect.try({
+          try: () => Option.some(decodeStoredThreadSnapshotJson(previous)),
+          catch: (cause) => new TestCacheDecodeError({ message: String(cause) }),
+        }),
+        Effect.sync(() => {
+          discardCount += 1;
+        }),
+      );
       expect(Option.isNone(result)).toBe(true);
       expect(discardCount).toBe(1);
     }),

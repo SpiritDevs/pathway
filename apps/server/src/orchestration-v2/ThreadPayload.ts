@@ -1,5 +1,6 @@
 import {
   OrchestrationV2TurnItemJson,
+  compactThreadProjection,
   type OrchestrationV2CompactThreadProjection,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ThreadPayloadFormat,
@@ -54,21 +55,11 @@ export function threadProjectionPayload(
   payloadFormat?: OrchestrationV2ThreadPayloadFormat,
 ): OrchestrationV2ThreadProjection | OrchestrationV2CompactThreadProjection {
   if (payloadFormat === undefined) return projection;
-  const projectItem =
-    payloadFormat === "compact-v1" ? previewToolOutput : (item: OrchestrationV2TurnItem) => item;
-  const canonicalIds = new Set(projection.turnItems.map((item) => item.id));
-  const referencedItems = new Map<TurnItemId, OrchestrationV2TurnItem>();
-  const visibleTurnItems = projection.visibleTurnItems.map(({ item, ...reference }) => {
-    if (!canonicalIds.has(item.id)) referencedItems.set(item.id, item);
-    return reference;
-  });
-  return {
-    ...projection,
+  return compactThreadProjection(
+    projection,
     payloadFormat,
-    turnItems: projection.turnItems.map(projectItem),
-    referencedTurnItems: [...referencedItems.values()].map(projectItem),
-    visibleTurnItems,
-  };
+    payloadFormat === "compact-v1" ? previewToolOutput : undefined,
+  );
 }
 
 export function threadEventPayload(
