@@ -248,7 +248,9 @@ interface ActiveOpenCodeTurn {
 interface OpenCodeSubagentContext {
   readonly nativeItemId: string;
   readonly nodeId: OrchestrationV2Subagent["id"];
-  readonly parentTurn: ActiveOpenCodeTurn;
+  // Only what a later child turn inherits; holding the parent turn would keep its parts alive.
+  readonly parentRuntimePolicy: ProviderAdapterV2RuntimePolicy;
+  readonly parentRunOrdinal: number;
   readonly prompt: string;
   readonly title: string | null;
   readonly startedAt: DateTime.Utc;
@@ -1196,7 +1198,8 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
             context = {
               nativeItemId: part.id,
               nodeId,
-              parentTurn: turn,
+              parentRuntimePolicy: turn.runtimePolicy,
+              parentRunOrdinal: turn.runOrdinal,
               prompt,
               title,
               startedAt: toolStartedAt(part, now),
@@ -1990,10 +1993,10 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
             rootNodeId,
             appThread: state.appThread,
             modelSelection: state.appThread.modelSelection,
-            runtimePolicy: state.parentSubagent.parentTurn.runtimePolicy,
+            runtimePolicy: state.parentSubagent.parentRuntimePolicy,
             providerTurnId,
             providerTurnOrdinal: providerTurn.ordinal,
-            runOrdinal: state.parentSubagent.parentTurn.runOrdinal,
+            runOrdinal: state.parentSubagent.parentRunOrdinal,
             runAttemptId: null,
             startedAt,
             itemOrdinals: new Map(),
