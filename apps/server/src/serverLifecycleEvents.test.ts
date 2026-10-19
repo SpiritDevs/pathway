@@ -1,52 +1,53 @@
-import { Effect } from "effect";
-import { describe, expect, it } from "vitest";
+import { EnvironmentId } from "@spiritdevs/contracts";
+import { assert, it } from "@effect/vitest";
+import { assertTrue } from "@effect/vitest/utils";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 
-import { ServerLifecycleEvents, ServerLifecycleEventsLive } from "./serverLifecycleEvents";
+import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 
-const runWithLifecycle = <A, E>(effect: Effect.Effect<A, E, ServerLifecycleEvents>) =>
-  Effect.runPromise(effect.pipe(Effect.provide(ServerLifecycleEventsLive)));
+it.effect(
+  "publishes lifecycle events without subscribers and snapshots the latest welcome/ready",
+  () =>
+    Effect.gen(function* () {
+      const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
+      const environment = {
+        environmentId: EnvironmentId.make("environment-test"),
+        label: "Test environment",
+        platform: { os: "darwin" as const, arch: "arm64" as const },
+        serverVersion: "0.0.0-test",
+        capabilities: { repositoryIdentity: true },
+      };
 
-describe("ServerLifecycleEvents", () => {
-  it("publishes sequenced events and keeps the latest event per type", async () => {
-    const snapshot = await runWithLifecycle(
-      Effect.gen(function* () {
-        const lifecycle = yield* ServerLifecycleEvents;
-        yield* lifecycle.publish({
+      const welcome = yield* lifecycleEvents
+        .publish({
+          version: 1,
           type: "welcome",
           payload: {
-            cwd: "/one",
-            homeDir: "/home/tester",
-            chatWorkspaceRoot: "/home/tester/.synara/chats",
-            studioWorkspaceRoot: "/home/tester/.synara/chats/Studio",
-            projectName: "one",
+            environment,
+            cwd: "/tmp/project",
+            projectName: "project",
           },
-        });
-        yield* lifecycle.publish({
+        })
+        .pipe(Effect.timeoutOption("50 millis"));
+      assertTrue(Option.isSome(welcome));
+      assert.equal(welcome.value.sequence, 1);
+
+      const ready = yield* lifecycleEvents
+        .publish({
+          version: 1,
           type: "ready",
           payload: {
             at: "2026-01-01T00:00:00.000Z",
+            environment,
           },
-        });
-        yield* lifecycle.publish({
-          type: "welcome",
-          payload: {
-            cwd: "/two",
-            homeDir: "/home/tester",
-            chatWorkspaceRoot: "/home/tester/.synara/chats",
-            studioWorkspaceRoot: "/home/tester/.synara/chats/Studio",
-            projectName: "two",
-          },
-        });
-        return yield* lifecycle.snapshot;
-      }),
-    );
+        })
+        .pipe(Effect.timeoutOption("50 millis"));
+      assertTrue(Option.isSome(ready));
+      assert.equal(ready.value.sequence, 2);
 
-    expect(snapshot.sequence).toBe(3);
-    expect(snapshot.events).toHaveLength(2);
-    expect(snapshot.events.map((event) => event.type)).toEqual(["welcome", "ready"]);
-    expect(snapshot.events.find((event) => event.type === "welcome")?.payload).toMatchObject({
-      cwd: "/two",
-      projectName: "two",
-    });
-  });
-});
+      const snapshot = yield* lifecycleEvents.snapshot;
+      assert.equal(snapshot.sequence, 2);
+      assert.deepEqual(snapshot.events.map((event) => event.type).toSorted(), ["ready", "welcome"]);
+    }).pipe(Effect.provide(ServerLifecycleEvents.layer)),
+);

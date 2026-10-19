@@ -1,12 +1,12 @@
 /**
  * Masked-activation canary flags.
  *
- * `SYNARA_CUA_MASKED_ACTIVATION` arms the feature globally; it is off by
+ * `PATHWAY_CUA_MASKED_ACTIVATION` arms the feature globally; it is off by
  * default and only ever meaningful on the macOS CUA dialect. Arming alone
  * changes nothing: a second, per-app opt-in list names the bundle ids the
  * shield may cover. Both must hold for a given activation to be masked.
  *
- * `SYNARA_CUA_MASKED_APPS` is that opt-in list — comma/semicolon/whitespace
+ * `PATHWAY_CUA_MASKED_APPS` is that opt-in list — comma/semicolon/whitespace
  * separated bundle identifiers, matched case-insensitively against the
  * target window's owning app. The env list is the canary's configuration
  * surface: a real UI would manage the same per-app consent from settings,
@@ -17,6 +17,8 @@
  * The naming is deliberately scary rather than invisible: the shield veils a
  * real window activation, so reaching for it should be a decision the
  * operator made on purpose.
+ *
+ * @module computer/computerShield
  */
 
 function envFlagEnabled(value: string | undefined): boolean {
@@ -26,7 +28,7 @@ function envFlagEnabled(value: string | undefined): boolean {
 
 /** The global canary flag; unset means masked activation never engages. */
 export function cuaMaskedActivationEnabled(): boolean {
-  return envFlagEnabled(process.env.SYNARA_CUA_MASKED_ACTIVATION);
+  return envFlagEnabled(process.env.PATHWAY_CUA_MASKED_ACTIVATION);
 }
 
 /**
@@ -34,7 +36,7 @@ export function cuaMaskedActivationEnabled(): boolean {
  * means no app is opted in, so the feature stays inert even while armed.
  */
 export function cuaMaskedActivationOptIn(): ReadonlySet<string> {
-  const raw = process.env.SYNARA_CUA_MASKED_APPS ?? "";
+  const raw = process.env.PATHWAY_CUA_MASKED_APPS ?? "";
   return new Set(
     raw
       .split(/[\s,;]+/)

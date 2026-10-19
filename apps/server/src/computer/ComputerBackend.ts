@@ -1,4 +1,3 @@
-import { MODEL_SCREEN_IMAGE_MAX_DIMENSION } from "@synara/shared/modelImageBudget";
 import {
   COMPUTER_DELIVERY_PATH_MAX_LENGTH,
   COMPUTER_MESSAGE_MAX_LENGTH,
@@ -11,86 +10,73 @@ import {
   type ComputerCapabilities,
   type ComputerCursorPosition,
   type ComputerDeliveryVerification,
+  type ComputerFrameMimeType,
   type ComputerHealth,
   type ComputerId,
   type ComputerInputModifier,
-  type ComputerInputPause,
   type ComputerLaunchAppResult,
   type ComputerPermission,
   type ComputerPoint,
   type ComputerRect,
   type ComputerScreenSize,
-  type ComputerSpaceInventory,
   type ComputerScreenshot,
+  type ComputerSpaceInventory,
   type ComputerState,
   type ComputerTarget,
   type ComputerUiNode,
   type ComputerVerifyStateResult,
   type ComputerWindow,
   type ComputerZoomResult,
-} from "@synara/contracts";
+} from "@spiritdevs/contracts";
+import { MODEL_SCREEN_IMAGE_MAX_DIMENSION } from "@spiritdevs/shared/modelImageBudget";
+import type * as Deferred from "effect/Deferred";
+import type * as Effect from "effect/Effect";
+import type * as Stream from "effect/Stream";
+
+import { ComputerBackendError, type ComputerOperationError } from "./computerErrors.ts";
 
 /**
  * The longest side, in pixels, of any screenshot handed to a model.
  *
  * This is a correctness bound before it is a cost one. Vision APIs downscale an
  * image whose long edge exceeds roughly 1568 px before the model ever sees it,
- * and the model then reads coordinates off a picture the server never produced:
- * at the old 2048 budget every pixel the model pointed at was mapped against an
- * image 1.33x larger than the one it looked at, so every click landed short and
- * consistently up-and-left. Nothing in this pipeline may depend on API-side
- * resizing — Synara does the downscale itself, records the resulting frame, and
- * maps the model's pixels through the frame it actually delivered.
+ * and the model then reads coordinates off a picture the server never produced.
+ * Nothing in this pipeline may depend on API-side resizing: Pathway does the
+ * downscale itself, records the resulting frame, and maps the model's pixels
+ * through the frame it actually delivered.
  *
- * 1536 rather than something smaller because image tokens scale with area and
- * the temptation is to shrink hard: a 1024 budget did save tokens, but it lost
- * the precision needed to read a dense form or aim at a small field, and the
- * cost came back as mis-aimed clicks and extra re-screenshots that were slower
- * and more expensive than the shot they replaced. At 1536 a browser or editor
- * window comes back at full resolution, only a genuinely large capture is
- * scaled, and the real savings comes from the byte-identical dedupe
- * (`screenshotUnchanged`) that never resends an unchanged frame at all.
+ * 1536 rather than something smaller because image tokens scale with area but a
+ * smaller budget loses the precision needed to read a dense form or aim at a
+ * small field; the real savings come from the byte-identical dedupe that never
+ * resends an unchanged frame at all.
  */
 export const COMPUTER_AGENT_IMAGE_MAX_DIMENSION = MODEL_SCREEN_IMAGE_MAX_DIMENSION;
-/**
- * Longest screenshot side in pixels before a capture is downscaled. Identical
- * to the observation budget, and for the identical reason: both pictures are
- * read by the same eyes and pointed at through the same frame registry.
- */
+/** Longest screenshot side in pixels before a capture is downscaled. */
 export const DEFAULT_COMPUTER_CAPTURE_MAX_DIMENSION = COMPUTER_AGENT_IMAGE_MAX_DIMENSION;
-/** The budget a post-action observation spends. See the constant above. */
+/** The budget a post-action observation spends. */
 export const COMPUTER_ACTION_OBSERVATION_MAX_DIMENSION = COMPUTER_AGENT_IMAGE_MAX_DIMENSION;
 /** Native per-side image limit enforced by the KWin capture path. */
 export const MAX_COMPUTER_CAPTURE_MAX_DIMENSION = 16_384;
 /**
  * Largest clipboard payload a backend moves in either direction. Clipboards
- * hold whole documents, so both directions need a ceiling: without one a read
- * would stream unbounded data into a turn and a write would pipe it back out.
+ * hold whole documents, so both directions need a ceiling.
  */
 export const MAX_COMPUTER_CLIPBOARD_BYTES = 1024 * 1024;
 
 /**
  * The id every real desktop backend reports for the one computer it drives.
- *
- * Shared rather than repeated because it is the key the frame socket, the pane,
- * and the thread state all address that desktop by: two backends spelling it
- * differently would route a frame to a pane that is not listening.
+ * Shared because the frame socket, the pane, and the thread state all address
+ * that desktop by it.
  */
 export const DEFAULT_COMPUTER_ID = "desktop";
 
-/**
- * Refuses a clipboard write past `MAX_COMPUTER_CLIPBOARD_BYTES`.
- *
- * One check for every backend: the Linux path enforced it and the macOS one did
- * not, so the same document that was refused on one desktop was piped through a
- * line-framed helper on the other.
- */
-export function assertComputerClipboardWriteFits(text: string): void {
+/** Refuses a clipboard write past `MAX_COMPUTER_CLIPBOARD_BYTES`, for every backend. */
+export function computerClipboardWriteError(text: string): ComputerBackendError | undefined {
   const bytes = Buffer.byteLength(text, "utf8");
-  if (bytes <= MAX_COMPUTER_CLIPBOARD_BYTES) return;
-  throw new ComputerBackendError(
-    `Clipboard text is ${bytes} bytes, past the ${MAX_COMPUTER_CLIPBOARD_BYTES} byte limit this tool writes.`,
-  );
+  if (bytes <= MAX_COMPUTER_CLIPBOARD_BYTES) return undefined;
+  return new ComputerBackendError({
+    message: `Clipboard text is ${bytes} bytes, past the ${MAX_COMPUTER_CLIPBOARD_BYTES} byte limit this tool writes.`,
+  });
 }
 
 /**
@@ -101,12 +87,27 @@ export type ComputerCaptureRequest =
   | { readonly kind: "window"; readonly windowId: string; readonly maxDimension?: number }
   | { readonly kind: "region"; readonly region: ComputerRect; readonly maxDimension?: number };
 
+/** A single-channel capture; see `ComputerBackend.captureLuma`. */
+export interface ComputerLumaCapture {
+  readonly width: number;
+  readonly height: number;
+  /** Row-major, one byte per pixel, no row padding: `width * height` bytes. */
+  readonly data: Uint8Array;
+  /** Capture pixels per desktop pixel, as on `ComputerScreenshot.scale`. */
+  readonly scale: number;
+}
+
 export interface ComputerStreamFrame {
   readonly sequence: number;
   readonly timestampMs: number;
   readonly keyframe: boolean;
   readonly codecConfig: boolean;
   readonly data: Uint8Array;
+  /**
+   * The still's image type, carried to the pane per frame. Absent means PNG.
+   * Only the preview may use JPEG: every screenshot a model reads stays PNG.
+   */
+  readonly mimeType?: ComputerFrameMimeType;
 }
 
 export interface ComputerResolvedTarget {
@@ -117,10 +118,8 @@ export interface ComputerResolvedTarget {
 
 /**
  * An exact character range on a text element's value. `start` is the
- * zero-based character offset and `length` the number of characters —
- * `0` collapses the selection to a caret at `start`. Characters count the
- * same units `AXSelectedTextRange` and a JS string index do, so an element's
- * `value` from get_state is the coordinate space.
+ * zero-based character offset and `length` the number of characters; `0`
+ * collapses the selection to a caret at `start`.
  */
 export interface ComputerTextRange {
   readonly start: number;
@@ -128,15 +127,9 @@ export interface ComputerTextRange {
 }
 
 /**
- * How a menu invocation names its target.
- *
- * `windowId` keeps the exact-window semantics: one window of the owning app
- * is validated, the focus-sensitive menu state is made ready without raising
- * the app, and the prior key window is restored afterwards. `app`/`pid`
- * select the application-level menu bar — no window is resolved, focused, or
- * raised, which is the only menu route for a running app that has none. The
- * forms are mutually exclusive: a caller names exactly one, and mixing them
- * is refused rather than guessed at.
+ * How a menu invocation names its target. `windowId` walks one window's owning
+ * app; `app`/`pid` select the application-level menu bar without resolving,
+ * focusing, or raising any window. A caller names exactly one.
  */
 export type ComputerMenuTarget =
   | { readonly windowId: string }
@@ -144,10 +137,8 @@ export type ComputerMenuTarget =
   | { readonly pid: number };
 
 /**
- * What a backend receives: the window form, or the process form the caller
- * (or the manager's app resolution) already settled on. An app name is
- * resolved to a live pid before dispatch, so a backend never has to guess
- * which process a name meant.
+ * What a backend receives: the window form, or the process form the manager's
+ * app resolution already settled on.
  */
 export type ComputerMenuBackendTarget = { readonly windowId: string } | { readonly pid: number };
 
@@ -155,29 +146,16 @@ export interface ComputerBackendActionResult {
   readonly point?: ComputerPoint;
   /**
    * Set when the display server refused the requested point and moved the
-   * pointer elsewhere, which happens on multi-monitor layouts whose global
-   * coordinate space has gaps between outputs.
+   * pointer elsewhere (multi-monitor layouts with gaps between outputs).
    */
   readonly clampedTo?: ComputerPoint;
   readonly windowId?: string;
   readonly value?: string;
   /**
    * Which rung of a backend's delivery ladder actually ran, and what the backend
-   * could establish about the outcome.
-   *
-   * The macOS helper answers both for every input it delivers — keyboard and
-   * pointer alike — naming the rung it took (`ax-insert`, `keystrokes`,
-   * `foreground`, and so on). `verified` is deliberately three-valued:
-   * `confirmed` means the effect was read back, `unconfirmed` means the read-back
-   * was attempted and did not show it, and `unverifiable` means the surface
-   * exposes no readable value to check against — the ordinary answer for most
-   * native controls, and not a sign that anything went wrong.
-   *
-   * `computerBackendActionResult` projects the pair onto the wire result's
-   * optional `delivery` (clamping the path there, so every backend that reports
-   * one is bounded by the same rule), so the agent reading a tool result sees
-   * the verdict too. Backends with no delivery ladder leave both unset and their
-   * results are unchanged.
+   * could establish about the outcome. `verified` is three-valued: `confirmed`
+   * means the effect was read back, `unconfirmed` that the read-back did not
+   * show it, and `unverifiable` that the surface exposes nothing to check.
    */
   readonly deliveryPath?: string;
   readonly verified?: ComputerDeliveryVerification;
@@ -191,35 +169,32 @@ export type ComputerBackendEvent =
   | { readonly type: "health-changed"; readonly health: ComputerHealth }
   | { readonly type: "capabilities-changed"; readonly capabilities: ComputerCapabilities }
   /**
-   * The host proved a desktop availability interruption — screen lock,
-   * system sleep, or a session switch — ran since the previous reply, even
-   * when the cycle engaged and released between the two (the host's
-   * interruption count advanced). Consent granted before the interruption
-   * must not silently authorize the post-interruption desktop: the manager
-   * revokes standing task grants on this event so the next mutating call
-   * republishes its prompt. Input itself already fails closed at the host —
-   * this event is the consent half of the same boundary.
+   * The host proved a desktop availability interruption (screen lock, system
+   * sleep, or a session switch) ran since the previous reply. Consent granted
+   * before the interruption must not silently authorize the post-interruption
+   * desktop, so the manager revokes standing task grants on this event.
    */
   | {
       readonly type: "desktop-interrupted";
-      /**
-       * The pause reasons the host reported active at reply time
-       * (`"screen-lock"`, `"system-sleep"`, `"user-session"`), already empty
-       * when the interruption cycle ended before the reply that carried it.
-       */
+      /** The pause reasons the host reported active at reply time. */
       readonly pauses: readonly string[];
     }
+  /**
+   * The desktop this backend was bound to no longer exists and will not come
+   * back on its own: the compositor instance it drove exited. Distinct from a
+   * reconnect, which the backend handles itself. The service re-runs backend
+   * selection, except for a backend an explicit override named. When
+   * selection picks the same tier again nothing is swapped, so a backend that
+   * emits this owns the retry and keeps looking for its desktop at a slow
+   * cadence. `message` says what was lost.
+   */
+  | { readonly type: "desktop-gone"; readonly message: string }
   | { readonly type: "frame"; readonly frame: ComputerStreamFrame };
 
 /**
- * What one masked-activation shield should cover. `windowId` is the public
- * window id (e.g. `cua:<pid>:<windowId>`); the backend splits the native ids
- * out of it. `frame` is the window's bounds in screen coordinates at engage
- * time — the caller passes the same listing's rect it validated the window
- * against, rather than letting the backend re-read a moved window.
- * `shieldId` is caller-minted so a lost engage reply still leaves a
- * releasable handle; `label` is painted on the shield as the operator-facing
- * disclosure.
+ * What one masked-activation shield should cover. `shieldId` is caller-minted
+ * so a lost engage reply still leaves a releasable handle; `label` is painted on
+ * the shield as the operator-facing disclosure.
  */
 export interface ComputerShieldTarget {
   readonly shieldId: string;
@@ -229,28 +204,19 @@ export interface ComputerShieldTarget {
 }
 
 /**
- * One call into the driver's CDP browser surface. `name` is a driver tool
- * name (see `CUA_BROWSER_TOOLS`), not a gateway name; `args` are the
- * sanitized model arguments — the backend/host layer owns every session,
- * transport, and ownership field. `task` is the trusted local attribution the
- * host turns into a browser lifecycle session label. `mutation` marks calls
- * whose loss mid-dispatch must be reported as an uncertain effect rather than
- * retried.
+ * One call into the driver's CDP browser surface. `name` is a driver tool name,
+ * `args` the sanitized model arguments. `task` is the trusted local attribution.
+ * `mutation` marks calls whose loss mid-dispatch must be reported as an
+ * uncertain effect rather than retried. Cancellation is fiber interruption.
  */
 export interface ComputerBrowserCall {
   readonly name: string;
   readonly args: Record<string, unknown>;
   readonly task: { readonly threadId: string; readonly turnId?: string; readonly label?: string };
   readonly mutation: boolean;
-  readonly signal: AbortSignal;
 }
 
-/**
- * The driver's MCP-shaped reply, carried verbatim: `content` holds text and
- * image parts (browser screenshots are driver-produced, not desktop
- * captures), `structuredContent` carries the browser payload — including
- * `status:"refused"` results, which deliberately keep `isError` unset.
- */
+/** The driver's MCP-shaped reply, carried verbatim. */
 export interface ComputerBrowserCallResult {
   readonly content?: ReadonlyArray<Record<string, unknown>>;
   readonly structuredContent?: unknown;
@@ -258,91 +224,31 @@ export interface ComputerBrowserCallResult {
 }
 
 /**
- * The browser half of a desktop backend. Separate from the desktop method
- * set because browser targets are opaque session-scoped capabilities, not
- * `windowId`s, and because a backend can drive a desktop without owning any
- * browser route (or refuse every browser call). Absent means "no browser
- * surface": callers must not advertise the tools.
+ * The browser half of a desktop backend. Absent means "no browser surface":
+ * callers must not advertise the tools.
  */
 export interface ComputerBrowserBackend {
-  call(call: ComputerBrowserCall): Promise<ComputerBrowserCallResult>;
-  /**
-   * End every driver browser session attributed to this thread. Called when
-   * the thread is removed; the driver also reaps sessions whose transport
-   * owner disappears, so this is the explicit form of the same cleanup.
-   */
-  endThread?(threadId: string): Promise<void>;
-}
-
-export type ComputerFrameListener = (frame: ComputerStreamFrame) => void;
-export type ComputerBackendEventListener = (event: ComputerBackendEvent) => void;
-
-export class ComputerBackendError extends Error {
-  readonly retryable: boolean;
-  /**
-   * The failure is a decision, not a fault: the backend's desktop is
-   * deliberately not running right now, and only a real use may start it.
-   * Automatic supervision that sees this must report the message and stand
-   * down, because retrying cannot conjure a desktop the backend refused to
-   * boot — and on a backend that boots on demand, a retry that did boot would
-   * respawn a window the human just closed.
-   */
-  readonly dormant: boolean;
-  /**
-   * The call the desktop declined, when the failure was a refusal rather than a
-   * fault. A refusal means nothing was injected, which is what lets a caller
-   * explain the miss instead of reporting a generic failure.
-   */
-  readonly rejectedOperation: string | undefined;
-  /**
-   * The desktop refused because the OS has not granted Synara a privacy
-   * permission it needs — macOS Screen Recording or Accessibility today. Only
-   * the backend can tell this apart from an ordinary action failure, so it is
-   * marked here rather than guessed from message text further up: the agent
-   * gateway turns exactly this flag into the chat's "needs setup" card, and a
-   * card raised for a window that merely moved would be noise.
-   */
-  readonly setupRequired: boolean;
-  /** A recoverable input refusal; observation remains available. */
-  readonly inputPause: ComputerInputPause | undefined;
-  /**
-   * The call was refused because the thread's computer control was disabled —
-   * the kill switch, not a fault. The audit seam reads this to keep disabled
-   * state out of the log: a refusal written while control is off would record
-   * attempts the feature was already refusing to make.
-   */
-  readonly controlRevoked: boolean;
-
-  constructor(
-    message: string,
-    options: {
-      readonly retryable?: boolean;
-      readonly dormant?: boolean;
-      readonly cause?: unknown;
-      readonly rejectedOperation?: string;
-      readonly setupRequired?: boolean;
-      readonly inputPause?: ComputerInputPause;
-      readonly controlRevoked?: boolean;
-    } = {},
-  ) {
-    super(message, options);
-    this.name = "ComputerBackendError";
-    this.retryable = options.retryable ?? false;
-    this.dormant = options.dormant ?? false;
-    this.rejectedOperation = options.rejectedOperation;
-    this.setupRequired = options.setupRequired ?? false;
-    this.inputPause = options.inputPause;
-    this.controlRevoked = options.controlRevoked ?? false;
-  }
+  readonly call: (
+    call: ComputerBrowserCall,
+  ) => Effect.Effect<ComputerBrowserCallResult, ComputerOperationError>;
+  /** End every driver browser session attributed to this thread. */
+  readonly endThread?: (threadId: string) => Effect.Effect<void, ComputerOperationError>;
 }
 
 /**
- * What a backend that does not exist can do, which is nothing.
- *
- * Used where a state payload has to be produced with no backend behind it — an
- * unsupported host, a service that never started. The alternative is omitting
- * the field, and an absent capability set reads as a fully capable one, which
- * is how a panel ends up offering desktop control on a machine that has none.
+ * One pending single-use clipboard offer; see `ComputerBackend.writeClipboardForPaste`.
+ * `consumed` completes once a paste target has read the payload. It fails, or
+ * never completes, when the offer ended some other way (replaced, the helper
+ * died); the manager treats both as "not observed" and falls back to its bound.
+ */
+export interface ComputerClipboardPasteOffer {
+  readonly consumed: Deferred.Deferred<void, ComputerOperationError>;
+}
+
+/**
+ * What a backend that does not exist can do, which is nothing. An absent
+ * capability set reads as a fully capable one, so state payloads with no
+ * backend behind them carry this instead.
  */
 export const NO_COMPUTER_CAPABILITIES: ComputerCapabilities = {
   windows: false,
@@ -358,444 +264,346 @@ export const NO_COMPUTER_CAPABILITIES: ComputerCapabilities = {
 };
 
 /**
- * Which desktop vocabulary a backend speaks.
- *
- * Not a platform label for its own sake: three agent-facing descriptions are
- * only true of one family — what a keyboard shortcut may contain, which
- * semantic action names the accessibility layer accepts, and what an
- * application identifier looks like — and describing the other family's answer
- * teaches the model to send calls that are guaranteed to be refused. The tool
- * surface branches on this rather than on a delivery flag that happened to
- * correlate with the platform.
+ * Which desktop vocabulary a backend speaks: what a keyboard shortcut may
+ * contain, which semantic action names the accessibility layer accepts, and
+ * what an application identifier looks like.
  */
 export type ComputerAgentDialect = "linux" | "macos";
 
-/** Provider-side contract shared by real display backends and the CI fake. */
+/**
+ * The two facts about a desktop the model is told once, at session start, by
+ * guidance rendered far from the backend (`mcp/toolkits/computer/computerGuidance.ts`).
+ */
+export interface ComputerGuidanceProfile {
+  readonly dialect: ComputerAgentDialect;
+  /** See `ComputerBackend.dedicatedSeat`. */
+  readonly dedicatedSeat: boolean;
+}
+
+export function computerGuidanceProfile(
+  backend: Pick<ComputerBackend, "agentDialect" | "dedicatedSeat">,
+): ComputerGuidanceProfile {
+  return {
+    dialect: backend.agentDialect ?? "linux",
+    dedicatedSeat: backend.dedicatedSeat === true,
+  };
+}
+
+type BackendEffect<A> = Effect.Effect<A, ComputerOperationError>;
+export type ComputerBackendAction = BackendEffect<ComputerBackendActionResult | undefined>;
+
+/**
+ * Provider-side contract shared by real display backends and the CI fake.
+ *
+ * Every native call is an Effect that fails with a typed computer error and is
+ * cancelled by interruption. Synchronous members stay synchronous because the
+ * contract promises they are free reads of what the backend already knows.
+ *
+ * Optional members are read by presence, on every use. The manager may run on
+ * a switchable slot that resolves each member against its current occupant,
+ * and a backend may offer a member only while its desktop supports it. So a
+ * caller checks a member where it is about to use it, never caches the verdict
+ * across a suspension point, and binds it once when one use spans several.
+ */
 export interface ComputerBackend {
-  /**
-   * The vocabulary this desktop speaks, for the tool descriptions that differ
-   * by family. Absent means `"linux"`: the evdev + AT-SPI pair every backend
-   * but the macOS one uses.
-   */
+  /** Absent means `"linux"`: the evdev + AT-SPI pair. */
   readonly agentDialect?: ComputerAgentDialect;
+  /**
+   * The agent drives this desktop through a seat of its own (a compositor
+   * plugin's dedicated seat, or a private compositor), so its input never
+   * touches the human's cursor, focus or keystrokes, and it has no browser
+   * route. Only the Linux compositor backends set it. Guidance reads it rather
+   * than live capabilities because the model is told about its desktop once,
+   * at session start, before an on-demand desktop has booted.
+   */
+  readonly dedicatedSeat?: boolean;
+  /**
+   * Whether `selectText` can succeed here. `false` refuses the call before the
+   * lease is claimed and the window restacked and aimed. Absent means supported.
+   */
+  readonly textRangeSelection?: boolean;
   readonly computerId: ComputerId;
   /**
    * Whether this host could drive a desktop, answered without doing anything to
-   * it. Side-effect-free by contract: no session is started, nothing is
-   * installed, nothing is loaded into a compositor, and no connection outlives
-   * the call — the most a backend may spend is the cheap questions a desktop
-   * answers for free, such as who owns a bus name and what is on disk.
-   *
-   * This is what boot and the UI's thread-state seeding read, because both run
-   * for every user on every launch, long before anyone has asked for a desktop.
-   * `availability()` is the opposite trade: it establishes the real thing and
-   * reports what actually happened, so it belongs only on paths that were about
-   * to use the desktop anyway.
-   *
-   * Optimism is the intended failure mode. A probe that says "available" and
-   * then cannot provision costs the caller one actionable error card at first
-   * use; a probe that says "unavailable" because it refused to look costs the
-   * user the feature.
+   * it: no session is started, nothing is installed, no connection outlives the
+   * call. Boot and thread-state seeding read this. Optimism is the intended
+   * failure mode.
    */
-  probeAvailability(): Promise<ComputerAvailability>;
+  readonly probeAvailability: () => BackendEffect<ComputerAvailability>;
+  /**
+   * The passive status read, for a backend whose desktop boots on demand and
+   * must not be respawned by the settings screen's status poll. It reports the
+   * last established state without touching the desktop, and the manager uses
+   * it for every status read. Absent means `availability()` is safe to poll.
+   */
+  readonly statusAvailability?: () => BackendEffect<ComputerAvailability>;
   /**
    * Availability as established, not as guessed: this may connect, install, and
-   * load whatever the backend needs, so it belongs on paths that are about to
-   * use the desktop. See `probeAvailability` for the passive counterpart.
-   * `refresh` bypasses an established snapshot for explicit status/grant updates.
+   * load whatever the backend needs. `refresh` bypasses an established snapshot.
    */
-  availability(options?: { readonly refresh?: boolean }): Promise<ComputerAvailability>;
-
-  /**
-   * Install or compile whatever this backend needs, on explicit request.
-   *
-   * Optional because not every backend has anything to provision: the fake and
-   * the unavailable backends have nothing, and a nested session's compositor
-   * arrived with its own. A backend that implements it returns one sentence
-   * describing what it did, for the settings card that asked.
-   */
-  provision?(): Promise<string>;
-  /**
-   * Live supervision health. Synchronous and side-effect free on purpose: it
-   * reports what the connect and reconnect paths already know, so reading it
-   * can never cost the display server a round trip, and it stays safe to call
-   * from the handler of the very event that changed it. Transitions arrive
-   * through `onEvent` as `health-changed`.
-   */
-  health(): ComputerHealth;
-  /**
-   * What this backend can do once it is up. Synchronous and cheap by contract:
-   * a capability is a property of the display server this process talks to, not
-   * a live reading, so it is safe to publish with every state snapshot.
-   *
-   * Two things it deliberately is *not*. It is not a permission report: an OS
-   * grant the user has withheld leaves the capability true and shows up in
-   * `probeAvailability()` (`permission-required`) or, for screen capture, in
-   * `health().captureAvailable` — the macOS backend advertises the full set on
-   * a Mac that has granted it nothing. And it is not a live reading of the
-   * running session: only the nested backend varies it at all, reporting the
-   * empty set until its compositor and plugin exist so the settings panel can
-   * offer Set up, and the full KWin set afterwards. That one transition arrives
-   * through `onEvent` as `capabilities-changed`, so a caller may cache this
-   * until the event fires.
-   */
-  capabilities(): ComputerCapabilities;
+  readonly availability: (options?: {
+    readonly refresh?: boolean;
+  }) => BackendEffect<ComputerAvailability>;
+  /** Install whatever this backend needs, on explicit request; one sentence back. */
+  readonly provision?: () => BackendEffect<string>;
+  /** Live supervision health. Synchronous and side-effect free. */
+  readonly health: () => ComputerHealth;
+  /** What this backend can do once it is up. Synchronous and cheap. */
+  readonly capabilities: () => ComputerCapabilities;
   /**
    * OS privacy grants this backend needs and does not have, established rather
-   * than remembered.
-   *
-   * Asynchronous because the answer is only allowed to be stale in one
-   * direction. The tool surface consults this after every computer call to
-   * decide whether the user is owed a setup card, and the moment that matters
-   * most is the one just after the user granted something: a cached "missing"
-   * kept the card and the model's refusal on screen while the grant was already
-   * live, which is the exact failure this signature exists to prevent. A backend
-   * that knows nothing is missing answers from memory and costs nothing; one
-   * whose last look saw a gap has to look again (behind its own short cache, so
-   * a burst of calls still pays for one probe).
-   *
-   * Empty means either "nothing is missing" or "nothing has looked yet" — both
-   * are states in which no user action is owed, so they need not be told apart
-   * here.
-   *
-   * Optional because only macOS has a permission model at all; a backend that
-   * omits it is read as missing nothing. `availability()` reports the *blocking*
-   * subset of this as `permission-required`; a grant that only degrades the
-   * desktop (Screen Recording) shows up here and nowhere else.
+   * than remembered. Empty means nothing is missing or nothing has looked yet.
    */
-  missingPermissions?(): Promise<readonly ComputerPermission[]>;
-  /**
-   * How this build is code-signed, as the last probe read it, or undefined when
-   * nothing has looked yet or the backend has no permission model.
-   *
-   * Synchronous and free: it is a property of the binary, not a live reading.
-   * It travels beside `missingPermissions()` because a missing grant on an
-   * ad-hoc build has a second, invisible explanation — the grant is pinned to a
-   * cdhash a rebuild replaced — and the card cannot say so without knowing this.
-   */
-  buildSignature?(): ComputerBuildSignature | undefined;
-  listWindows(): Promise<readonly ComputerWindow[]>;
+  readonly missingPermissions?: () => BackendEffect<readonly ComputerPermission[]>;
+  /** How this build is code-signed, as the last probe read it. */
+  readonly buildSignature?: () => ComputerBuildSignature | undefined;
+  readonly listWindows: () => BackendEffect<readonly ComputerWindow[]>;
   /** Optional real managed-display inventory, including empty Spaces. Never changes the desktop. */
-  listSpaces?(): Promise<ComputerSpaceInventory>;
-  getScreenSize(): Promise<ComputerScreenSize>;
-  getState(options: {
+  readonly listSpaces?: () => BackendEffect<ComputerSpaceInventory>;
+  readonly getScreenSize: () => BackendEffect<ComputerScreenSize>;
+  readonly getState: (options: {
     readonly includeScreenshot?: boolean;
-    /**
-     * Walk the accessibility tree and return it as `root`.
-     *
-     * Named for what it costs rather than for what one caller does with it: the
-     * agent tool surface needs the tree on every perception read (that is where
-     * the elements list comes from) and the text rendering almost never, and
-     * while this flag was called `includeText` every backend rendered the whole
-     * desktop to prose on each of those reads and the caller threw it away.
-     * Rendering now belongs to `ComputerManager`, which knows whether anyone
-     * asked for it.
-     */
+    /** Walk the accessibility tree and return it as `root`. */
     readonly includeTree?: boolean;
     readonly windowId?: string;
     /**
-     * Internal target resolution may reuse a tree observed moments ago instead
-     * of paying for another accessibility walk. The agent-facing state tools
-     * never set this: what the model reads must stay fresh. Safe only because
-     * dispatch validates the resolved element natively — a stale candidate
-     * fails closed rather than acting on a moved control.
+     * Internal target resolution may reuse a tree observed moments ago. The
+     * agent-facing state tools never set this: what the model reads stays fresh.
      */
     readonly reuseRecentTree?: boolean;
-  }): Promise<ComputerState>;
+  }) => BackendEffect<ComputerState>;
+  /** Zoomed perception of one window or region. */
+  readonly captureScreenshot: (
+    request: ComputerCaptureRequest,
+  ) => BackendEffect<ComputerScreenshot>;
   /**
-   * Zoomed perception. `getState` downscales the whole multi-monitor workspace
-   * into one screenshot, which loses small text; this captures a single window
-   * or region at a far higher effective resolution and returns the same
-   * `region` + `scale` mapping so pixels still convert to desktop coordinates.
+   * The same capture as `captureScreenshot(request)`, as raw 8-bit luma, for a
+   * scroll baseline that is only ever measured. It must report the `width`,
+   * `height` and `scale` that capture would, with luma computed exactly as
+   * `decodePngLuma` derives it: `floor((299 R + 587 G + 114 B) / 1000)`. A
+   * failure falls back to the PNG baseline.
    */
-  captureScreenshot(request: ComputerCaptureRequest): Promise<ComputerScreenshot>;
-  /** Pin or release the plugin's per-seat target window when supported. */
-  focusWindow?(windowId: string): Promise<void>;
+  readonly captureLuma?: (request: ComputerCaptureRequest) => BackendEffect<ComputerLumaCapture>;
   /**
-   * Restack a window above the ones covering it, without moving the user's
-   * keyboard focus. Focus alone routes the agent's input to the window even
-   * while it is buried, which leaves the human watching a click land on pixels
-   * they cannot see.
+   * The desktop rect an untargeted observation photographs when no window
+   * holds the agent's focus: on a multi-monitor desktop, the one output the
+   * agent works on. `undefined` (or a failure) keeps the whole workspace.
    */
-  raiseWindow?(windowId: string): Promise<void>;
-  clearFocusWindow?(): Promise<void>;
+  readonly defaultObservationRegion?: () => BackendEffect<ComputerRect | undefined>;
+  /** Pin or release the per-seat target window when supported. */
+  readonly focusWindow?: (windowId: string) => BackendEffect<void>;
+  /** Restack a window above the ones covering it, without moving keyboard focus. */
+  readonly raiseWindow?: (windowId: string) => BackendEffect<void>;
+  readonly clearFocusWindow?: () => BackendEffect<void>;
   /**
-   * Names the thread currently holding the desktop, for backends that draw an
-   * agent cursor the human can see. `null` when nobody holds it. Best effort by
-   * design: a label is presentation, so failing to set one must never fail the
-   * action that changed the holder.
+   * The seat as the next owner must find it: nothing aimed, nothing held,
+   * nothing remembered about the previous owner's targets. The manager calls it
+   * on every lease change and release. Absent means `clearFocusWindow`.
    */
-  setDrivingAgent?(name: string | null): Promise<void>;
+  readonly resetInputDelivery?: () => BackendEffect<void>;
+  /** Names the thread holding the desktop, for an agent-cursor label. Best effort. */
+  readonly setDrivingAgent?: (name: string | null) => BackendEffect<void>;
   /** Cosmetic activity only: never activates a window or sends input. */
-  setCursorActivity?(text: string | null): Promise<void>;
-  launchApp(
+  readonly setCursorActivity?: (text: string | null) => BackendEffect<void>;
+  /**
+   * Start `app`. Window readiness matches the result's `pid` exactly unless it
+   * also names `appId`, the identity its windows report as `appName`; set it
+   * when the launch may hand the window to another process (a flatpak or
+   * `gio launch` wrapper, a single-instance app forwarding to its running copy).
+   */
+  readonly launchApp: (
     app: string,
     args: readonly string[],
     options?: {
-      /**
-       * Request a hidden, non-activating launch. An application may still
-       * activate itself; focusChangedDuringLaunch reports an observed change.
-       * Hidden windows remain addressable for exact semantic actions.
-       */
+      /** Request a hidden, non-activating launch. */
       readonly hidden?: boolean;
     },
-  ): Promise<ComputerLaunchAppResult>;
+  ) => BackendEffect<ComputerLaunchAppResult>;
   /** Fresh exact-window readiness only; never focus, raise, or send input. */
-  checkInputReady?(windowId: string): Promise<void>;
+  readonly checkInputReady?: (windowId: string) => BackendEffect<void>;
   /**
    * Driver-observed UI settle for the exact window: resolves once no
    * accessibility notification arrives for `quietMs`, bounded by `timeoutMs`.
-   * Pure read — no input, no mutation lease — so it is safe to run between an
-   * action's dispatch and its observation. Optional because only the macOS
-   * driver exposes an AX observer; callers must fall back to a fixed wait
-   * when it is absent or refused.
    */
-  waitForSettle?(options: {
+  readonly waitForSettle?: (options: {
     readonly windowId: string;
     readonly timeoutMs: number;
     readonly quietMs: number;
-  }): Promise<{
+    /**
+     * How long `quietMs` of quiet is looked for. Past it, a surface that has
+     * changed since the action counts as settled even though it keeps
+     * repainting. Absent: quiet is waited for until `timeoutMs`.
+     */
+    readonly quietWithinMs?: number;
+    /**
+     * How long a first change is looked for. A surface that has not changed by
+     * then counts as settled: the action changed nothing it paints. Absent: a
+     * first change is waited for as long as quiet is.
+     */
+    readonly changeWithinMs?: number;
+  }) => BackendEffect<{
     readonly settled: boolean;
     readonly waitedMs: number;
     readonly eventsSeen?: number;
   }>;
   /**
-   * The process-level app list — name, pid, bundle id, active state — for
-   * backends that can enumerate it. Optional because a compositor plugin may
-   * only see windows; the agent tool refuses when it is absent.
+   * The post-action settle this backend's `waitForSettle` is tuned for. The
+   * manager waits `min(quietMs, its configured settle)` of quiet, capped at
+   * `timeoutMs`, passing the windows through; an explicit `computer_wait`
+   * keeps its own timeout. Absent means the manager's defaults.
    */
-  listApps?(): Promise<readonly ComputerApp[]>;
-  /**
-   * Move and resize the exact window to `frame` in desktop coordinates.
-   * Backends report `verified` only when an independent read-back sees the new
-   * frame; anything less is `unconfirmed`, never silent success.
-   */
-  setWindowFrame?(
-    windowId: string,
-    frame: ComputerRect,
-  ): Promise<ComputerBackendActionResult | void>;
-  /**
-   * Invoke a menu-bar path — `["File", "Save"]`. A `windowId` target walks
-   * the exact window's owning app; a `pid` target resolves from the
-   * application-level `AXMenuBar` of that process without targeting,
-   * focusing, or raising any window — the route for an app that has none.
-   * The driver refuses disabled or absent items rather than falling through
-   * to another actuator, and a non-macOS build refuses the pid form honestly
-   * instead of approximating it.
-   */
-  invokeMenu?(
+  readonly actionSettle?: {
+    readonly quietMs: number;
+    readonly timeoutMs: number;
+    readonly quietWithinMs?: number;
+    readonly changeWithinMs?: number;
+  };
+  /** The process-level app list, for backends that can enumerate it. */
+  readonly listApps?: () => BackendEffect<readonly ComputerApp[]>;
+  /** Move and resize the exact window to `frame` in desktop coordinates. */
+  readonly setWindowFrame?: (windowId: string, frame: ComputerRect) => ComputerBackendAction;
+  /** Invoke a menu-bar path such as `["File", "Save"]`. */
+  readonly invokeMenu?: (
     target: ComputerMenuBackendTarget,
     path: readonly string[],
-  ): Promise<ComputerBackendActionResult | void>;
-  /**
-   * Assert a predicate set against the exact window's live state — element
-   * exists/enabled/selected/value, or window bounds. Pure read: the answer is
-   * a tri-state (`satisfied` / `unsatisfied` / `unknown`) plus the per-predicate
-   * evidence that settled it — `unknown` is never `unsatisfied`, and a caller
-   * that branches on a boolean loses the distinction the driver guarantees.
-   */
-  verifyState?(
+  ) => ComputerBackendAction;
+  /** Assert a predicate set against the exact window's live state. Pure read. */
+  readonly verifyState?: (
     windowId: string,
     expect: readonly Record<string, unknown>[],
-  ): Promise<ComputerVerifyStateResult>;
-  /**
-   * A magnified capture of a rect inside the exact window. `region` is in
-   * window-local desktop points — `(0,0)` is the window's top-left — and the
-   * backend converts to the driver's screenshot-pixel space, so the caller
-   * works in the same coordinates window bounds use.
-   */
-  zoomWindow?(windowId: string, region: ComputerRect): Promise<ComputerZoomResult>;
-  /**
-   * The driver's desktop-wide inventory — running apps and their on-screen
-   * windows — a cheaper discovery read than a per-window accessibility walk.
-   * `windowId` scopes the answer to the app that owns that exact window; the
-   * driver itself only ever enumerates the whole desktop, so the scoping is
-   * this layer's filter, and the caller still validates the window id exists
-   * before asking. Optional because a compositor plugin may only see windows;
-   * the agent tool refuses when it is absent.
-   */
-  getAccessibilityTree?(windowId?: string): Promise<{
+  ) => BackendEffect<ComputerVerifyStateResult>;
+  /** A magnified capture of a window-local rect inside the exact window. */
+  readonly zoomWindow?: (
+    windowId: string,
+    region: ComputerRect,
+  ) => BackendEffect<ComputerZoomResult>;
+  /** The driver's desktop-wide inventory, optionally scoped to one window's app. */
+  readonly getAccessibilityTree?: (windowId?: string) => BackendEffect<{
     readonly apps: readonly ComputerAccessibilityTreeApp[];
     readonly windows: readonly ComputerAccessibilityTreeWindow[];
     readonly truncated: boolean;
   }>;
-  /**
-   * The human cursor's position in desktop points — a read, never a move.
-   * `windowId` scopes the answer with whether the point lies inside that
-   * window's bounds; the position itself is desktop-global either way.
-   * Optional because a backend with a private pointer seat may have no shared
-   * cursor to report; the agent tool refuses when it is absent.
-   */
-  getCursorPosition?(
+  /** The human cursor's position in desktop points; a read, never a move. */
+  readonly getCursorPosition?: (
     windowId?: string,
-  ): Promise<Omit<ComputerCursorPosition, "computerId" | "availability">>;
-  /**
-   * Minimize or restore the exact window without activating it or switching
-   * Spaces. A minimized window keeps its AX surface, so background semantic
-   * actions still reach it — the window-grain explicit visibility control.
-   * Backends report `verified` only when the driver's read-back evidence shows
-   * the requested state; anything less is `unconfirmed`, never silent success.
-   */
-  setWindowMinimized?(
-    windowId: string,
-    minimized: boolean,
-  ): Promise<ComputerBackendActionResult | void>;
-  /**
-   * Hide or unhide a running application by pid without activating it — the
-   * Cmd+H path, not a Space change. A hidden app keeps its windows
-   * addressable for background semantic reads and writes; neither direction
-   * brings it frontmost. Same verification contract as `setWindowMinimized`.
-   */
-  setAppVisibility?(pid: number, hidden: boolean): Promise<ComputerBackendActionResult | void>;
-  /**
-   * Force-terminate a process by pid — the escalation path after the
-   * cooperative close (cmd+q, window close) has already failed. Unsaved state
-   * is lost; approval-gated at the tool surface.
-   */
-  killApp?(pid: number): Promise<ComputerBackendActionResult | void>;
-  /**
-   * `windowId` is the window the caller resolved this point to, when it named
-   * one. A backend that injects at a screen coordinate ignores it — whatever is
-   * stacked at that point receives the event either way. A backend that posts to
-   * a window by id uses it as the delivery target, which is what makes a click
-   * on a partially covered window reach the window the caller meant rather than
-   * the one drawn on top of it.
-   */
+  ) => BackendEffect<Omit<ComputerCursorPosition, "computerId" | "availability">>;
+  /** Minimize or restore the exact window without activating it. */
+  readonly setWindowMinimized?: (windowId: string, minimized: boolean) => ComputerBackendAction;
+  /** Hide or unhide a running application by pid without activating it. */
+  readonly setAppVisibility?: (pid: number, hidden: boolean) => ComputerBackendAction;
+  /** Force-terminate a process by pid. */
+  readonly killApp?: (pid: number) => ComputerBackendAction;
   /** True only when this fresh target advertises the native semantic action. */
-  supportsAction?(target: ComputerResolvedTarget, action: string): boolean;
-  click(
-    point: ComputerPoint,
-    windowId?: string,
-    modifiers?: readonly ComputerInputModifier[],
-  ): Promise<ComputerBackendActionResult | void>;
-  doubleClick(
-    point: ComputerPoint,
-    windowId?: string,
-    modifiers?: readonly ComputerInputModifier[],
-  ): Promise<ComputerBackendActionResult | void>;
+  readonly supportsAction?: (target: ComputerResolvedTarget, action: string) => boolean;
   /**
-   * Three clicks close enough together for a toolkit to pair them, which is
-   * what selects a whole line or paragraph. Optional because it is not the same
-   * gesture as three separate clicks — the click count has to reach the target
-   * as one number — so a backend that cannot express it must refuse rather than
-   * approximate it with a loop the application reads as three carets.
+   * `windowId` is the window the caller resolved this point to. A backend that
+   * posts to a window by id uses it as the delivery target.
    */
-  tripleClick?(
+  readonly click: (
     point: ComputerPoint,
     windowId?: string,
     modifiers?: readonly ComputerInputModifier[],
-  ): Promise<ComputerBackendActionResult | void>;
-  rightClick(
+  ) => ComputerBackendAction;
+  readonly doubleClick: (
     point: ComputerPoint,
     windowId?: string,
     modifiers?: readonly ComputerInputModifier[],
-  ): Promise<ComputerBackendActionResult | void>;
-  moveCursor(point: ComputerPoint, windowId?: string): Promise<ComputerBackendActionResult | void>;
-  drag(
+  ) => ComputerBackendAction;
+  /**
+   * One gesture with click count three. Optional because a backend that cannot
+   * express it must refuse rather than approximate it with three clicks.
+   */
+  readonly tripleClick?: (
+    point: ComputerPoint,
+    windowId?: string,
+    modifiers?: readonly ComputerInputModifier[],
+  ) => ComputerBackendAction;
+  readonly rightClick: (
+    point: ComputerPoint,
+    windowId?: string,
+    modifiers?: readonly ComputerInputModifier[],
+  ) => ComputerBackendAction;
+  readonly moveCursor: (point: ComputerPoint, windowId?: string) => ComputerBackendAction;
+  readonly drag: (
     from: ComputerPoint,
     to: ComputerPoint,
     durationMs: number,
     windowId?: string,
-  ): Promise<ComputerBackendActionResult | void>;
-  scroll(
+  ) => ComputerBackendAction;
+  readonly scroll: (
     point: ComputerPoint | null,
     deltaX: number,
     deltaY: number,
     windowId?: string,
     modifiers?: readonly ComputerInputModifier[],
     target?: ComputerResolvedTarget,
-  ): Promise<ComputerBackendActionResult | void>;
-  /**
-   * Whether an exact semantic text target can be mutated without process
-   * activation or process-scoped keyboard delivery.
-   */
+  ) => ComputerBackendAction;
+  /** Whether an exact semantic text target can be mutated without activation. */
   readonly focusNeutralSemanticText?: boolean;
   /** Exact targets are revalidated and background input never falls back to global input. */
   readonly exactTargetBackgroundInput?: boolean;
-  typeText(
+  readonly typeText: (
     text: string,
     windowId?: string,
     target?: ComputerResolvedTarget,
-  ): Promise<ComputerBackendActionResult | void>;
-  pressKey(
+  ) => ComputerBackendAction;
+  readonly pressKey: (
     key: string,
     windowId?: string,
     target?: ComputerResolvedTarget,
-  ): Promise<ComputerBackendActionResult | void>;
-  hotkey(
+  ) => ComputerBackendAction;
+  readonly hotkey: (
     keys: readonly string[],
     windowId?: string,
     target?: ComputerResolvedTarget,
-  ): Promise<ComputerBackendActionResult | void>;
-  /**
-   * The system clipboard the human user shares, not an agent-private one.
-   * Toolkits bind their data device to the session's primary seat whichever
-   * seat delivered the input, so a dedicated agent seat cannot own a working
-   * clipboard of its own: reading returns whatever anyone last copied, and
-   * writing replaces it for the human too.
-   */
-  readClipboard?(): Promise<string>;
+  ) => ComputerBackendAction;
+  /** The system clipboard the human shares, not an agent-private one. */
+  readonly readClipboard?: () => BackendEffect<string>;
   /** Writes the same shared system clipboard `readClipboard` reads. */
-  writeClipboard?(text: string): Promise<void>;
-  setValue(
-    target: ComputerResolvedTarget,
-    value: string,
-  ): Promise<ComputerBackendActionResult | void>;
-  performAction(
-    target: ComputerResolvedTarget,
-    action: string,
-  ): Promise<ComputerBackendActionResult | void>;
+  readonly writeClipboard?: (text: string) => BackendEffect<void>;
   /**
-   * Select an exact character range on a semantic text element through the
-   * accessibility layer — never a synthetic keystroke, click, or pointer drag.
-   * Backends write the native selection attribute on the freshly resolved
-   * element and report `verified` only when a read-back of that attribute
-   * matches the requested range. A target with no settable selection
-   * attribute refuses before dispatch; nothing approximates it with
-   * triple-click, select-all, or a coordinate gesture.
+   * Writes `text` to the shared clipboard for exactly one paste, and says when
+   * that paste has read it, so the manager can restore the human's clipboard
+   * as soon as the target is done rather than after a guessed wait. Completes
+   * once the payload is on the clipboard. A later `writeClipboard` must replace
+   * an unconsumed offer, and the offer must not outlive the backend. Absent
+   * means the fixed restore wait.
    */
-  selectText(
+  readonly writeClipboardForPaste?: (text: string) => BackendEffect<ComputerClipboardPasteOffer>;
+  readonly setValue: (target: ComputerResolvedTarget, value: string) => ComputerBackendAction;
+  readonly performAction: (target: ComputerResolvedTarget, action: string) => ComputerBackendAction;
+  /** Select an exact character range through the accessibility layer. */
+  readonly selectText: (
     target: ComputerResolvedTarget,
     range: ComputerTextRange,
-  ): Promise<ComputerBackendActionResult | void>;
-  onEvent?(listener: ComputerBackendEventListener): () => void;
-  attachStream(listener: ComputerFrameListener): Promise<void>;
-  detachStream(): Promise<void>;
-  requestKeyframe?(): Promise<void>;
+  ) => ComputerBackendAction;
+  /** Backend notifications, frames included. Absent for a backend with nothing to say. */
+  readonly events?: Stream.Stream<ComputerBackendEvent>;
+  /** Start publishing `frame` events on `events`. */
+  readonly attachStream: () => BackendEffect<void>;
+  readonly detachStream: () => BackendEffect<void>;
+  readonly requestKeyframe?: () => BackendEffect<void>;
   /**
-   * The masked-activation shield: a Synara-owned overlay that veils the
-   * target window's frame for the length of one approval-gated foreground
-   * excursion. Present only on backends that own a shield surface (the macOS
-   * CUA path through the AppSnap helper).
-   *
-   * `engage` resolves once the shield is confirmed on screen and returns its
-   * id. It must fail rather than degrade: a caller that armed masked
-   * activation for a window refuses the activation outright when the shield
-   * cannot be shown — never a silent unmasked excursion.
-   *
-   * `release` drops one shield by id and `releaseAll` drops every live
-   * shield; both are idempotent teardown, safe to call from any cleanup path
-   * in any host state.
+   * The masked-activation shield. `engageShield` resolves once the shield is on
+   * screen and must fail rather than degrade. Release calls are idempotent.
    */
-  engageShield?(target: ComputerShieldTarget): Promise<string>;
-  releaseShield?(shieldId: string): Promise<void>;
-  releaseAllShields?(): Promise<void>;
-  stopInput?(task?: { readonly threadId: string; readonly turnId?: string }): Promise<void>;
+  readonly engageShield?: (target: ComputerShieldTarget) => BackendEffect<string>;
+  readonly releaseShield?: (shieldId: string) => BackendEffect<void>;
+  readonly releaseAllShields?: () => BackendEffect<void>;
+  readonly stopInput?: (task?: {
+    readonly threadId: string;
+    readonly turnId?: string;
+  }) => BackendEffect<void>;
   /** Release task-owned observation resources, including read-only turns. */
-  endTask?(threadId: string, turnId?: string): Promise<void>;
-  /**
-   * The CDP browser surface this backend exposes, if any. Absent means the
-   * `computer_browser_*` tools are not offered at all — an absent member is
-   * the honest answer, never a stub that fails every call.
-   */
+  readonly endTask?: (threadId: string, turnId?: string) => BackendEffect<void>;
+  /** The CDP browser surface this backend exposes, if any. */
   readonly browser?: ComputerBrowserBackend;
-  dispose(): Promise<void> | void;
+  readonly dispose: () => Effect.Effect<void>;
 }
 
 /**
  * Overlap of two desktop rects, or `undefined` when they do not overlap. Both
- * backends clip a capture request to what actually exists on the workspace, so
- * the region metadata describes the pixels the caller really received.
+ * backends clip a capture request to what actually exists on the workspace.
  */
 export function intersectComputerRects(
   first: ComputerRect,
@@ -811,9 +619,8 @@ export function intersectComputerRects(
 
 /**
  * Message text that satisfies the contract's bound on availability and health
- * strings. Both are built from error text the backend does not control — a
- * D-Bus payload, a plugin diagnostic — so an empty or oversized message must
- * degrade here rather than fail the state payload carrying it.
+ * strings. Both are built from error text the backend does not control, so an
+ * empty or oversized message degrades here rather than failing the payload.
  */
 export function clampComputerMessage(text: string, fallback: string): string {
   const trimmed = text.trim();
@@ -826,7 +633,7 @@ export function clampComputerMessage(text: string, fallback: string): string {
 export function computerBackendActionResult(
   computerId: string,
   action: string,
-  result: ComputerBackendActionResult | void,
+  result: ComputerBackendActionResult | undefined,
 ): ComputerActionResult {
   return {
     computerId,
@@ -836,10 +643,8 @@ export function computerBackendActionResult(
     ...(result?.windowId ? { windowId: result.windowId } : {}),
     ...(result?.value !== undefined ? { value: result.value } : {}),
     // Both halves or neither: a path with no verdict cannot tell a caller
-    // whether the input landed, which is the only question this field answers.
-    // The path is clamped here rather than in each backend, because it is copied
-    // verbatim out of a helper reply and an over-long one would otherwise fail
-    // the encode of an action that already happened.
+    // whether the input landed. The path is clamped here because it is copied
+    // verbatim out of a helper reply.
     ...(result?.deliveryPath !== undefined && result.verified !== undefined
       ? {
           delivery: {

@@ -1,92 +1,58 @@
-// FILE: PullRequestMarkdown.tsx
-// Purpose: Shared renderer for PR descriptions and comment bodies — GitHub-flavored bodies
-//          pass through the pure preprocessing (template comments stripped, `<br>` tags
-//          resolved) and `<details>` blocks render as native closed disclosures instead of
-//          leaking literal tags and boilerplate walls into the view.
-// Layer: Pull request presentation
-// Exports: PullRequestMarkdown
+import { ExternalLinkIcon, PaperclipIcon, PlayIcon } from "lucide-react";
 
-import { useState } from "react";
-
-import ChatMarkdown from "~/components/ChatMarkdown";
-import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "~/components/ui/collapsible";
-import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
 import { cn } from "~/lib/utils";
-import {
-  preparePullRequestMarkdown,
-  splitPullRequestMarkdownSections,
-} from "./pullRequestMarkdown.logic";
-import { PR_BODY_TEXT_CLASS_NAME, PR_META_TEXT_CLASS_NAME } from "./pullRequestText";
 
-function DetailsSection({ summary, body, cwd }: { summary: string; body: string; cwd: string }) {
-  // Closed by default, matching GitHub: these blocks are boilerplate by convention.
-  const [open, setOpen] = useState(false);
-  return (
-    <Collapsible open={open} onOpenChange={setOpen} className="my-2">
-      <CollapsibleTrigger
-        className={cn(
-          PR_META_TEXT_CLASS_NAME,
-          "flex items-center gap-1 rounded px-1 py-0.5 text-left font-medium text-muted-foreground transition-colors hover:text-foreground",
-        )}
-      >
-        <DisclosureChevron open={open} />
-        <span>{summary}</span>
-      </CollapsibleTrigger>
-      <CollapsiblePanel>
-        <div className="mt-1 border-l border-border/60 pl-3">
-          {body ? (
-            <ChatMarkdown
-              text={body}
-              cwd={cwd}
-              isStreaming={false}
-              className={cn("pull-request-prose", PR_BODY_TEXT_CLASS_NAME)}
-            />
-          ) : null}
-        </div>
-      </CollapsiblePanel>
-    </Collapsible>
-  );
-}
+import ChatMarkdown from "../ChatMarkdown";
+import { splitPullRequestBody } from "./pullRequestMarkdown.logic";
 
+/**
+ * A pull request body, rendered with the app's markdown renderer plus a card for each upload
+ * embedded in it, which that renderer drops on the floor.
+ *
+ * The card links out instead of playing in place, because nothing here can play. A
+ * `github.com/user-attachments/assets/…` link is a 302 to a signed S3 URL that serves the file
+ * as uploaded — `video/quicktime` for anything recorded on a Mac, which no Chromium decodes —
+ * and the desktop window's content policy declares no `media-src`, so media falls back to
+ * `default-src 'self'` and every remote source is refused before a byte is fetched. A player
+ * here can only be the box that never fills in; a card that opens the host is a real answer.
+ */
 export function PullRequestMarkdown({
   text,
-  fallback,
   cwd,
+  className,
 }: {
   text: string;
-  /** Rendered (as markdown) when the prepared body is empty. */
-  fallback: string;
   cwd: string;
+  className?: string;
 }) {
-  const sections = splitPullRequestMarkdownSections(preparePullRequestMarkdown(text));
-  if (sections.length === 0) {
-    return (
-      <ChatMarkdown
-        text={fallback}
-        cwd={cwd}
-        isStreaming={false}
-        className={cn("pull-request-prose", PR_BODY_TEXT_CLASS_NAME)}
-      />
-    );
-  }
+  const segments = splitPullRequestBody(text);
   return (
-    <div>
-      {sections.map((section, index) =>
-        section.kind === "markdown" ? (
-          <ChatMarkdown
-            // Section order is stable for a given body; the body itself is the real key.
-            // oxlint-disable-next-line no-array-index-key
-            key={index}
-            text={section.text}
-            cwd={cwd}
-            isStreaming={false}
-            className={cn("pull-request-prose", PR_BODY_TEXT_CLASS_NAME)}
-          />
-        ) : (
-          // oxlint-disable-next-line no-array-index-key
-          <DetailsSection key={index} summary={section.summary} body={section.body} cwd={cwd} />
-        ),
-      )}
+    <div className={cn("space-y-3", className)}>
+      {segments.map((segment) => {
+        if (segment.kind === "markdown") {
+          return <ChatMarkdown key={segment.id} text={segment.text} cwd={cwd} />;
+        }
+        const isVideo = segment.media === "video";
+        const Icon = isVideo ? PlayIcon : PaperclipIcon;
+        return (
+          // A plain anchor rather than the page's openExternal button: the desktop window
+          // turns a blocked _blank into openExternal itself, and in a browser tab — where
+          // there is no shell to call — this is the only one of the two that goes anywhere.
+          <a
+            key={segment.id}
+            href={segment.url}
+            rel="noreferrer noopener"
+            target="_blank"
+            className="flex items-center gap-2 rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-sm hover:bg-muted/60"
+          >
+            <Icon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1 truncate">
+              {isVideo ? "Play video on GitHub" : "Open attachment on GitHub"}
+            </span>
+            <ExternalLinkIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
+          </a>
+        );
+      })}
     </div>
   );
 }

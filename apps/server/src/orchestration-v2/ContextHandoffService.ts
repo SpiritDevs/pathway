@@ -1,0 +1,536 @@
+import {
+  OrchestrationV2ContextHandoff,
+  type OrchestrationV2TurnItem,
+  ProviderInstanceId,
+  ProviderThreadId,
+  RunId,
+  ThreadId,
+} from "@spiritdevs/contracts";
+import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+
+import { IdAllocatorV2 } from "./IdAllocator.ts";
+
+export class ContextHandoffPrepareError extends Schema.TaggedErrorClass<ContextHandoffPrepareError>()(
+  "ContextHandoffPrepareError",
+  {
+    threadId: ThreadId,
+    targetRunId: RunId,
+    fromProviderThreadIds: Schema.Array(ProviderThreadId),
+    toProviderThreadId: ProviderThreadId,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return `Failed to prepare context handoff for run ${this.targetRunId} in thread ${this.threadId}.`;
+  }
+}
+
+export const ContextHandoffServiceV2Error = Schema.Union([ContextHandoffPrepareError]);
+export type ContextHandoffServiceV2Error = typeof ContextHandoffServiceV2Error.Type;
+
+export interface ContextHandoffServiceV2Shape {
+  readonly prepare: (input: {
+    readonly threadId: ThreadId;
+    readonly targetRunId: RunId;
+    readonly fromProviderThreadIds: ReadonlyArray<ProviderThreadId>;
+    readonly toProviderThreadId: ProviderThreadId;
+  }) => Effect.Effect<OrchestrationV2ContextHandoff, ContextHandoffServiceV2Error>;
+  readonly prepareForkDelta: (input: {
+    readonly sourceThreadId: ThreadId;
+    readonly targetThreadId: ThreadId;
+    readonly targetRunId: RunId;
+    readonly transferId: OrchestrationV2ContextHandoff["transferId"];
+    readonly fromProviderThreadIds: ReadonlyArray<ProviderThreadId>;
+    readonly toProviderThreadId: ProviderThreadId;
+    readonly fromProviderInstanceId: ProviderInstanceId;
+    readonly toProviderInstanceId: ProviderInstanceId;
+    readonly coveredRunOrdinals: OrchestrationV2ContextHandoff["coveredRunOrdinals"];
+    readonly deltaItems: ReadonlyArray<OrchestrationV2TurnItem>;
+    readonly maxChars?: number | null;
+    readonly createdAt: DateTime.Utc;
+  }) => Effect.Effect<OrchestrationV2ContextHandoff, ContextHandoffServiceV2Error>;
+  readonly prepareProviderHandoff: (input: {
+    readonly threadId: ThreadId;
+    readonly targetRunId: RunId;
+    readonly transferId: NonNullable<OrchestrationV2ContextHandoff["transferId"]>;
+    readonly fromProviderThreadIds: ReadonlyArray<ProviderThreadId>;
+    readonly toProviderThreadId: ProviderThreadId;
+    readonly fromProviderInstanceId: ProviderInstanceId;
+    readonly toProviderInstanceId: ProviderInstanceId;
+    readonly coveredRunOrdinals: OrchestrationV2ContextHandoff["coveredRunOrdinals"];
+    readonly strategy: Extract<
+      OrchestrationV2ContextHandoff["strategy"],
+      "delta_since_target_last_seen" | "full_thread_summary"
+    >;
+    readonly items: ReadonlyArray<OrchestrationV2TurnItem>;
+    readonly compactIfNeeded?: boolean;
+    readonly maxChars?: number | null;
+    readonly createdAt: DateTime.Utc;
+  }) => Effect.Effect<OrchestrationV2ContextHandoff, ContextHandoffServiceV2Error>;
+}
+
+export class ContextHandoffServiceV2 extends Context.Service<
+  ContextHandoffServiceV2,
+  ContextHandoffServiceV2Shape
+>()("@spiritdevs/pathway/orchestration-v2/ContextHandoffService/ContextHandoffServiceV2") {}
+
+function compactText(text: string, maxLength = 240): string {
+  const compacted = text.replace(/\s+/g, " ").trim();
+  if (compacted.length <= maxLength) {
+    return compacted;
+  }
+  return `${compacted.slice(0, maxLength - 3)}...`;
+}
+
+export const DEFAULT_CONTEXT_HANDOFF_MAX_CHARS = 32_000;
+export const MODEL_SWITCH_COMPACTION_THRESHOLD_CHARS = 16_000;
+export const MODEL_SWITCH_COMPACTION_MAX_SUMMARY_CHARS = 8_000;
+
+function contextHandoffBudget(maxChars: number | null | undefined): number {
+  return Math.max(1, Math.floor(maxChars ?? DEFAULT_CONTEXT_HANDOFF_MAX_CHARS));
+}
+
+function newestContextWithinBudget(input: {
+  readonly preamble: ReadonlyArray<string>;
+  readonly itemLines: ReadonlyArray<string>;
+  readonly emptyLine: string;
+  readonly maxChars?: number | null;
+}): string {
+  const budget = contextHandoffBudget(input.maxChars);
+  const complete = [
+    ...input.preamble,
+    ...(input.itemLines.length === 0 ? [input.emptyLine] : input.itemLines),
+  ].join("\n");
+  if (complete.length <= budget) {
+    return complete;
+  }
+
+  const marker = `- [Earlier context truncated; showing newest entries within ${budget} characters.]`;
+  const base = [...input.preamble, marker];
+  const baseText = base.join("\n");
+  if (baseText.length > budget) {
+    // Provider recommendations are normally large enough for the preamble.
+    // Still honor an unexpectedly tiny limit rather than silently exceeding it.
+    return marker.slice(0, budget);
+  }
+
+  const retained: string[] = [];
+  for (let index = input.itemLines.length - 1; index >= 0; index -= 1) {
+    const line = input.itemLines[index];
+    if (line === undefined) continue;
+    const candidate = [...base, line, ...retained].join("\n");
+    if (candidate.length > budget) {
+      break;
+    }
+    retained.unshift(line);
+  }
+  return [...base, ...retained].join("\n");
+}
+
+function summarizeDeltaItem(item: OrchestrationV2TurnItem): string | null {
+  switch (item.type) {
+    case "user_message":
+      return `- User: ${compactText(item.text)}`;
+    case "assistant_message":
+      return `- Assistant: ${compactText(item.text)}`;
+    case "command_execution":
+      return `- Command: ${compactText(item.input)}`;
+    case "file_change":
+      return `- File change: ${item.fileName}`;
+    case "checkpoint":
+      return `- Checkpoint: ${item.files.length} files`;
+    case "handoff":
+      return `- Handoff: ${compactText(item.summary ?? item.strategy)}`;
+    default:
+      return null;
+  }
+}
+
+function canonicalCompactionItem(item: OrchestrationV2TurnItem): string | null {
+  if (item.status === "pending" || item.status === "running" || item.status === "waiting") {
+    return null;
+  }
+  switch (item.type) {
+    case "user_message": {
+      const attachments = item.attachments.map((attachment) => attachment.name).join(", ");
+      return `User: ${item.text}${attachments ? `\nAttachments: ${attachments}` : ""}`;
+    }
+    case "assistant_message":
+      return `Assistant: ${item.text}`;
+    case "command_execution":
+      return `Command: ${item.input}`;
+    case "file_change":
+      return `File changed: ${item.fileName}`;
+    case "checkpoint":
+      return `Checkpoint: ${item.files.map((file) => file.path).join(", ") || "no changed files"}`;
+    case "error":
+      return `Error: ${item.failure.message}`;
+    case "compaction":
+      return item.summary ? `Earlier compaction: ${item.summary}` : null;
+    default:
+      return null;
+  }
+}
+
+export function contextCompactionSourceText(items: ReadonlyArray<OrchestrationV2TurnItem>): string {
+  return items
+    .flatMap((item) => {
+      const text = canonicalCompactionItem(item);
+      return text === null ? [] : [text];
+    })
+    .join("\n\n");
+}
+
+function makeDeterministicCompactionSummary(input: {
+  readonly items: ReadonlyArray<OrchestrationV2TurnItem>;
+  readonly maxChars: number;
+}): string {
+  const userItems = input.items.filter((item) => item.type === "user_message");
+  const assistantItems = input.items.filter((item) => item.type === "assistant_message");
+  const fileItems = input.items.filter((item) => item.type === "file_change");
+  const commandItems = input.items.filter((item) => item.type === "command_execution");
+  const errorItems = input.items.filter((item) => item.type === "error");
+  const latestUser = userItems.at(-1);
+  const latestAssistant = assistantItems.at(-1);
+  const recentConversation = input.items.flatMap((item) => {
+    const text = canonicalCompactionItem(item);
+    return text === null ? [] : [`- ${compactText(text, 600)}`];
+  });
+  return newestContextWithinBudget({
+    preamble: [
+      "Portable context summary for a fresh model session.",
+      "",
+      "## Current goal and latest user intent",
+      latestUser === undefined
+        ? "- No completed user message."
+        : `- ${compactText(latestUser.text, 800)}`,
+      "",
+      "## Agreed decisions and explicit constraints",
+      "- Preserve decisions and constraints from the recent canonical conversation below.",
+      "",
+      "## Completed work and verification",
+      ...commandItems.slice(-4).map((item) => `- Command: ${compactText(item.input, 180)}`),
+      "",
+      "## Current repository/workspace state and important files",
+      ...Array.from(new Set(fileItems.map((item) => item.fileName)))
+        .slice(-12)
+        .map((file) => `- ${compactText(file, 150)}`),
+      "",
+      "## Unresolved problems and next action",
+      latestAssistant === undefined
+        ? "- Continue from the latest user request."
+        : `- ${compactText(latestAssistant.text, 600)}`,
+      "",
+      "## Exact identifiers, commands, and errors that still matter",
+      ...errorItems.slice(-3).map((item) => `- Error: ${compactText(item.failure.message, 200)}`),
+      "",
+      "## Recent canonical conversation",
+    ],
+    itemLines: recentConversation,
+    emptyLine: "- No user-visible context items.",
+    maxChars: input.maxChars,
+  });
+}
+
+function makeForkDeltaSummary(input: {
+  readonly sourceThreadId: ThreadId;
+  readonly targetThreadId: ThreadId;
+  readonly coveredRunOrdinals: OrchestrationV2ContextHandoff["coveredRunOrdinals"];
+  readonly deltaItems: ReadonlyArray<OrchestrationV2TurnItem>;
+  readonly maxChars?: number | null;
+}): string {
+  const itemLines = input.deltaItems.flatMap((item) => {
+    const line = summarizeDeltaItem(item);
+    return line === null ? [] : [line];
+  });
+  return newestContextWithinBudget({
+    preamble: [
+      "Merge-back context from forked conversation.",
+      `Source thread: ${input.sourceThreadId}`,
+      `Target thread: ${input.targetThreadId}`,
+      `Covered fork runs: ${input.coveredRunOrdinals.from}-${input.coveredRunOrdinals.to}`,
+      "",
+      "Fork delta:",
+    ],
+    itemLines,
+    emptyLine: "- No user-visible delta items.",
+    ...(input.maxChars === undefined ? {} : { maxChars: input.maxChars }),
+  });
+}
+
+function makeProviderHandoffSummary(input: {
+  readonly fromProviderInstanceId: ProviderInstanceId;
+  readonly toProviderInstanceId: ProviderInstanceId;
+  readonly coveredRunOrdinals: OrchestrationV2ContextHandoff["coveredRunOrdinals"];
+  readonly strategy: Extract<
+    OrchestrationV2ContextHandoff["strategy"],
+    "delta_since_target_last_seen" | "full_thread_summary"
+  >;
+  readonly items: ReadonlyArray<OrchestrationV2TurnItem>;
+  readonly maxChars?: number | null;
+}): string {
+  const itemLines = input.items.flatMap((item) => {
+    if (item.type === "handoff") {
+      return [];
+    }
+    const line = summarizeDeltaItem(item);
+    return line === null ? [] : [line];
+  });
+  return newestContextWithinBudget({
+    preamble: [
+      input.strategy === "full_thread_summary"
+        ? "Full conversation context for provider handoff."
+        : "Conversation delta since this provider last participated.",
+      `From driver: ${input.fromProviderInstanceId}`,
+      `To driver: ${input.toProviderInstanceId}`,
+      `Covered app runs: ${input.coveredRunOrdinals.from}-${input.coveredRunOrdinals.to}`,
+      "",
+      "Canonical conversation context:",
+    ],
+    itemLines,
+    emptyLine: "- No user-visible context items.",
+    ...(input.maxChars === undefined ? {} : { maxChars: input.maxChars }),
+  });
+}
+
+export function providerMessageWithContextHandoff(input: {
+  readonly handoff: OrchestrationV2ContextHandoff;
+  readonly userText: string;
+}): string {
+  return providerMessageWithContextHandoffs({
+    handoffs: [input.handoff],
+    userText: input.userText,
+  });
+}
+
+export function providerMessageWithContextHandoffs(input: {
+  readonly handoffs: ReadonlyArray<OrchestrationV2ContextHandoff>;
+  readonly userText: string;
+}): string {
+  const handoffSections = input.handoffs.flatMap((handoff) => {
+    const label =
+      handoff.strategy === "fork_delta_summary"
+        ? "merge_back / fork_delta_summary"
+        : handoff.strategy;
+    return [
+      `Context handoff (${label}):`,
+      handoff.summaryText,
+      ...(handoff.compaction === undefined
+        ? []
+        : [
+            `The full conversation is preserved in Pathway thread ${handoff.threadId}. Use pathway_thread_read with that threadId to retrieve earlier messages in small pages when more detail is needed.`,
+          ]),
+      "",
+    ];
+  });
+  return [...handoffSections, "User message:", input.userText].join("\n");
+}
+
+const makeContextHandoffService = Effect.fn("orchestrationV2.ContextHandoffService.layer")(
+  function* () {
+    const idAllocator = yield* IdAllocatorV2;
+
+    const prepare = Effect.fn("orchestrationV2.contextHandoff.prepare")(function* (input: {
+      readonly threadId: ThreadId;
+      readonly targetRunId: RunId;
+      readonly fromProviderThreadIds: ReadonlyArray<ProviderThreadId>;
+      readonly toProviderThreadId: ProviderThreadId;
+    }) {
+      const now = yield* DateTime.now;
+      const handoffId = yield* idAllocator.allocate
+        .contextHandoff({
+          threadId: input.threadId,
+          fromProviderInstanceId: ProviderInstanceId.make("manual"),
+          toProviderInstanceId: ProviderInstanceId.make("manual"),
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new ContextHandoffPrepareError({
+                threadId: input.threadId,
+                targetRunId: input.targetRunId,
+                fromProviderThreadIds: Array.from(input.fromProviderThreadIds),
+                toProviderThreadId: input.toProviderThreadId,
+                cause,
+              }),
+          ),
+        );
+      return {
+        id: handoffId,
+        transferId: null,
+        threadId: input.threadId,
+        targetRunId: input.targetRunId,
+        fromProviderThreadIds: Array.from(input.fromProviderThreadIds),
+        toProviderThreadId: input.toProviderThreadId,
+        coveredRunOrdinals: { from: 1, to: 1 },
+        strategy: "manual_context",
+        status: "ready",
+        summaryMessageId: null,
+        summaryText: "Manual context handoff.",
+        createdByProviderInstanceId: null,
+        createdAt: now,
+        updatedAt: now,
+      } satisfies OrchestrationV2ContextHandoff;
+    });
+
+    const prepareForkDelta = Effect.fn("orchestrationV2.contextHandoff.prepareForkDelta")(
+      function* (input: {
+        readonly sourceThreadId: ThreadId;
+        readonly targetThreadId: ThreadId;
+        readonly targetRunId: RunId;
+        readonly transferId: OrchestrationV2ContextHandoff["transferId"];
+        readonly fromProviderThreadIds: ReadonlyArray<ProviderThreadId>;
+        readonly toProviderThreadId: ProviderThreadId;
+        readonly fromProviderInstanceId: ProviderInstanceId;
+        readonly toProviderInstanceId: ProviderInstanceId;
+        readonly coveredRunOrdinals: OrchestrationV2ContextHandoff["coveredRunOrdinals"];
+        readonly deltaItems: ReadonlyArray<OrchestrationV2TurnItem>;
+        readonly maxChars?: number | null;
+        readonly createdAt: DateTime.Utc;
+      }) {
+        const handoffId = yield* idAllocator.allocate
+          .contextHandoff({
+            threadId: input.targetThreadId,
+            fromProviderInstanceId: input.fromProviderInstanceId,
+            toProviderInstanceId: input.toProviderInstanceId,
+          })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new ContextHandoffPrepareError({
+                  threadId: input.targetThreadId,
+                  targetRunId: input.targetRunId,
+                  fromProviderThreadIds: Array.from(input.fromProviderThreadIds),
+                  toProviderThreadId: input.toProviderThreadId,
+                  cause,
+                }),
+            ),
+          );
+        return {
+          id: handoffId,
+          transferId: input.transferId,
+          threadId: input.targetThreadId,
+          targetRunId: input.targetRunId,
+          fromProviderThreadIds: Array.from(input.fromProviderThreadIds),
+          toProviderThreadId: input.toProviderThreadId,
+          coveredRunOrdinals: input.coveredRunOrdinals,
+          strategy: "fork_delta_summary",
+          status: "ready",
+          summaryMessageId: null,
+          summaryText: makeForkDeltaSummary(input),
+          createdByProviderInstanceId: null,
+          createdAt: input.createdAt,
+          updatedAt: input.createdAt,
+        } satisfies OrchestrationV2ContextHandoff;
+      },
+    );
+
+    const prepareProviderHandoff = Effect.fn(
+      "orchestrationV2.contextHandoff.prepareProviderHandoff",
+    )(function* (input: {
+      readonly threadId: ThreadId;
+      readonly targetRunId: RunId;
+      readonly transferId: NonNullable<OrchestrationV2ContextHandoff["transferId"]>;
+      readonly fromProviderThreadIds: ReadonlyArray<ProviderThreadId>;
+      readonly toProviderThreadId: ProviderThreadId;
+      readonly fromProviderInstanceId: ProviderInstanceId;
+      readonly toProviderInstanceId: ProviderInstanceId;
+      readonly coveredRunOrdinals: OrchestrationV2ContextHandoff["coveredRunOrdinals"];
+      readonly strategy: Extract<
+        OrchestrationV2ContextHandoff["strategy"],
+        "delta_since_target_last_seen" | "full_thread_summary"
+      >;
+      readonly items: ReadonlyArray<OrchestrationV2TurnItem>;
+      readonly compactIfNeeded?: boolean;
+      readonly maxChars?: number | null;
+      readonly createdAt: DateTime.Utc;
+    }) {
+      const handoffId = yield* idAllocator.allocate
+        .contextHandoff({
+          threadId: input.threadId,
+          fromProviderInstanceId: input.fromProviderInstanceId,
+          toProviderInstanceId: input.toProviderInstanceId,
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new ContextHandoffPrepareError({
+                threadId: input.threadId,
+                targetRunId: input.targetRunId,
+                fromProviderThreadIds: Array.from(input.fromProviderThreadIds),
+                toProviderThreadId: input.toProviderThreadId,
+                cause,
+              }),
+          ),
+        );
+      const compactionSource = input.compactIfNeeded
+        ? contextCompactionSourceText(input.items)
+        : null;
+      const maxSummaryChars = Math.min(
+        MODEL_SWITCH_COMPACTION_MAX_SUMMARY_CHARS,
+        contextHandoffBudget(input.maxChars),
+      );
+      const needsModelCompaction =
+        compactionSource !== null &&
+        compactionSource.length > MODEL_SWITCH_COMPACTION_THRESHOLD_CHARS;
+      const summaryText =
+        compactionSource === null
+          ? makeProviderHandoffSummary(input)
+          : needsModelCompaction
+            ? makeDeterministicCompactionSummary({
+                items: input.items,
+                maxChars: maxSummaryChars,
+              })
+            : newestContextWithinBudget({
+                preamble: [],
+                itemLines: compactionSource.length === 0 ? [] : [compactionSource],
+                emptyLine: "No user-visible context items.",
+                maxChars: Math.min(
+                  MODEL_SWITCH_COMPACTION_THRESHOLD_CHARS,
+                  contextHandoffBudget(input.maxChars),
+                ),
+              });
+      return {
+        id: handoffId,
+        transferId: input.transferId,
+        threadId: input.threadId,
+        targetRunId: input.targetRunId,
+        fromProviderThreadIds: Array.from(input.fromProviderThreadIds),
+        toProviderThreadId: input.toProviderThreadId,
+        coveredRunOrdinals: input.coveredRunOrdinals,
+        strategy: input.strategy,
+        status: needsModelCompaction ? "pending" : "ready",
+        summaryMessageId: null,
+        summaryText,
+        ...(compactionSource === null
+          ? {}
+          : {
+              compaction: {
+                sourceChars: compactionSource.length,
+                thresholdChars: MODEL_SWITCH_COMPACTION_THRESHOLD_CHARS,
+                maxSummaryChars,
+                generation: needsModelCompaction ? ("pending" as const) : ("not_needed" as const),
+              },
+            }),
+        createdByProviderInstanceId: null,
+        createdAt: input.createdAt,
+        updatedAt: input.createdAt,
+      } satisfies OrchestrationV2ContextHandoff;
+    });
+
+    return ContextHandoffServiceV2.of({
+      prepare,
+      prepareForkDelta,
+      prepareProviderHandoff,
+    });
+  },
+);
+
+export const layer: Layer.Layer<ContextHandoffServiceV2, never, IdAllocatorV2> = Layer.effect(
+  ContextHandoffServiceV2,
+  makeContextHandoffService(),
+);

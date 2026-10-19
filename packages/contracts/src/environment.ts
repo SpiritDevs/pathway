@@ -1,6 +1,17 @@
-import { Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
-import { EnvironmentId, TrimmedNonEmptyString } from "./baseSchemas";
+import { AuthComputerOperateScope, type AuthEnvironmentScope } from "./auth.ts";
+import { EnvironmentId, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+
+/**
+ * Stable product boundary for environments that participate in Pathway discovery and remote
+ * control. Optional on the wire so replicas containing pre-boundary registrations still decode;
+ * consumers must require the Pathway value before treating a remote environment as connectable.
+ */
+export const PATHWAY_APPLICATION_ID = "pathway" as const;
+export const ExecutionEnvironmentApplicationId = Schema.Literal(PATHWAY_APPLICATION_ID);
+export type ExecutionEnvironmentApplicationId = typeof ExecutionEnvironmentApplicationId.Type;
 
 export const ExecutionEnvironmentPlatformOs = Schema.Literals([
   "darwin",
@@ -19,16 +30,215 @@ export const ExecutionEnvironmentPlatform = Schema.Struct({
 });
 export type ExecutionEnvironmentPlatform = typeof ExecutionEnvironmentPlatform.Type;
 
+export const ExecutionEnvironmentDeviceKind = Schema.Literals([
+  "desktop",
+  "laptop",
+  "server",
+  "virtual",
+  "unknown",
+]);
+export type ExecutionEnvironmentDeviceKind = typeof ExecutionEnvironmentDeviceKind.Type;
+
+/**
+ * Privacy-safe hardware information reported by the environment host. Device probes must only
+ * populate these display fields; serial numbers, hardware UUIDs, and other stable identifiers do
+ * not belong in the descriptor.
+ */
+export const ExecutionEnvironmentDevice = Schema.Struct({
+  kind: ExecutionEnvironmentDeviceKind,
+  hostname: Schema.optionalKey(TrimmedNonEmptyString),
+  model: Schema.optionalKey(TrimmedNonEmptyString),
+  modelIdentifier: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type ExecutionEnvironmentDevice = typeof ExecutionEnvironmentDevice.Type;
+
+export const ExecutionEnvironmentRuntimeMode = Schema.Literals([
+  "development",
+  "desktop",
+  "server",
+]);
+export type ExecutionEnvironmentRuntimeMode = typeof ExecutionEnvironmentRuntimeMode.Type;
+
+export const ExecutionEnvironmentRuntime = Schema.Struct({
+  mode: ExecutionEnvironmentRuntimeMode,
+});
+export type ExecutionEnvironmentRuntime = typeof ExecutionEnvironmentRuntime.Type;
+
+/**
+ * Where a new thread runs: the project's current checkout ("local") or a
+ * fresh git worktree ("worktree"). Lives here (not settings.ts) so
+ * orchestration contracts can reference it without an import cycle.
+ */
+export const ThreadEnvMode = Schema.Literals(["local", "worktree"]);
+export type ThreadEnvMode = typeof ThreadEnvMode.Type;
+
+/** How a server can replace itself with another version when asked over RPC.
+    New servers only advertise the stable launcher-backed "boot-service" path;
+    "respawn" remains decodable for compatibility with older servers.
+    "desktop-app" means the supervising desktop app updated and relaunched
+    itself, bringing the server back with it. */
+export const ServerSelfUpdateMethod = Schema.Literals(["boot-service", "respawn", "desktop-app"]);
+export type ServerSelfUpdateMethod = typeof ServerSelfUpdateMethod.Type;
+
+/** What update path a client should offer for a server: one of the RPC
+    self-update methods above, or "desktop-managed" when the backend's
+    version belongs to the Pathway desktop app supervising it — updating the
+    app on that machine is the only way to update the server. */
+export const ServerSelfUpdateCapability = Schema.Literals([
+  "boot-service",
+  "respawn",
+  "desktop-managed",
+]);
+export type ServerSelfUpdateCapability = typeof ServerSelfUpdateCapability.Type;
+
 export const ExecutionEnvironmentCapabilities = Schema.Struct({
-  repositoryIdentity: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
+  /** Can consume cloud-persisted thread and message submissions after reconnecting. */
+  durableThreadQueue: Schema.optionalKey(Schema.Boolean),
+  repositoryIdentity: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /** Server can resolve repository identity for an arbitrary directory before project creation. */
+  projectDirectoryInspection: Schema.optionalKey(Schema.Boolean),
+  connectionProbe: Schema.optionalKey(Schema.Boolean),
+  /** Direct attachment uploads supported by the server. */
+  attachmentUploads: Schema.optionalKey(Schema.Boolean),
+  /** Question responses accept saved attachments grouped by question. */
+  questionAttachments: Schema.optionalKey(Schema.Boolean),
+  /** Server supports ignoring questions without dispatching a follow-up turn. */
+  userInputDismissal: Schema.optionalKey(Schema.Boolean),
+  /** Missing on servers that only accept inline image attachments. */
+  fileAttachments: Schema.optionalKey(
+    Schema.Struct({
+      maxUploadBytes: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+    }),
+  ),
+  /** Server exposes the pull-request list, detail, activity, diff, and mutation APIs. Absent on
+      servers from before the pull-request workspace shipped, so clients must not probe them. */
+  pullRequests: Schema.optionalKey(Schema.Boolean),
+  /** Server preserves attachment and detachment semantics on source-control thread markers. */
+  threadPullRequestAttachments: Schema.optionalKey(Schema.Boolean),
+  /** Server understands thread.settle / thread.unsettle commands. Absent on
+      pre-settlement servers, so clients treat missing as unsupported and
+      never send the commands under version skew. */
+  threadSettlement: Schema.optionalKey(Schema.Boolean),
+  /** Environment capacity, workspace reclamation, and cleanup policy. */
+  storageManagement: Schema.optional(Schema.Boolean),
+  /** Projectless conversations, temporary retention, and project attachment. */
+  threadConversations: Schema.optionalKey(Schema.Boolean),
+  /** Server can cancel active work when settling a thread. */
+  threadForceSettlement: Schema.optionalKey(Schema.Boolean),
+  /** Server understands thread.settle-after-completion.set and projects the
+      one-shot request on thread shells. Kept separate from threadSettlement
+      so newer clients never send it to older servers. */
+  threadSettleAfterCompletion: Schema.optionalKey(Schema.Boolean),
+  /** @deprecated Retained so registry records from older servers continue to decode and current
+      clients can warn when a connected older server still settles after pushes. */
+  pushAutoSettlement: Schema.optionalKey(Schema.Boolean),
+  /** Server understands thread.snooze / thread.unsnooze commands. Same
+      version-skew contract as threadSettlement. */
+  threadSnooze: Schema.optionalKey(Schema.Boolean),
+  /** Server understands thread.pin / thread.unpin commands. Same
+      version-skew contract as threadSettlement. */
+  threadPinning: Schema.optionalKey(Schema.Boolean),
+  /** Server understands thread.pin.reorder (and orderKey on thread.pin).
+      Same version-skew contract as threadSettlement. */
+  threadPinReorder: Schema.optionalKey(Schema.Boolean),
+  /** Server understands regenerateTitle on thread.meta.update. Absent on
+      older servers, so clients hide the action instead of sending it. */
+  threadTitleRegeneration: Schema.optionalKey(Schema.Boolean),
+  /** Server understands thread.visit / thread.mark-unread commands and
+      projects lastVisitedAt on thread shells. Same version-skew contract as
+      threadSettlement: clients keep their local visited state against
+      servers that lack this. */
+  threadVisitedTracking: Schema.optionalKey(Schema.Boolean),
+  /** The update path clients should offer for this server. Absent on
+      servers that must be relaunched manually (dev checkouts, Windows
+      foreground runs, pre-update servers). */
+  serverSelfUpdate: Schema.optionalKey(ServerSelfUpdateCapability),
+  /** Server can stream self-update progress before acknowledging the
+      restart. Clients fall back to server.updateServer when absent. */
+  serverSelfUpdateProgress: Schema.optionalKey(Schema.Boolean),
+  /** The supervising desktop app supports remote check/download and token-based installation.
+      Absent on older desktop hosts, which must be updated locally first. */
+  desktopAppUpdate: Schema.optionalKey(Schema.Boolean),
+  /** Server accepts the computer:operate scope in token requests. Absent on older servers,
+      which reject the whole request with invalid_scope when it is named. */
+  computerOperateScope: Schema.optionalKey(Schema.Boolean),
+  /** Server accepts the `computer` settings patch (access policy, autonomy) and Computer intent on
+      `launchThread.initialMessage`, and serves the Computer RPCs. Absent on older servers, which
+      silently strip both and may lack the RPCs. */
+  computerPolicy: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 
+/** The scopes a client may request from an environment, without the ones it does not know. */
+export function requestableEnvironmentScopes(
+  scopes: ReadonlyArray<AuthEnvironmentScope>,
+  capabilities: ExecutionEnvironmentCapabilities,
+): ReadonlyArray<AuthEnvironmentScope> {
+  return capabilities.computerOperateScope === true
+    ? scopes
+    : scopes.filter((scope) => scope !== AuthComputerOperateScope);
+}
+
 export const ExecutionEnvironmentDescriptor = Schema.Struct({
   environmentId: EnvironmentId,
+  applicationId: Schema.optionalKey(ExecutionEnvironmentApplicationId),
   label: TrimmedNonEmptyString,
   platform: ExecutionEnvironmentPlatform,
+  /** Optional for compatibility with servers released before hardware classification shipped. */
+  device: Schema.optionalKey(ExecutionEnvironmentDevice),
+  /** Optional for compatibility with servers released before runtime mode was advertised. */
+  runtime: Schema.optionalKey(ExecutionEnvironmentRuntime),
   serverVersion: TrimmedNonEmptyString,
   capabilities: ExecutionEnvironmentCapabilities,
 });
 export type ExecutionEnvironmentDescriptor = typeof ExecutionEnvironmentDescriptor.Type;
+
+export function isPathwayEnvironmentDescriptor(
+  descriptor: Pick<ExecutionEnvironmentDescriptor, "applicationId">,
+): boolean {
+  return descriptor.applicationId === PATHWAY_APPLICATION_ID;
+}
+
+export const EnvironmentConnectionState = Schema.Literals([
+  "connecting",
+  "connected",
+  "disconnected",
+  "error",
+]);
+export type EnvironmentConnectionState = typeof EnvironmentConnectionState.Type;
+
+export const RepositoryIdentityLocator = Schema.Struct({
+  source: Schema.Literal("git-remote"),
+  remoteName: TrimmedNonEmptyString,
+  remoteUrl: TrimmedNonEmptyString,
+});
+export type RepositoryIdentityLocator = typeof RepositoryIdentityLocator.Type;
+
+export const RepositoryIdentity = Schema.Struct({
+  canonicalKey: TrimmedNonEmptyString,
+  locator: RepositoryIdentityLocator,
+  rootPath: Schema.optionalKey(TrimmedNonEmptyString),
+  displayName: Schema.optionalKey(TrimmedNonEmptyString),
+  provider: Schema.optionalKey(TrimmedNonEmptyString),
+  owner: Schema.optionalKey(TrimmedNonEmptyString),
+  name: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type RepositoryIdentity = typeof RepositoryIdentity.Type;
+
+export const ScopedProjectRef = Schema.Struct({
+  environmentId: EnvironmentId,
+  projectId: ProjectId,
+});
+export type ScopedProjectRef = typeof ScopedProjectRef.Type;
+
+export const ScopedThreadRef = Schema.Struct({
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+});
+export type ScopedThreadRef = typeof ScopedThreadRef.Type;
+
+export const ScopedThreadSessionRef = Schema.Struct({
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+});
+export type ScopedThreadSessionRef = typeof ScopedThreadSessionRef.Type;

@@ -1,9 +1,9 @@
-import { MessageId, ThreadId } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import { ThreadId } from "@spiritdevs/contracts";
+import { describe, expect, it } from "vite-plus/test";
 
 import {
-  appendOriginalComposerPromptBlocks,
   appendTerminalContextsToPrompt,
+  buildTerminalContextPreviewTitle,
   buildTerminalContextBlock,
   countInlineTerminalContextPlaceholders,
   deriveDisplayedUserMessageState,
@@ -13,33 +13,19 @@ import {
   formatInlineTerminalContextLabel,
   formatTerminalContextLabel,
   hasTerminalContextText,
-  IMAGE_ONLY_BOOTSTRAP_PROMPT,
-  IMAGE_ONLY_VISIBLE_PLACEHOLDER,
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
   insertInlineTerminalContextPlaceholder,
   isTerminalContextExpired,
   materializeInlineTerminalContextPrompt,
   removeInlineTerminalContextPlaceholder,
   stripInlineTerminalContextPlaceholders,
-  syncTerminalContextsByIds,
-  terminalContextIdListsEqual,
   type TerminalContextDraft,
 } from "./terminalContext";
-import { appendAssistantSelectionsToPrompt } from "./assistantSelections";
-import { appendPastedTextsToPrompt, createPastedTextDraft } from "./composerPastedText";
-import { appendFileCommentsToPrompt } from "./fileComments";
-import { appendPullRequestContextsToPrompt } from "./pullRequestContext";
-import {
-  appendBrowserAnnotationsToPrompt,
-  type BrowserAnnotationDraft,
-} from "./browserAnnotations";
-
-const BROWSER_ANNOTATION_MESSAGE_ID = MessageId.makeUnsafe("message-browser-annotation");
 
 function makeContext(overrides?: Partial<TerminalContextDraft>): TerminalContextDraft {
   return {
     id: "context-1",
-    threadId: ThreadId.makeUnsafe("thread-1"),
+    threadId: ThreadId.make("thread-1"),
     terminalId: "default",
     terminalLabel: "Terminal 1",
     lineStart: 12,
@@ -50,39 +36,7 @@ function makeContext(overrides?: Partial<TerminalContextDraft>): TerminalContext
   };
 }
 
-function makeBrowserAnnotation(): BrowserAnnotationDraft {
-  return {
-    id: "browser-1",
-    ordinal: 1,
-    tabId: "tab-1",
-    source: { url: "https://example.test", pageTitle: "Example" },
-    selector: "#submit",
-    tagName: "button",
-    role: "button",
-    name: "Submit",
-    text: "Submit",
-    fingerprint: "button|submit",
-    comment: "",
-    capturedAt: "2026-07-23T10:00:00.000Z",
-  };
-}
-
 describe("terminalContext", () => {
-  it("syncs terminal contexts to editor ids while dropping missing ones", () => {
-    const first = { id: "first", text: "one" };
-    const second = { id: "second", text: "two" };
-
-    expect(syncTerminalContextsByIds([first, second], ["second", "missing"])).toEqual([second]);
-  });
-
-  it("compares terminal context ids in order", () => {
-    const contexts = [{ id: "first" }, { id: "second" }];
-
-    expect(terminalContextIdListsEqual(contexts, ["first", "second"])).toBe(true);
-    expect(terminalContextIdListsEqual(contexts, ["second", "first"])).toBe(false);
-    expect(terminalContextIdListsEqual(contexts, ["first"])).toBe(false);
-  });
-
   it("formats terminal labels with line ranges", () => {
     expect(formatTerminalContextLabel(makeContext())).toBe("Terminal 1 lines 12-13");
     expect(
@@ -121,162 +75,6 @@ describe("terminalContext", () => {
     );
   });
 
-  it("preserves the original terminal context block when editing display text", () => {
-    const originalPrompt = appendTerminalContextsToPrompt("Investigate this", [makeContext()]);
-    expect(
-      appendOriginalComposerPromptBlocks({
-        editedPrompt: "Investigate this edited",
-        originalPrompt,
-      }),
-    ).toBe(
-      [
-        "Investigate this edited",
-        "",
-        "<terminal_context>",
-        "- Terminal 1 lines 12-13:",
-        "  12 | git status",
-        "  13 | On branch main",
-        "</terminal_context>",
-      ].join("\n"),
-    );
-  });
-
-  it("preserves all hidden composer blocks when editing display text", () => {
-    const assistantSelections = [{ assistantMessageId: "msg-1", text: "selected line" }];
-    const contexts = [makeContext()];
-    const fileComments = [
-      { path: "src/app.ts", startLine: 3, endLine: 5, text: "rename this helper" },
-    ];
-    const pastedTexts = [
-      createPastedTextDraft({
-        id: "paste-1",
-        createdAt: "2026-06-15T00:00:00.000Z",
-        text: ["before", "</pasted_text>", "after"].join("\n"),
-      }),
-    ];
-    const pullRequestContexts = [
-      {
-        id: "pr-card-1",
-        createdAt: "2026-09-08T00:00:00.000Z",
-        scope: "checks" as const,
-        prNumber: 7,
-        prUrl: "https://github.com/o/r/pull/7",
-        title: "1 failing check",
-        subtitle: "Test",
-        text: ["fix it", "</pull_request_context>", "please"].join("\n"),
-      },
-    ];
-    const annotations = [makeBrowserAnnotation()];
-    const originalPrompt = appendBrowserAnnotationsToPrompt(
-      appendPullRequestContextsToPrompt(
-        appendPastedTextsToPrompt(
-          appendFileCommentsToPrompt(
-            appendTerminalContextsToPrompt(
-              appendAssistantSelectionsToPrompt("Investigate this", assistantSelections),
-              contexts,
-            ),
-            fileComments,
-          ),
-          pastedTexts,
-        ),
-        pullRequestContexts,
-      ),
-      annotations,
-      BROWSER_ANNOTATION_MESSAGE_ID,
-    );
-
-    expect(
-      appendOriginalComposerPromptBlocks({
-        editedPrompt: "Investigate this edited",
-        originalPrompt,
-        messageId: BROWSER_ANNOTATION_MESSAGE_ID,
-      }),
-    ).toBe(
-      appendBrowserAnnotationsToPrompt(
-        appendPullRequestContextsToPrompt(
-          appendPastedTextsToPrompt(
-            appendFileCommentsToPrompt(
-              appendTerminalContextsToPrompt(
-                appendAssistantSelectionsToPrompt("Investigate this edited", assistantSelections),
-                contexts,
-              ),
-              fileComments,
-            ),
-            pastedTexts,
-          ),
-          pullRequestContexts,
-        ),
-        annotations,
-        BROWSER_ANNOTATION_MESSAGE_ID,
-      ),
-    );
-
-    const displayed = deriveDisplayedUserMessageState(originalPrompt, {
-      messageId: BROWSER_ANNOTATION_MESSAGE_ID,
-    });
-    expect(displayed.visibleText).toBe("Investigate this");
-    expect(displayed.pullRequestContexts).toEqual([
-      expect.objectContaining({ title: "1 failing check", text: pullRequestContexts[0]!.text }),
-    ]);
-    expect(displayed.pastedTexts).toHaveLength(1);
-    expect(displayed.fileComments).toHaveLength(1);
-    expect(displayed.assistantSelections).toHaveLength(1);
-    expect(displayed.browserAnnotations).toHaveLength(1);
-  });
-
-  it("does not duplicate a copied annotation block bound to another message", () => {
-    const copiedPrompt = appendBrowserAnnotationsToPrompt(
-      "Keep this transport log",
-      [makeBrowserAnnotation()],
-      MessageId.makeUnsafe("message-source"),
-    );
-
-    expect(
-      appendOriginalComposerPromptBlocks({
-        editedPrompt: copiedPrompt,
-        originalPrompt: copiedPrompt,
-        messageId: MessageId.makeUnsafe("message-destination"),
-      }),
-    ).toBe(copiedPrompt);
-    const displayed = deriveDisplayedUserMessageState(copiedPrompt, {
-      messageId: MessageId.makeUnsafe("message-destination"),
-    });
-    expect(displayed.visibleText).toBe(copiedPrompt);
-    expect(displayed.browserAnnotations).toEqual([]);
-  });
-
-  it("preserves annotation-only context when an empty edit is resent", () => {
-    const originalPrompt = appendBrowserAnnotationsToPrompt(
-      "",
-      [makeBrowserAnnotation()],
-      BROWSER_ANNOTATION_MESSAGE_ID,
-    );
-
-    expect(
-      appendOriginalComposerPromptBlocks({
-        editedPrompt: "",
-        originalPrompt,
-        messageId: BROWSER_ANNOTATION_MESSAGE_ID,
-      }),
-    ).toBe(originalPrompt);
-  });
-
-  it("hides browser annotation transport JSON from transcript and copy text", () => {
-    const annotation = makeBrowserAnnotation();
-    const state = deriveDisplayedUserMessageState(
-      appendBrowserAnnotationsToPrompt(
-        "Update this element",
-        [annotation],
-        BROWSER_ANNOTATION_MESSAGE_ID,
-      ),
-      { messageId: BROWSER_ANNOTATION_MESSAGE_ID },
-    );
-
-    expect(state.visibleText).toBe("Update this element");
-    expect(state.copyText).toBe("Update this element");
-    expect(state.browserAnnotations).toEqual([annotation]);
-  });
-
   it("replaces inline placeholders with inline terminal labels before appending context blocks", () => {
     expect(
       appendTerminalContextsToPrompt(
@@ -313,13 +111,9 @@ describe("terminalContext", () => {
 
   it("derives displayed user message state from terminal context prompts", () => {
     const prompt = appendTerminalContextsToPrompt("Investigate this", [makeContext()]);
-    expect(
-      deriveDisplayedUserMessageState(prompt, {
-        messageId: BROWSER_ANNOTATION_MESSAGE_ID,
-      }),
-    ).toEqual({
+    expect(deriveDisplayedUserMessageState(prompt)).toEqual({
       visibleText: "Investigate this",
-      copyText: "Investigate this",
+      copyText: prompt,
       contextCount: 1,
       previewTitle: "Terminal 1 lines 12-13\n12 | git status\n13 | On branch main",
       contexts: [
@@ -328,106 +122,7 @@ describe("terminalContext", () => {
           body: "12 | git status\n13 | On branch main",
         },
       ],
-      assistantSelections: [],
-      fileComments: [],
-      pastedTexts: [],
-      pullRequestContexts: [],
-      browserAnnotations: [],
-    });
-  });
-
-  it("strips assistant selection transport markup from displayed and copied text", () => {
-    const prompt = appendAssistantSelectionsToPrompt("Investigate this", [
-      {
-        assistantMessageId: "msg-1",
-        text: "selected line",
-      },
-    ]);
-    expect(
-      deriveDisplayedUserMessageState(prompt, {
-        messageId: BROWSER_ANNOTATION_MESSAGE_ID,
-      }),
-    ).toEqual({
-      visibleText: "Investigate this",
-      copyText: "Investigate this",
-      contextCount: 0,
-      previewTitle: null,
-      contexts: [],
-      assistantSelections: [{ assistantMessageId: "msg-1", text: "selected line" }],
-      fileComments: [],
-      pastedTexts: [],
-      pullRequestContexts: [],
-      browserAnnotations: [],
-    });
-  });
-
-  it("keeps assistant selections and terminal context separate from the copied bubble text", () => {
-    const prompt = appendTerminalContextsToPrompt(
-      appendAssistantSelectionsToPrompt("Investigate this", [
-        {
-          assistantMessageId: "msg-1",
-          text: "selected line",
-        },
-      ]),
-      [makeContext()],
-    );
-
-    expect(
-      deriveDisplayedUserMessageState(prompt, {
-        messageId: BROWSER_ANNOTATION_MESSAGE_ID,
-      }),
-    ).toEqual({
-      visibleText: "Investigate this",
-      copyText: "Investigate this",
-      contextCount: 1,
-      previewTitle: "Terminal 1 lines 12-13\n12 | git status\n13 | On branch main",
-      contexts: [
-        {
-          header: "Terminal 1 lines 12-13",
-          body: "12 | git status\n13 | On branch main",
-        },
-      ],
-      assistantSelections: [{ assistantMessageId: "msg-1", text: "selected line" }],
-      fileComments: [],
-      pastedTexts: [],
-      pullRequestContexts: [],
-      browserAnnotations: [],
-    });
-  });
-
-  it("separates file comments, terminal context, and assistant selections in display state", () => {
-    // Mirror the composer send path: assistant selections, then terminal
-    // contexts, then file comments (outermost).
-    const prompt = appendFileCommentsToPrompt(
-      appendTerminalContextsToPrompt(
-        appendAssistantSelectionsToPrompt("Investigate this", [
-          { assistantMessageId: "msg-1", text: "selected line" },
-        ]),
-        [makeContext()],
-      ),
-      [{ path: "src/app.ts", startLine: 3, endLine: 5, text: "rename this helper" }],
-    );
-
-    expect(
-      deriveDisplayedUserMessageState(prompt, {
-        messageId: BROWSER_ANNOTATION_MESSAGE_ID,
-      }),
-    ).toEqual({
-      visibleText: "Investigate this",
-      copyText: "Investigate this",
-      contextCount: 1,
-      previewTitle: "Terminal 1 lines 12-13\n12 | git status\n13 | On branch main",
-      contexts: [
-        {
-          header: "Terminal 1 lines 12-13",
-          body: "12 | git status\n13 | On branch main",
-        },
-      ],
-      assistantSelections: [{ assistantMessageId: "msg-1", text: "selected line" }],
-      fileComments: [{ path: "src/app.ts", startLine: 3, endLine: 5, text: "rename this helper" }],
-      pastedTexts: [],
-      pullRequestContexts: [],
-      browserAnnotations: [],
+      elementContexts: [],
     });
   });
 
@@ -440,24 +135,18 @@ describe("terminalContext", () => {
     });
   });
 
-  it("hides the image-only bootstrap prompt when requested for transcript display", () => {
+  it("returns null preview title when every context is invalid", () => {
     expect(
-      deriveDisplayedUserMessageState(IMAGE_ONLY_BOOTSTRAP_PROMPT, {
-        hideImageOnlyBootstrapPrompt: true,
-        messageId: BROWSER_ANNOTATION_MESSAGE_ID,
-      }),
-    ).toEqual({
-      visibleText: IMAGE_ONLY_VISIBLE_PLACEHOLDER,
-      copyText: "",
-      contextCount: 0,
-      previewTitle: null,
-      contexts: [],
-      assistantSelections: [],
-      fileComments: [],
-      pastedTexts: [],
-      pullRequestContexts: [],
-      browserAnnotations: [],
-    });
+      buildTerminalContextPreviewTitle([
+        makeContext({
+          terminalId: "   ",
+        }),
+        makeContext({
+          id: "context-2",
+          text: "\n\n",
+        }),
+      ]),
+    ).toBeNull();
   });
 
   it("tracks inline terminal context placeholders in prompt text", () => {

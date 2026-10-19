@@ -17,9 +17,7 @@ export const makeProviderMaintenanceCommandCoordinator = Effect.fn(
   const runningTargetsRef = yield* Ref.make<ReadonlySet<string>>(new Set());
   const locksRef = yield* Ref.make<ReadonlyMap<string, Semaphore.Semaphore>>(new Map());
 
-  const acquireTarget = Effect.fn("acquireProviderMaintenanceTarget")(function* (
-    targetKey: string,
-  ) {
+  const acquireTarget = Effect.fn("acquireTarget")(function* (targetKey: string) {
     return yield* Ref.modify(runningTargetsRef, (runningTargets) => {
       if (runningTargets.has(targetKey)) {
         return [false, runningTargets] as const;

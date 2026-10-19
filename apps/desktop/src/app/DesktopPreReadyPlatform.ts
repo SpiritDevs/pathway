@@ -1,0 +1,133 @@
+// @effect-diagnostics nodeBuiltinImport:off - pre-ready Electron setup reads settings and prepares the Linux desktop entry synchronously before app services are available.
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+
+import * as Electron from "electron";
+import {
+  resolvePackagedDesktopFlavor,
+  type PathwayDesktopFlavor,
+} from "@spiritdevs/shared/desktopFlavor";
+import { HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
+
+import * as DesktopEarlyElectronStartup from "./DesktopEarlyElectronStartup.ts";
+import { resolveDesktopAppBranding } from "./DesktopEnvironment.ts";
+import { renderUrlHandlerDesktopEntry } from "./DesktopLinuxUrlHandler.ts";
+import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
+import { configureDesktopWebAuthn, DesktopWebAuthnConfigurationError } from "./DesktopWebAuthn.ts";
+
+export interface DesktopPreReadyCommandLineReader {
+  readonly hasSwitch: (switchName: string) => boolean;
+  readonly getSwitchValue: (switchName: string) => string;
+}
+
+export function readCommandLineSwitchValue(
+  commandLine: DesktopPreReadyCommandLineReader,
+  switchName: string,
+): string | null {
+  if (!commandLine.hasSwitch(switchName)) {
+    return null;
+  }
+
+  const value = commandLine.getSwitchValue(switchName).trim();
+  return value.length > 0 ? value : null;
+}
+
+const decodePackagedFlavorMetadata = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ pathwayDesktopFlavor: Schema.optional(Schema.Unknown) })),
+);
+
+/** The flavor the build stamped into the packaged package.json; source runs are production. */
+export function readPackagedDesktopFlavor(): PathwayDesktopFlavor {
+  if (!Electron.app.isPackaged) return "production";
+  const packageJson = NodeFS.readFileSync(
+    NodePath.join(Electron.app.getAppPath(), "package.json"),
+    "utf8",
+  );
+  return resolvePackagedDesktopFlavor(
+    decodePackagedFlavorMetadata(packageJson).pathwayDesktopFlavor,
+  );
+}
+
+export const resolveEarlyLinuxElectronOptionsFromProcess =
+  (): DesktopEarlyElectronStartup.EarlyLinuxElectronOptions =>
+    DesktopEarlyElectronStartup.resolveEarlyLinuxElectronOptions({
+      env: process.env,
+      homeDirectory: NodeOS.homedir(),
+      joinPath: NodePath.posix.join,
+      readFileString: (path) => NodeFS.readFileSync(path, "utf8"),
+      flavor: readPackagedDesktopFlavor(),
+    });
+
+export class DesktopPreReadyElectronOptions extends Context.Service<
+  DesktopPreReadyElectronOptions,
+  {
+    readonly linux: DesktopEarlyElectronStartup.EarlyLinuxElectronOptions | null;
+    readonly linuxPasswordStoreCommandLine: string | null;
+  }
+>()("@spiritdevs/desktop/app/DesktopPreReadyPlatform/DesktopPreReadyElectronOptions") {}
+
+export const make = Effect.gen(function* () {
+  const platform = yield* HostProcessPlatform;
+  yield* Effect.try({
+    try: () => configureDesktopWebAuthn(platform),
+    catch: (cause) => new DesktopWebAuthnConfigurationError({ cause }),
+  }).pipe(Effect.catch((error) => Effect.logWarning(error.message)));
+  return yield* Effect.sync((): DesktopPreReadyElectronOptions["Service"] => {
+    const linuxPasswordStoreCommandLine =
+      platform === "linux"
+        ? readCommandLineSwitchValue(Electron.app.commandLine, "password-store")
+        : null;
+    const linux = platform === "linux" ? resolveEarlyLinuxElectronOptionsFromProcess() : null;
+
+    if (linux !== null) {
+      // The portal also requires a valid desktop entry. An AppImage update may
+      // have removed the executable referenced by the previous launch's entry.
+      try {
+        const applicationsDir = NodePath.posix.join(
+          process.env.XDG_DATA_HOME?.trim() ||
+            NodePath.posix.join(NodeOS.homedir(), ".local", "share"),
+          "applications",
+        );
+        NodeFS.mkdirSync(applicationsDir, { recursive: true });
+        NodeFS.writeFileSync(
+          NodePath.posix.join(applicationsDir, linux.linuxDesktopEntryName),
+          renderUrlHandlerDesktopEntry({
+            displayName: resolveDesktopAppBranding({
+              isDevelopment: linux.isDevelopment,
+              appVersion: Electron.app.getVersion(),
+            }).displayName,
+            execTarget: process.env.APPIMAGE?.trim() || process.execPath,
+            scheme: linux.scheme,
+          }),
+          "utf8",
+        );
+      } catch {
+        // The URL handler retries with the full environment and logs failures.
+      }
+      // Chromium caches its portal registration during startup. Set the identity
+      // before any asynchronous work can initialize it with Electron's default.
+      const linuxApp = Electron.app as Electron.App & {
+        setDesktopName: (desktopName: string) => void;
+      };
+      linuxApp.setDesktopName(linux.linuxDesktopEntryName);
+      Electron.app.commandLine.appendSwitch("class", linux.linuxWmClass);
+      if (linux.passwordStore !== null && linuxPasswordStoreCommandLine === null) {
+        Electron.app.commandLine.appendSwitch("password-store", linux.passwordStore);
+      }
+    }
+
+    return { linux, linuxPasswordStoreCommandLine };
+  });
+}).pipe(Effect.withSpan("desktop.electron.configureBeforeReady"));
+
+// Keep Electron's strict pre-ready setup isolated so later runtime layers cannot
+// observe app readiness before platform authenticators, scheme privileges, and switches exist.
+export const layer = Layer.mergeAll(
+  ElectronProtocol.layerSchemePrivileges,
+  Layer.effect(DesktopPreReadyElectronOptions, make),
+);

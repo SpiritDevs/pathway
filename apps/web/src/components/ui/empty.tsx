@@ -42,10 +42,9 @@ const emptyMediaVariants = cva(
 
 function EmptyMedia({
   className,
-  variant: variantProp,
+  variant = "default",
   ...props
 }: React.ComponentProps<"div"> & VariantProps<typeof emptyMediaVariants>) {
-  const variant = variantProp === undefined ? "default" : variantProp;
   return (
     <div
       className={cn("relative mb-6", className)}
@@ -90,7 +89,7 @@ function EmptyDescription({ className, ...props }: React.ComponentProps<"p">) {
   return (
     <div
       className={cn(
-        "text-muted-foreground text-ui leading-snug [&>a:hover]:text-primary [&>a]:underline [&>a]:underline-offset-4 [[data-slot=empty-title]+&]:mt-1",
+        "text-muted-foreground text-sm [&>a:hover]:text-primary [&>a]:underline [&>a]:underline-offset-4 [[data-slot=empty-title]+&]:mt-1",
         className,
       )}
       data-slot="empty-description"
@@ -103,7 +102,7 @@ function EmptyContent({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       className={cn(
-        "flex w-full min-w-0 max-w-sm flex-col items-center gap-4 text-balance text-ui leading-snug",
+        "flex w-full min-w-0 max-w-sm flex-col items-center gap-4 text-balance text-sm",
         className,
       )}
       data-slot="empty-content"

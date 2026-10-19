@@ -1,0 +1,104 @@
+name: Deploy Pathway Connect relay
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - infra/relay/**
+      - packages/backend/**
+      - packages/client-runtime/**
+      - packages/contracts/**
+      - packages/shared/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - tsconfig.base.json
+      - .github/workflows/deploy-relay.yml
+
+permissions:
+  contents: read
+  id-token: none
+  statuses: write
+
+concurrency:
+  group: relay-production
+  cancel-in-progress: false
+
+jobs:
+  deploy_relay:
+    name: Deploy production relay
+    runs-on: ${{ fromJSON(vars.FLEET_MACOS_RUNNER || '["self-hosted","fleet-macos-arm64"]') }}
+    timeout-minutes: 15
+    environment:
+      name: production
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      AXIOM_ORG_ID: ${{ vars.AXIOM_ORG_ID }}
+      CONVEX_URL: ${{ vars.CONVEX_URL }}
+      RELAY_DOMAIN: ${{ vars.RELAY_DOMAIN }}
+      RELAY_API_ZONE_NAME: ${{ vars.RELAY_API_ZONE_NAME }}
+      RELAY_TUNNEL_ZONE_NAME: ${{ vars.RELAY_TUNNEL_ZONE_NAME }}
+      CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
+      CLERK_JWT_AUDIENCE: ${{ vars.CLERK_JWT_AUDIENCE }}
+      APNS_ENABLED: ${{ vars.APNS_ENABLED || 'true' }}
+      APNS_ENVIRONMENT: ${{ vars.APNS_ENVIRONMENT }}
+      APNS_TEAM_ID: ${{ vars.APNS_TEAM_ID }}
+      APNS_KEY_ID: ${{ vars.APNS_KEY_ID }}
+      APNS_BUNDLE_ID: ${{ vars.APNS_BUNDLE_ID }}
+      MAIL_ENABLED: ${{ vars.MAIL_ENABLED || 'false' }}
+      MAIL_GOOGLE_PUBSUB_TOPIC: ${{ vars.MAIL_GOOGLE_PUBSUB_TOPIC }}
+      MAIL_GOOGLE_PUBSUB_SERVICE_ACCOUNT: ${{ vars.MAIL_GOOGLE_PUBSUB_SERVICE_ACCOUNT }}
+      MAIL_GOOGLE_CLIENT_ID: ${{ vars.MAIL_GOOGLE_CLIENT_ID }}
+      ALCHEMY_TELEMETRY_DISABLED: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=pathway-relay...
+
+      - name: Deploy production relay stage
+        id: deploy
+        run: vp run --filter pathway-relay deploy --stage prod --yes --github-output
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          AXIOM_TOKEN: ${{ secrets.AXIOM_TOKEN }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          APNS_PRIVATE_KEY: ${{ secrets.APNS_PRIVATE_KEY }}
+          MAIL_ENCRYPTION_KEY: ${{ secrets.MAIL_ENCRYPTION_KEY }}
+          MAIL_UPLOADTHING_API_KEY: ${{ secrets.MAIL_UPLOADTHING_API_KEY }}
+          MAIL_GOOGLE_CLIENT_SECRET: ${{ secrets.MAIL_GOOGLE_CLIENT_SECRET }}
+
+      - name: Publish relay deploy commit status
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const result = "${{ steps.deploy.outputs.result }}";
+            const changed = "${{ steps.deploy.outputs.changed }}" === "true";
+            const description = changed
+              ? "Relay production deploy applied infrastructure changes."
+              : result === "noop"
+                ? "Relay production deploy was a no-op."
+                : `Relay production deploy completed with result: ${result}.`;
+
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: "success",
+              context: "Relay deploy / production",
+              description,
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            });

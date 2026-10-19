@@ -2,17 +2,23 @@
 // Purpose: Say what a desktop tool call actually does, in the words a person would use,
 //          for the approval card and the transcript.
 // Layer: Web UI logic
-// Exports: COMPUTER_TOOL_TITLES, isComputerToolName, describeComputerToolCall
+// Exports: COMPUTER_TOOL_TITLES, isComputerToolName, describeComputerToolCall,
+//          computerToolCallHeading, computerApprovalEventPresentation
 //
 // Every browser tool has a curated presentation and every computer tool had
-// none, so an approval for the most consequential thing Synara can do — moving a
+// none, so an approval for the most consequential thing Pathway can do — moving a
 // pointer on the user's own machine — read
-// `mcp__synara__computer_click  x 812  y 344`, which is the raw wire call. The
+// `mcp__pathway__computer_click  x 812  y 344`, which is the raw wire call. The
 // decision the user is being asked to make is "click *what*", and the answer is
 // assembled here: verb, where, and which window, resolved from the window list
 // the pane already receives rather than left as an opaque id.
 
-import type { ComputerWindow } from "@synara/contracts";
+import { parseComputerApprovalPrompt } from "@spiritdevs/client-runtime/state/computer-approval";
+import type {
+  ComputerWindow,
+  OrchestrationV2TurnItemStatus,
+  ProviderRequestKind,
+} from "@spiritdevs/contracts";
 
 /** The gateway's Computer tools, and the verb each one performs. */
 export const COMPUTER_TOOL_TITLES = {
@@ -66,7 +72,7 @@ export type ComputerToolName = keyof typeof COMPUTER_TOOL_TITLES;
 /**
  * The bare tool name inside whatever wrapping a provider applied, or null.
  * Providers surface the same gateway tool as `computer_click`,
- * `mcp__synara__computer_click`, and other permutations, so identity is
+ * `mcp__pathway__computer_click`, and other permutations, so identity is
  * recovered from the suffix rather than matched exactly.
  */
 export function computerToolName(candidate: string | null | undefined): ComputerToolName | null {
@@ -194,6 +200,95 @@ export function describeComputerToolCall(input: {
 
   const summary = [verb, what, where].filter((part) => part.length > 0).join(" ");
   return { tool, summary, params: describeParams(tool, args, input.windows) };
+}
+
+/**
+ * The transcript heading for a Computer tool call, or null to keep the
+ * provider's own. A meaningful title from the provider wins; a generic one
+ * ("Tool call") or the bare tool name gives way to the described action.
+ */
+export function computerToolCallHeading(input: {
+  readonly toolName: string | null | undefined;
+  readonly title: string | null | undefined;
+  readonly input: unknown;
+}): string | null {
+  if (computerToolName(input.toolName) === null) return null;
+  const title = normalizeCompactToolLabel(input.title ?? "");
+  if (title.length > 0 && !isGenericToolTitle(title) && computerToolName(title) === null) {
+    return null;
+  }
+  return (
+    describeComputerToolCall({
+      toolName: input.toolName,
+      args: readRecord(input.input) ?? undefined,
+    })?.summary ?? null
+  );
+}
+
+/**
+ * The transcript row for a Computer approval item, or null for other approvals.
+ * The item keeps only a status, so a declined request and a cancelled one both
+ * read as declined.
+ */
+export function computerApprovalEventPresentation(item: {
+  readonly requestKind: ProviderRequestKind;
+  readonly prompt?: string | undefined;
+  readonly status: OrchestrationV2TurnItemStatus;
+}): { readonly label: string; readonly detail: string | null } | null {
+  if (item.requestKind !== "computer") return null;
+  const prompt = parseComputerApprovalPrompt({
+    requestKind: item.requestKind,
+    detail: item.prompt,
+  });
+  const subject = prompt?.scope === "task" ? "Computer task" : "Computer";
+  const label =
+    item.status === "completed"
+      ? `${subject} approved`
+      : item.status === "cancelled"
+        ? `${subject} declined`
+        : item.status === "failed" || item.status === "interrupted"
+          ? `${subject} approval cancelled`
+          : `${subject} approval requested`;
+  if (prompt?.scope === "task") return { label, detail: null };
+  const call =
+    prompt?.scope === "call"
+      ? describeComputerToolCall({ toolName: prompt.toolName, args: prompt.args })
+      : null;
+  return { label, detail: call?.summary ?? item.prompt?.trim() ?? null };
+}
+
+const GENERIC_TOOL_TITLES = new Set([
+  "tool",
+  "tool call",
+  "dynamic tool call",
+  "mcp tool call",
+  "agent task",
+  "subagent task",
+  "task",
+  "command run",
+  "ran command",
+  "running command",
+  "command execution",
+  "file change",
+  "find",
+  "read file",
+]);
+
+function isGenericToolTitle(value: string): boolean {
+  return GENERIC_TOOL_TITLES.has(
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim(),
+  );
+}
+
+function normalizeCompactToolLabel(value: string): string {
+  return value
+    .trimEnd()
+    .replace(/\s(?:complete|completed|done|finished|success|succeeded|started|running)$/i, "")
+    .trim();
 }
 
 /** true/false pick the verb's direction; anything else keeps the generic title. */

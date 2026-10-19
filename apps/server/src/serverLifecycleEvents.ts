@@ -1,98 +1,55 @@
-import { Effect, Layer, PubSub, Ref, ServiceMap, Stream } from "effect";
-
-import type { ProjectId, ThreadId } from "@synara/contracts";
-
-export interface ServerLifecycleWelcomePayload {
-  readonly cwd: string;
-  readonly homeDir: string;
-  readonly chatWorkspaceRoot: string;
-  readonly studioWorkspaceRoot: string;
-  readonly projectName: string;
-  readonly bootstrapProjectId?: ProjectId;
-  readonly bootstrapThreadId?: ThreadId;
-}
-
-export interface ServerLifecycleReadyPayload {
-  readonly at: string;
-}
-
-export interface ServerLifecycleMaintenancePayload {
-  readonly task: "thread-retention";
-  readonly state: "started" | "progress" | "completed" | "failed";
-  readonly at: string;
-  /** Legacy wire name retained so maintenance events remain backward-compatible. */
-  readonly deletedCount?: number;
-  readonly totalCount?: number;
-  readonly error?: string;
-}
-
-export type ServerLifecycleEvent =
-  | {
-      readonly sequence: number;
-      readonly type: "welcome";
-      readonly payload: ServerLifecycleWelcomePayload;
-    }
-  | {
-      readonly sequence: number;
-      readonly type: "ready";
-      readonly payload: ServerLifecycleReadyPayload;
-    }
-  | {
-      readonly sequence: number;
-      readonly type: "maintenance";
-      readonly payload: ServerLifecycleMaintenancePayload;
-    };
+import type { ServerLifecycleStreamEvent } from "@spiritdevs/contracts";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as PubSub from "effect/PubSub";
+import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
 
 type LifecycleEventInput =
-  | Omit<Extract<ServerLifecycleEvent, { type: "welcome" }>, "sequence">
-  | Omit<Extract<ServerLifecycleEvent, { type: "ready" }>, "sequence">
-  | Omit<Extract<ServerLifecycleEvent, { type: "maintenance" }>, "sequence">;
+  | Omit<Extract<ServerLifecycleStreamEvent, { type: "welcome" }>, "sequence">
+  | Omit<Extract<ServerLifecycleStreamEvent, { type: "ready" }>, "sequence">;
 
-export interface ServerLifecycleSnapshot {
+interface SnapshotState {
   readonly sequence: number;
-  readonly events: ReadonlyArray<ServerLifecycleEvent>;
+  readonly events: ReadonlyArray<ServerLifecycleStreamEvent>;
 }
 
-export interface ServerLifecycleEventsShape {
-  readonly publish: (event: LifecycleEventInput) => Effect.Effect<ServerLifecycleEvent>;
-  readonly snapshot: Effect.Effect<ServerLifecycleSnapshot>;
-  readonly stream: Stream.Stream<ServerLifecycleEvent>;
-}
-
-export class ServerLifecycleEvents extends ServiceMap.Service<
+export class ServerLifecycleEvents extends Context.Service<
   ServerLifecycleEvents,
-  ServerLifecycleEventsShape
->()("synara/serverLifecycleEvents") {}
+  {
+    readonly publish: (event: LifecycleEventInput) => Effect.Effect<ServerLifecycleStreamEvent>;
+    readonly snapshot: Effect.Effect<SnapshotState>;
+    readonly stream: Stream.Stream<ServerLifecycleStreamEvent>;
+  }
+>()("@spiritdevs/pathway/serverLifecycleEvents") {}
 
-export const ServerLifecycleEventsLive = Layer.effect(
-  ServerLifecycleEvents,
-  Effect.gen(function* () {
-    const pubsub = yield* PubSub.unbounded<ServerLifecycleEvent>();
-    const state = yield* Ref.make<ServerLifecycleSnapshot>({
-      sequence: 0,
-      events: [],
-    });
+const make = Effect.gen(function* () {
+  const pubsub = yield* PubSub.unbounded<ServerLifecycleStreamEvent>();
+  const state = yield* Ref.make<SnapshotState>({
+    sequence: 0,
+    events: [],
+  });
 
-    const publish: ServerLifecycleEventsShape["publish"] = (event) =>
+  return {
+    publish: (event) =>
       Ref.modify(state, (current) => {
         const nextSequence = current.sequence + 1;
         const nextEvent = {
           ...event,
           sequence: nextSequence,
-        } satisfies ServerLifecycleEvent;
+        } satisfies ServerLifecycleStreamEvent;
         const nextEvents = [
           nextEvent,
           ...current.events.filter((entry) => entry.type !== nextEvent.type),
         ];
         return [nextEvent, { sequence: nextSequence, events: nextEvents }] as const;
-      }).pipe(Effect.tap((event) => PubSub.publish(pubsub, event)));
+      }).pipe(Effect.tap((event) => PubSub.publish(pubsub, event))),
+    snapshot: Ref.get(state),
+    get stream() {
+      return Stream.fromPubSub(pubsub);
+    },
+  } satisfies ServerLifecycleEvents["Service"];
+});
 
-    return {
-      publish,
-      snapshot: Ref.get(state),
-      get stream() {
-        return Stream.fromPubSub(pubsub);
-      },
-    } satisfies ServerLifecycleEventsShape;
-  }),
-);
+export const layer = Layer.effect(ServerLifecycleEvents, make);

@@ -1,18 +1,17 @@
 /**
  * Desktop geometry and payload parsing shared by every computer backend.
  *
- * None of this is compositor-specific. The workspace rect, the screenshot
- * mapping (`desktop = region.origin + pixel / scale`), the PNG header read, and
- * the window-list shape are the coordinate contract the agent's tool surface is
+ * None of this is backend-specific. The workspace rect, the screenshot mapping
+ * (`desktop = region.origin + pixel / scale`), the PNG header read, and the
+ * window-list shape are the coordinate contract the agent's tool surface is
  * written against, so a second backend has to produce exactly the same numbers
  * or every coordinate the model learned on one desktop is wrong on the other.
  *
  * The payload helpers live here because `parseWindows` is the reason they
- * exist: window JSON arrives either as a plain string or wrapped in a D-Bus
- * variant, depending on which transport carried it. The variant unwrapping
- * itself is `dbusPlumbing.ts`, shared with the callers that never touch
- * geometry, and re-exported here because this is the import every parser
- * already reaches for.
+ * exist: window JSON arrives either as a string document or as an
+ * already-decoded value, depending on which transport carried it.
+ *
+ * @module computer/computerGeometry
  */
 import {
   COMPUTER_ID_MAX_LENGTH,
@@ -24,11 +23,11 @@ import {
   type ComputerScreenshot,
   type ComputerScreenSize,
   type ComputerWindow,
-} from "@synara/contracts";
+} from "@spiritdevs/contracts";
+import * as Effect from "effect/Effect";
 
 import { pngDimensions } from "../pngHeader.ts";
-import { ComputerBackendError } from "./ComputerBackend.ts";
-const unwrapDbusValue = (value: unknown): unknown => value;
+import { ComputerBackendError } from "./computerErrors.ts";
 import { clampTextToLength } from "./utf8Truncation.ts";
 
 /** Prefix of the message a capture failure carries when no backend names itself. */
@@ -36,24 +35,21 @@ const DEFAULT_CAPTURE_SOURCE = "The desktop capture";
 
 // ── Payload decoding ─────────────────────────────────────────────────
 
-export { unwrapDbusValue };
-
 /**
- * A JSON document that may still be a string, a variant-wrapped string, or an
- * already-decoded value. Malformed JSON decodes to `null` rather than throwing:
- * every caller degrades to "the display server told us nothing", which is a
- * state they all have to handle anyway.
+ * A JSON document that may still be a string or an already-decoded value.
+ * Malformed JSON decodes to `null` rather than failing: every caller degrades
+ * to "the display server told us nothing", which is a state they all have to
+ * handle anyway.
  */
 export function parseJsonPayload(value: unknown): unknown {
-  const unwrapped = unwrapDbusValue(value);
-  if (typeof unwrapped === "string") {
+  if (typeof value === "string") {
     try {
-      return JSON.parse(unwrapped);
+      return JSON.parse(value);
     } catch {
       return null;
     }
   }
-  return unwrapped;
+  return value;
 }
 
 export function asRecord(value: unknown): Record<string, unknown> {
@@ -111,23 +107,6 @@ function asWindowIds(value: unknown): readonly ComputerWindow["id"][] | undefine
 }
 
 /**
- * The window list emitted by a backend enumerator.
- *
- * An entry without an id or without a parseable rect is dropped rather than
- * reported bounds-less. `ComputerWindow.bounds` being optional describes a
- * display server that has no geometry to give at all, which is a property of
- * the provider and is declared through `ComputerCapabilities.windowBounds`; a
- * single malformed entry from a source that does report geometry is a bug in
- * that entry, and admitting it would put an unlocatable window in front of a
- * model that has no way to tell the two cases apart.
- *
- * Every free-form string — id, title, app name — is clamped to its contract
- * bound before an object is constructed: one application with a paragraph-long
- * window title (browsers and SPAs do this) must cost that title's tail, not
- * fail the schema encode of every state payload and push event for the whole
- * session. The list itself is clamped to the same ceiling the contract checks.
- */
-/**
  * A cheap identity for a window-list payload, used to decide whether to emit a
  * `windows-changed` event.
  *
@@ -141,8 +120,7 @@ export function windowsPayloadFingerprint(
   payload: unknown,
   focusedWindowId: string | null,
 ): string {
-  const unwrapped = unwrapDbusValue(payload);
-  const body = typeof unwrapped === "string" ? unwrapped : JSON.stringify(unwrapped);
+  const body = typeof payload === "string" ? payload : JSON.stringify(payload);
   return `${focusedWindowId ?? ""} ${body}`;
 }
 
@@ -151,8 +129,8 @@ export function windowsPayloadFingerprint(
  * from.
  *
  * The macOS helper answers `list-windows` with a decoded JSON object rather than
- * the string document the KWin plugin sends, so `windowsPayloadFingerprint`
- * there means "re-encode the whole array" — on a call that runs several times
+ * a string document, so `windowsPayloadFingerprint` there means "re-encode the
+ * whole array" — on a call that runs several times
  * per action and per publish. This digests only the fields a `windows-changed`
  * event is about: identity, geometry, stacking, focus, visibility, and the
  * labels a viewer reads. Anything else the desktop reports (occluders, for one)
@@ -191,19 +169,24 @@ export function windowsDigestFingerprint(
  *
  * Every backend enumerates windows several times per action, and every
  * enumeration that reported a change schedules a state publish — which
- * enumerates again. Both backends therefore kept a "previous fingerprint" field
- * and the same three-line compare beside it; this is that loop, owned once, so
- * the two cannot drift on what counts as a change.
+ * enumerates again. This is the "previous fingerprint" compare every backend
+ * needs, owned once, so backends cannot drift on what counts as a change.
+ * `emit` is typically a publish onto the backend's event stream.
  */
 export class WindowListChangeNotifier {
   #fingerprint: string | undefined;
+  private readonly emit: (windows: readonly ComputerWindow[]) => Effect.Effect<void>;
 
-  constructor(private readonly emit: (windows: readonly ComputerWindow[]) => void) {}
+  constructor(emit: (windows: readonly ComputerWindow[]) => Effect.Effect<void>) {
+    this.emit = emit;
+  }
 
-  observe(fingerprint: string, windows: readonly ComputerWindow[]): void {
-    if (fingerprint === this.#fingerprint) return;
-    this.#fingerprint = fingerprint;
-    this.emit(windows);
+  observe(fingerprint: string, windows: readonly ComputerWindow[]): Effect.Effect<void> {
+    return Effect.suspend(() => {
+      if (fingerprint === this.#fingerprint) return Effect.void;
+      this.#fingerprint = fingerprint;
+      return this.emit(windows);
+    });
   }
 }
 
@@ -236,6 +219,23 @@ export function pointerClampResult(
   return { point: requested, clampedTo: actual };
 }
 
+/**
+ * The window list emitted by a backend enumerator.
+ *
+ * An entry without an id or without a parseable rect is dropped rather than
+ * reported bounds-less. `ComputerWindow.bounds` being optional describes a
+ * display server that has no geometry to give at all, which is a property of
+ * the provider and is declared through `ComputerCapabilities.windowBounds`; a
+ * single malformed entry from a source that does report geometry is a bug in
+ * that entry, and admitting it would put an unlocatable window in front of a
+ * model that has no way to tell the two cases apart.
+ *
+ * Every free-form string — id, title, app name — is clamped to its contract
+ * bound before an object is constructed: one application with a paragraph-long
+ * window title (browsers and SPAs do this) must cost that title's tail, not
+ * fail the schema encode of every state payload and push event for the whole
+ * session. The list itself is clamped to the same ceiling the contract checks.
+ */
 export function parseWindows(value: unknown, focusedWindowId: string | null): ComputerWindow[] {
   const parsed = parseJsonPayload(value);
   const items = Array.isArray(parsed) ? parsed : [];
@@ -403,12 +403,15 @@ export function workspaceRectFromWindows(
 export function requireWindowBounds(
   window: Pick<ComputerWindow, "id" | "bounds">,
   action: string,
-): ComputerRect {
-  if (window.bounds) return window.bounds;
-  throw new ComputerBackendError(
-    `This desktop reports no geometry for window ${JSON.stringify(window.id)}, so ${action} cannot be resolved. ` +
-      "The display server exposes window titles and activation but no position or size " +
-      "(capabilities.windowBounds is false); use full-screen capture and desktop coordinates instead.",
+): Effect.Effect<ComputerRect, ComputerBackendError> {
+  if (window.bounds) return Effect.succeed(window.bounds);
+  return Effect.fail(
+    new ComputerBackendError({
+      message:
+        `This desktop reports no geometry for window ${JSON.stringify(window.id)}, so ${action} cannot be resolved. ` +
+        "The display server exposes window titles and activation but no position or size " +
+        "(capabilities.windowBounds is false); use full-screen capture and desktop coordinates instead.",
+    }),
   );
 }
 
@@ -461,14 +464,16 @@ export function formatRect(rect: ComputerRect): string {
 export function readPngDimensions(
   bytes: Uint8Array,
   options: { readonly source?: string } = {},
-): { readonly width: number; readonly height: number } {
+): Effect.Effect<{ readonly width: number; readonly height: number }, ComputerBackendError> {
   const dimensions = pngDimensions(bytes);
   if (!dimensions) {
-    throw new ComputerBackendError(
-      `${options.source ?? DEFAULT_CAPTURE_SOURCE} did not return a usable PNG image.`,
+    return Effect.fail(
+      new ComputerBackendError({
+        message: `${options.source ?? DEFAULT_CAPTURE_SOURCE} did not return a usable PNG image.`,
+      }),
     );
   }
-  return dimensions;
+  return Effect.succeed(dimensions);
 }
 
 /**
@@ -489,19 +494,18 @@ export function screenshotFromPng(input: {
    * genuinely hold only bytes.
    */
   readonly bytesBase64?: string;
-}): ComputerScreenshot {
-  const dimensions = readPngDimensions(
-    input.bytes,
-    input.source === undefined ? {} : { source: input.source },
+}): Effect.Effect<ComputerScreenshot, ComputerBackendError> {
+  return Effect.map(
+    readPngDimensions(input.bytes, input.source === undefined ? {} : { source: input.source }),
+    (dimensions): ComputerScreenshot => ({
+      mimeType: "image/png",
+      width: dimensions.width,
+      height: dimensions.height,
+      sizeBytes: input.bytes.byteLength,
+      bytesBase64: input.bytesBase64 ?? Buffer.from(input.bytes).toString("base64"),
+      region: input.region,
+      scale: dimensions.width / input.region.width,
+      capturedAt: input.capturedAt,
+    }),
   );
-  return {
-    mimeType: "image/png",
-    width: dimensions.width,
-    height: dimensions.height,
-    sizeBytes: input.bytes.byteLength,
-    bytesBase64: input.bytesBase64 ?? Buffer.from(input.bytes).toString("base64"),
-    region: input.region,
-    scale: dimensions.width / input.region.width,
-    capturedAt: input.capturedAt,
-  };
 }

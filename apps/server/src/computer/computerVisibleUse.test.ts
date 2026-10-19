@@ -1,23 +1,19 @@
-import { describe, expect, it } from "vitest";
-
-import type { OrchestrationMessage } from "@synara/contracts";
+import { describe, expect, it } from "@effect/vitest";
 
 import {
+  type ComputerVisibleUseMessage,
   computerForegroundAuthorizationForMessages,
   latestUserAuthoredMessage,
   messageRequestsVisibleUse,
 } from "./computerVisibleUse.ts";
 
-function message(overrides: Partial<OrchestrationMessage> = {}): OrchestrationMessage {
+function message(overrides: Partial<ComputerVisibleUseMessage> = {}): ComputerVisibleUseMessage {
   return {
-    id: "msg" as OrchestrationMessage["id"],
+    id: "msg",
     role: "user",
     text: "",
-    turnId: null,
     streaming: false,
     source: "native",
-    createdAt: "2026-09-19T13:00:00.000Z",
-    updatedAt: "2026-09-19T13:00:00.000Z",
     ...overrides,
   };
 }
@@ -27,7 +23,7 @@ describe("messageRequestsVisibleUse", () => {
     // The incident's own task text: use Helium, never show Helium.
     expect(
       messageRequestsVisibleUse(
-        "Go to newegg.com, and pick out parts to build a $3000 gaming pc for 1440p gaming and add them to cart. use only synara computer use and incognito helium browser using computer use",
+        "Go to newegg.com, and pick out parts to build a $3000 gaming pc for 1440p gaming and add them to cart. use only pathway computer use and incognito helium browser using computer use",
       ),
     ).toBe(false);
     expect(messageRequestsVisibleUse("open Calculator and add 12 and 34")).toBe(false);
@@ -244,7 +240,7 @@ describe("computerForegroundAuthorizationForMessages", () => {
   it.each(["Yes", "No"])(
     "uses the persisted structured answer %s, never the generated question text",
     (answer) => {
-      const replyId = "visibility-answer" as OrchestrationMessage["id"];
+      const replyId = "visibility-answer";
       const title = "Can I bring Resolve to the foreground?";
       const messages = [
         message({
@@ -265,7 +261,7 @@ describe("computerForegroundAuthorizationForMessages", () => {
   );
 
   it("refuses missing, stale or imported structured permission answers", () => {
-    const replyId = "visibility-answer" as OrchestrationMessage["id"];
+    const replyId = "visibility-answer";
     const title = "Can I bring Resolve to the foreground?";
     const question = message({
       role: "assistant",
@@ -281,7 +277,7 @@ describe("computerForegroundAuthorizationForMessages", () => {
       [{ ...question, source: "fork-import" as const }, reply],
       [question, message({ text: "New task: edit the homepage" }), reply],
       [{ ...question, asyncUserInput: { questions: [{ title }] } }, reply],
-      [question, { ...reply, id: "unrelated-answer" as OrchestrationMessage["id"] }],
+      [question, { ...reply, id: "unrelated-answer" }],
       [question, { ...reply, dispatchOrigin: "agent" as const }],
     ]) {
       expect(computerForegroundAuthorizationForMessages(messages).userRequestedVisibleUse).toBe(
@@ -373,6 +369,14 @@ describe("computerForegroundAuthorizationForMessages", () => {
         message({ text: "stop" }),
       ]).userRequestedVisibleUse,
     ).toBe(false);
+  });
+
+  it("reads a message without a recorded source as native", () => {
+    // Pathway's thread messages do not carry `source` yet.
+    const { source: _source, ...unsourced } = message({ text: "show me the Helium window" });
+    expect(computerForegroundAuthorizationForMessages([unsourced]).userRequestedVisibleUse).toBe(
+      true,
+    );
   });
 
   it("refuses a thread with no user message at all", () => {

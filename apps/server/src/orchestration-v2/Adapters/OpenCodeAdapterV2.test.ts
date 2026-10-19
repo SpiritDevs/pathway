@@ -1,0 +1,418 @@
+import { assert, describe, it } from "@effect/vitest";
+import {
+  EnvironmentId,
+  type ModelSelection,
+  NodeId,
+  ProviderInstanceId,
+  ProviderSessionId,
+  ProviderThreadId,
+  ProviderTurnId,
+  ThreadId,
+  type OrchestrationV2ProviderTurn,
+} from "@spiritdevs/contracts";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+
+import type { EventNdjsonLogger } from "../../provider/Layers/EventNdjsonLogger.ts";
+import { IdAllocatorV2, layer as idAllocatorLayer } from "../IdAllocator.ts";
+import { subagentChildModelSelection } from "../SubagentProjection.ts";
+
+import {
+  openCodeAllowsComputerPermission,
+  openCodeBoundaryAfterProviderTurn,
+  openCodeChildPermissionRules,
+  openCodePermissionRules,
+  openCodeConversationResumePermissions,
+  openCodePermissionRequestKind,
+  openCodeMcpRegistration,
+  openCodeToolProjectionKind,
+  makeOpenCodeProtocolLogger,
+  OPENCODE_PROVIDER,
+  OpenCodeProviderCapabilitiesV2,
+} from "./OpenCodeAdapterV2.ts";
+import { ProviderAdapterV2RuntimePolicy } from "../ProviderAdapter.ts";
+
+const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+
+function runtimePolicy(
+  runtimeMode: ProviderAdapterV2RuntimePolicy["runtimeMode"],
+  override: Partial<ProviderAdapterV2RuntimePolicy> = {},
+): ProviderAdapterV2RuntimePolicy {
+  return ProviderAdapterV2RuntimePolicy.make({
+    runtimeMode,
+    interactionMode: "default",
+    cwd: null,
+    ...override,
+  });
+}
+
+function permissionAction(rules: ReturnType<typeof openCodePermissionRules>, permission: string) {
+  return rules.findLast((rule) => rule.permission === "*" || rule.permission === permission)
+    ?.action;
+}
+
+function providerTurn(input: {
+  readonly id: string;
+  readonly ordinal: number;
+  readonly nativeId: string | null;
+}): OrchestrationV2ProviderTurn {
+  return {
+    id: ProviderTurnId.make(input.id),
+    providerThreadId: ProviderThreadId.make("provider-thread:opencode-test"),
+    nodeId: NodeId.make(`node:${input.id}`),
+    runAttemptId: null,
+    nativeTurnRef:
+      input.nativeId === null
+        ? null
+        : { driver: OPENCODE_PROVIDER, nativeId: input.nativeId, strength: "weak" },
+    ordinal: input.ordinal,
+    status: "completed",
+    startedAt: null,
+    completedAt: null,
+  };
+}
+
+describe("OpenCodeAdapterV2", () => {
+  it("registers the local MCP as pathway and skips external OpenCode servers", () => {
+    const session = {
+      environmentId: EnvironmentId.make("environment-opencode"),
+      threadId: ThreadId.make("thread-opencode-mcp"),
+      providerSessionId: "mcp-session-opencode",
+      providerInstanceId: ProviderInstanceId.make("opencode"),
+      endpoint: "http://127.0.0.1:43123/mcp",
+      authorizationHeader: "Bearer secret-opencode-token",
+    };
+
+    assert.deepEqual(openCodeMcpRegistration({ session, external: false }), {
+      name: "pathway",
+      config: {
+        type: "remote",
+        url: session.endpoint,
+        headers: { Authorization: session.authorizationHeader },
+        oauth: false,
+      },
+    });
+    assert.equal(openCodeMcpRegistration({ session, external: true }), undefined);
+    assert.equal(openCodeMcpRegistration({ session: undefined, external: false }), undefined);
+  });
+
+  it.effect("logs bounded structural protocol diagnostics without native payload values", () =>
+    Effect.gen(function* () {
+      const idAllocator = yield* IdAllocatorV2;
+      const records: Array<unknown> = [];
+      const nativeEventLogger: EventNdjsonLogger = {
+        filePath: "/tmp/provider-native.ndjson",
+        write: (event) => Effect.sync(() => void records.push(event)),
+        close: () => Effect.void,
+      };
+      const logProtocolEvent = makeOpenCodeProtocolLogger({
+        nativeEventLogger,
+        idAllocator,
+        providerInstanceId: ProviderInstanceId.make("opencode-test"),
+        providerSessionId: ProviderSessionId.make("provider-session-opencode-test"),
+        threadId: ThreadId.make("thread-opencode-test"),
+      });
+      const secret = "secret-opencode-prompt";
+
+      yield* logProtocolEvent({
+        direction: "outgoing",
+        messageKind: "request",
+        method: "session.prompt",
+        payload: { prompt: secret, nested: { token: secret } },
+      });
+
+      const serialized = encodeUnknownJson(records);
+      assert.notInclude(serialized, secret);
+      assert.include(serialized, '"protocol":"opencode-sdk.sse"');
+      assert.include(serialized, '"method":"session.prompt"');
+      assert.include(serialized, '"fieldCount":2');
+    }).pipe(Effect.provide(idAllocatorLayer)),
+  );
+
+  it("advertises the identity strengths exposed by the SDK boundary", () => {
+    assert.equal(OpenCodeProviderCapabilitiesV2.identity.nativeThreadIds, "strong");
+    assert.equal(OpenCodeProviderCapabilitiesV2.identity.nativeTurnIds, "weak");
+    assert.equal(OpenCodeProviderCapabilitiesV2.identity.nativeItemIds, "strong");
+    assert.equal(OpenCodeProviderCapabilitiesV2.identity.nativeRequestIds, "strong");
+    assert.isTrue(OpenCodeProviderCapabilitiesV2.threads.canForkFromTurn);
+    assert.isTrue(OpenCodeProviderCapabilitiesV2.turns.supportsActiveSteering);
+    assert.equal(OpenCodeProviderCapabilitiesV2.turns.terminalStatusQuality, "strong");
+    assert.isFalse(OpenCodeProviderCapabilitiesV2.subagents.canCloseSubagents);
+  });
+
+  it("maps native permission families to orchestration request kinds", () => {
+    assert.equal(openCodePermissionRequestKind("bash"), "command");
+    assert.equal(openCodePermissionRequestKind("read"), "file-read");
+    assert.equal(openCodePermissionRequestKind("grep"), "file-read");
+    assert.equal(openCodePermissionRequestKind("external_directory"), "file-read");
+    assert.equal(openCodePermissionRequestKind("external_directory", "edit"), "file-change");
+    assert.equal(openCodePermissionRequestKind("edit"), "file-change");
+    assert.equal(openCodePermissionRequestKind("apply_patch"), "file-change");
+    assert.equal(openCodePermissionRequestKind("todowrite"), "command");
+    assert.equal(openCodePermissionRequestKind("custom", "todowrite"), "command");
+  });
+
+  it("maps OpenCode tools to semantic turn-item families", () => {
+    assert.equal(openCodeToolProjectionKind("bash"), "command_execution");
+    assert.equal(openCodeToolProjectionKind("edit"), "file_change");
+    assert.equal(openCodeToolProjectionKind("read"), "file_search");
+    assert.equal(openCodeToolProjectionKind("lsp"), "file_search");
+    assert.equal(openCodeToolProjectionKind("websearch"), "web_search");
+    assert.equal(openCodeToolProjectionKind("codesearch"), "web_search");
+    assert.equal(openCodeToolProjectionKind("todowrite"), "dynamic_tool");
+    assert.equal(openCodeToolProjectionKind("custom_tool"), "dynamic_tool");
+  });
+
+  it("maps runtime modes to safe OpenCode permission rules", () => {
+    const approvalRequired = openCodePermissionRules(runtimePolicy("approval-required"));
+    assert.equal(permissionAction(approvalRequired, "read"), "allow");
+    assert.equal(permissionAction(approvalRequired, "edit"), "ask");
+    assert.equal(permissionAction(approvalRequired, "bash"), "ask");
+    assert.equal(permissionAction(approvalRequired, "doom_loop"), "ask");
+    assert.equal(permissionAction(approvalRequired, "unknown_plugin_tool"), "ask");
+    assert.equal(permissionAction(approvalRequired, "question"), "allow");
+
+    const autoAcceptEdits = openCodePermissionRules(runtimePolicy("auto-accept-edits"));
+    assert.equal(permissionAction(autoAcceptEdits, "edit"), "allow");
+    assert.equal(permissionAction(autoAcceptEdits, "bash"), "ask");
+
+    const fullAccess = openCodePermissionRules(runtimePolicy("full-access"));
+    assert.equal(permissionAction(fullAccess, "bash"), "allow");
+    assert.equal(permissionAction(fullAccess, "edit"), "allow");
+
+    const granularApproval = openCodePermissionRules(
+      runtimePolicy("full-access", {
+        approvalPolicy: { granular: { request_permissions: true } },
+      }),
+    );
+    assert.equal(permissionAction(granularApproval, "bash"), "ask");
+    assert.equal(permissionAction(granularApproval, "read"), "allow");
+
+    const approvalRequiredWorkspaceWrite = openCodePermissionRules(
+      runtimePolicy("approval-required", {
+        sandboxPolicy: {
+          type: "workspaceWrite",
+          writableRoots: ["/tmp/opencode-workspace"],
+          networkAccess: false,
+        },
+      }),
+    );
+    assert.equal(permissionAction(approvalRequiredWorkspaceWrite, "edit"), "ask");
+  });
+
+  it("enforces non-interactive sandbox policy through OpenCode permissions", () => {
+    const readOnly = openCodePermissionRules(
+      runtimePolicy("full-access", {
+        approvalPolicy: "never",
+        sandboxPolicy: {
+          type: "readOnly",
+          access: { type: "fullAccess" },
+          networkAccess: false,
+        },
+      }),
+    );
+    assert.equal(permissionAction(readOnly, "read"), "allow");
+    assert.equal(permissionAction(readOnly, "edit"), "deny");
+    assert.equal(permissionAction(readOnly, "bash"), "deny");
+    assert.equal(permissionAction(readOnly, "webfetch"), "deny");
+    assert.equal(permissionAction(readOnly, "doom_loop"), "deny");
+    assert.equal(permissionAction(readOnly, "unknown_plugin_tool"), "deny");
+    assert.equal(permissionAction(readOnly, "external_directory"), "allow");
+
+    const workspaceWrite = openCodePermissionRules(
+      runtimePolicy("auto-accept-edits", {
+        approvalPolicy: "never",
+        sandboxPolicy: {
+          type: "workspaceWrite",
+          writableRoots: ["/tmp/opencode-workspace"],
+          networkAccess: true,
+        },
+      }),
+    );
+    assert.equal(permissionAction(workspaceWrite, "edit"), "allow");
+    assert.equal(permissionAction(workspaceWrite, "bash"), "deny");
+    assert.equal(permissionAction(workspaceWrite, "webfetch"), "allow");
+    assert.deepInclude(workspaceWrite, {
+      permission: "external_directory",
+      pattern: "/tmp/opencode-workspace/*",
+      action: "allow",
+    });
+  });
+
+  it("grants the retained conversation folder without granting all external directories", () => {
+    const rules = openCodePermissionRules(
+      runtimePolicy("auto-accept-edits", {
+        additionalDirectories: ["/userdata/conversations/one"],
+      }),
+    );
+    assert.deepInclude(rules, {
+      permission: "external_directory",
+      pattern: "/userdata/conversations/one/*",
+      action: "allow",
+    });
+    assert.notDeepInclude(rules, {
+      permission: "external_directory",
+      pattern: "*",
+      action: "allow",
+    });
+  });
+
+  it("refreshes persisted native permissions when a conversation gains a project workspace", () => {
+    const before = runtimePolicy("auto-accept-edits", { cwd: "/userdata/conversations/one" });
+    const after = {
+      ...before,
+      cwd: "/workspace/project",
+      additionalDirectories: ["/userdata/conversations/one"],
+    };
+    const permission = openCodeConversationResumePermissions(
+      after,
+      openCodePermissionRules(before),
+    );
+    assert.isDefined(permission);
+    assert.deepInclude(permission, {
+      permission: "external_directory",
+      pattern: "/userdata/conversations/one/*",
+      action: "allow",
+    });
+    assert.isUndefined(openCodeConversationResumePermissions(after, permission!));
+    assert.isUndefined(
+      openCodeConversationResumePermissions(before, openCodePermissionRules(before)),
+    );
+  });
+
+  it("preserves OpenCode's recursion guard on task-created child sessions", () => {
+    const childRules = openCodeChildPermissionRules(runtimePolicy("full-access"), [
+      { permission: "task", pattern: "*", action: "deny" },
+    ]);
+
+    assert.equal(permissionAction(childRules, "read"), "allow");
+    assert.equal(permissionAction(childRules, "bash"), "allow");
+    assert.equal(permissionAction(childRules, "task"), "deny");
+
+    const approvalRequiredPolicy = runtimePolicy("approval-required");
+    const parentRules = openCodePermissionRules(approvalRequiredPolicy);
+    const childApprovalRules = openCodeChildPermissionRules(approvalRequiredPolicy, [
+      ...parentRules.filter((rule) => rule.action === "deny"),
+      { permission: "task", pattern: "*", action: "deny" },
+    ]);
+    assert.equal(permissionAction(childApprovalRules, "bash"), "ask");
+    assert.equal(permissionAction(childApprovalRules, "task"), "deny");
+  });
+
+  it("uses the next native user message as the exclusive fork and revert boundary", () => {
+    const first = providerTurn({ id: "turn:first", ordinal: 1, nativeId: "msg-user-1" });
+    const synthetic = providerTurn({ id: "turn:synthetic", ordinal: 2, nativeId: null });
+    const third = providerTurn({ id: "turn:third", ordinal: 3, nativeId: "msg-user-3" });
+
+    assert.equal(
+      openCodeBoundaryAfterProviderTurn([third, first, synthetic], first.id),
+      "msg-user-3",
+    );
+    assert.isUndefined(openCodeBoundaryAfterProviderTurn([first, synthetic, third], third.id));
+  });
+
+  // OpenCode reports the task's model on the tool part but never its options,
+  // so the parent's selections only carry over on the parent's own model. Both
+  // the subagent record and its child thread read this one selection.
+  it("keeps the parent's option selections only for a same-model task", () => {
+    const parentSelection = {
+      instanceId: ProviderInstanceId.make("opencode"),
+      model: "openai/gpt-5.4-mini",
+      options: [{ id: "agent", value: "build" }],
+    } satisfies ModelSelection;
+
+    assert.deepEqual(
+      subagentChildModelSelection({ parentSelection, reportedModel: "openai/gpt-5.4-mini" }),
+      parentSelection,
+    );
+    assert.deepEqual(
+      subagentChildModelSelection({
+        parentSelection,
+        reportedModel: "anthropic/claude-sonnet-4-5",
+      }),
+      { instanceId: parentSelection.instanceId, model: "anthropic/claude-sonnet-4-5" },
+    );
+    // An unreported model means the task stayed on the parent's.
+    assert.deepEqual(
+      subagentChildModelSelection({ parentSelection, reportedModel: null }),
+      parentSelection,
+    );
+  });
+});
+
+describe("openCodeAllowsComputerPermission", () => {
+  const admitted = runtimePolicy("approval-required", { enableComputerControl: true });
+  const asked = (permission: string) => ({ permission, metadata: {} });
+  const servers = ["pathway", "github"];
+
+  it("skips OpenCode's prompt for Pathway Computer tools on an admitted turn", () => {
+    assert.isTrue(
+      openCodeAllowsComputerPermission(admitted, asked("pathway_computer_click"), servers),
+    );
+    assert.isTrue(
+      openCodeAllowsComputerPermission(
+        runtimePolicy("auto-accept-edits", { enableComputerControl: true }),
+        asked("pathway_computer_screenshot"),
+        servers,
+      ),
+    );
+  });
+
+  it("keeps asking for other tools, other modes, and turns without Computer", () => {
+    assert.isFalse(
+      openCodeAllowsComputerPermission(admitted, asked("pathway_thread_send"), servers),
+    );
+    assert.isFalse(openCodeAllowsComputerPermission(admitted, asked("computer_click"), servers));
+    for (const permission of ["bash", "edit", "other_computer_click"]) {
+      assert.isFalse(
+        openCodeAllowsComputerPermission(
+          admitted,
+          { permission, metadata: { tool_name: "mcp__pathway__computer_click" } },
+          servers,
+        ),
+        permission,
+      );
+    }
+    assert.isFalse(
+      openCodeAllowsComputerPermission(
+        runtimePolicy("approval-required"),
+        asked("pathway_computer_click"),
+        servers,
+      ),
+    );
+    assert.isFalse(
+      openCodeAllowsComputerPermission(
+        runtimePolicy("approval-required", {
+          enableComputerControl: true,
+          interactionMode: "plan",
+        }),
+        asked("pathway_computer_click"),
+        servers,
+      ),
+    );
+  });
+
+  it("keeps asking when another MCP server could flatten to the same tool name", () => {
+    // OpenCode keys MCP tools as `<server>_<tool>`, so a foreign `pathway_computer`
+    // server's `set_window_frame` arrives as `pathway_computer_set_window_frame`.
+    const permission = asked("pathway_computer_set_window_frame");
+    assert.isFalse(
+      openCodeAllowsComputerPermission(admitted, permission, ["pathway", "pathway_computer"]),
+    );
+    assert.isFalse(
+      openCodeAllowsComputerPermission(admitted, permission, ["pathway", "pathway.computer"]),
+    );
+    assert.isFalse(
+      openCodeAllowsComputerPermission(admitted, permission, ["pathway", "pathway_computer_set"]),
+    );
+    // A case variant is a different OpenCode server, never Pathway's own.
+    assert.isFalse(
+      openCodeAllowsComputerPermission(admitted, asked("Pathway_computer_click"), ["Pathway"]),
+    );
+    // Without Pathway's own registration, no flattened name is Pathway's.
+    assert.isFalse(openCodeAllowsComputerPermission(admitted, asked("pathway_computer_click"), []));
+    assert.isTrue(
+      openCodeAllowsComputerPermission(admitted, permission, ["pathway", "pathway_browser"]),
+    );
+  });
+});

@@ -5,25 +5,24 @@
 // Layer: Component rendering tests
 // Depends on: ComputerPreviewPopover and React server rendering.
 //
-// Rendered to static markup like ComputerPanel.test.tsx: every side effect in
-// the component lives in `useEffect`, so a server render exercises exactly the
-// render-time phase and visibility decisions. The stores are stubbed rather
-// than seeded for the same reason: zustand serves its initial state to
-// `useSyncExternalStore`'s server snapshot.
+// Rendered to static markup: every side effect in the component lives in
+// `useEffect`, so a server render exercises exactly the render-time phase and
+// visibility decisions. The stores are stubbed rather than seeded for the same
+// reason: zustand serves its initial state to `useSyncExternalStore`'s server
+// snapshot.
 
-import type { ThreadComputerState, ThreadId } from "@synara/contracts";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { scopedThreadKey } from "@spiritdevs/client-runtime/environment";
+import { EnvironmentId, ThreadId, type ThreadComputerState } from "@spiritdevs/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { ComputerPreviewPopover } from "./ComputerPreviewPopover";
+import { threadComputerState } from "../computer/computerTestFixtures";
+import type { ComputerImageStreamStatus } from "../computer/useComputerImageStream";
+import { ComputerPreviewPopover, ComputerPreviewRail } from "./ComputerPreviewPopover";
 import type {
   ComputerPreviewCardSize,
   ComputerPreviewSession,
 } from "./ComputerPreviewPopover.logic";
-import type { ComputerImageStreamStatus } from "../computer/useComputerImageStream";
-
-vi.mock("~/components/ui/toast", () => ({ toastManager: { add: vi.fn() } }));
 
 const current: {
   session: ComputerPreviewSession | undefined;
@@ -31,19 +30,32 @@ const current: {
   autoOpenComputerPane: boolean;
   tapActive: boolean;
   tapFrameSize: { width: number; height: number } | null;
+  tapEnabled: boolean | undefined;
   stillsStreaming: boolean;
   streamStatus: ComputerImageStreamStatus | undefined;
   floating: { x: number; y: number } | undefined;
+  primaryEnvironmentId: string | null;
+  supported: boolean;
 } = vi.hoisted(() => ({
   session: undefined,
   state: undefined,
   autoOpenComputerPane: true,
   tapActive: true,
   tapFrameSize: { width: 960, height: 600 },
+  tapEnabled: undefined,
   stillsStreaming: false,
   streamStatus: undefined,
   floating: undefined,
+  primaryEnvironmentId: "environment-local",
+  supported: true,
 }));
+const seedThreadState = vi.hoisted(() => vi.fn());
+
+const keyOf = (threadId: string) =>
+  scopedThreadKey({
+    environmentId: EnvironmentId.make("environment-local"),
+    threadId: ThreadId.make(threadId),
+  });
 
 vi.mock("../../computerPreviewStore", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../computerPreviewStore")>();
@@ -51,12 +63,16 @@ vi.mock("../../computerPreviewStore", async (importOriginal) => {
     ...actual,
     useComputerPreviewStore: (selector: (store: unknown) => unknown) =>
       selector({
-        sessionsByThreadId: current.session ? { [current.session.threadId]: current.session } : {},
-        agentActiveByThreadId: {},
-        floatingByThreadId: current.floating
-          ? { [current.session?.threadId ?? THREAD_ID]: current.floating }
+        sessionsByThreadKey: current.session
+          ? { [keyOf(current.session.threadId)]: current.session }
+          : {},
+        agentActiveByThreadKey: {},
+        previewLayoutByThreadKey: {},
+        floatingByThreadKey: current.floating
+          ? { [keyOf(current.session?.threadId ?? "thread-1")]: current.floating }
           : {},
         markPreviewLive: vi.fn(),
+        notePreviewLayout: vi.fn(),
         hidePreviewForTask: vi.fn(),
         setPreviewFloating: vi.fn(),
         movePreviewFloating: vi.fn(),
@@ -70,17 +86,19 @@ vi.mock("../../computerStateStore", async (importOriginal) => {
     ...actual,
     useComputerStateStore: (selector: (store: unknown) => unknown) =>
       selector({
-        threadStatesByThreadId: current.state ? { [current.state.threadId]: current.state } : {},
-        lastActionByThreadId: {},
+        threadStates: current.state ? { [keyOf(current.state.threadId)]: current.state } : {},
+        lastActions: {},
+        inputStoppedByEnvironment: {},
+        statusByEnvironment: {},
       }),
   };
 });
 
 vi.mock("../computer/useComputerPreviewTap", () => ({
-  useComputerPreviewTap: () => ({
-    active: current.tapActive,
-    frameSize: current.tapFrameSize,
-  }),
+  useComputerPreviewTap: (input: { enabled: boolean }) => {
+    current.tapEnabled = input.enabled;
+    return { active: current.tapActive, frameSize: current.tapFrameSize };
+  },
 }));
 
 vi.mock("../computer/useComputerImageStream", () => ({
@@ -91,44 +109,36 @@ vi.mock("../computer/useComputerImageStream", () => ({
   }),
 }));
 
-vi.mock("../../appSettings", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../appSettings")>();
-  return {
-    ...actual,
-    useAppSettings: () => ({
-      settings: { autoOpenComputerPane: current.autoOpenComputerPane },
-    }),
-  };
-});
+vi.mock("../../hooks/useThreadComputerStateSeed", () => ({
+  useThreadComputerStateSeed: seedThreadState,
+}));
 
-const THREAD_ID = "thread-1" as ThreadId;
+vi.mock("../../hooks/useComputerSupport", () => ({
+  useComputerSupport: () => current.supported,
+}));
+
+vi.mock("../../hooks/useSettings", () => ({
+  useClientSettings: (selector: (settings: unknown) => unknown) =>
+    selector({
+      autoOpenComputerPane: current.autoOpenComputerPane,
+      computerPreviewSize: "compact",
+    }),
+}));
+
+vi.mock("../../state/environments", () => ({
+  usePrimaryEnvironmentId: () => current.primaryEnvironmentId,
+}));
+
+const ENVIRONMENT_ID = EnvironmentId.make("environment-local");
+const THREAD_ID = ThreadId.make("thread-1");
+const THREAD_REF = { environmentId: ENVIRONMENT_ID, threadId: THREAD_ID };
 
 function threadState(overrides: Partial<ThreadComputerState> = {}): ThreadComputerState {
-  return {
+  return threadComputerState({
     threadId: THREAD_ID,
-    version: 1,
-    computerId: "desktop",
-    capabilities: {
-      windows: true,
-      windowBounds: true,
-      stacking: true,
-      capture: true,
-      input: true,
-      clipboard: true,
-      focus: true,
-      raise: true,
-      ghostCursor: true,
-      visibleDesktop: true,
-    },
-    windows: [],
     screenSize: { width: 5120, height: 2520 },
-    agentActive: false,
-    controlledByOtherThread: false,
-    availability: { kind: "available" },
-    health: { status: "connected", consecutiveFailures: 0, reconnects: 0, captureAvailable: true },
-    lastError: null,
     ...overrides,
-  };
+  });
 }
 
 function session(phase: ComputerPreviewSession["phase"]): ComputerPreviewSession {
@@ -158,16 +168,20 @@ function render(input?: {
   current.stillsStreaming = input?.stills ?? false;
   current.streamStatus = input?.streamStatus;
   current.floating = input?.floating;
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return renderToStaticMarkup(
-    <QueryClientProvider client={queryClient}>
-      <ComputerPreviewPopover
-        threadId={THREAD_ID}
-        size={input?.size}
-        maxWidthPx={input?.maxWidthPx}
-      />
-    </QueryClientProvider>,
+    <ComputerPreviewPopover
+      threadRef={THREAD_REF}
+      size={input?.size}
+      maxWidthPx={input?.maxWidthPx}
+    />,
   );
+}
+
+/** Whether the card is shown: a closed card stays mounted but hidden from assistive tech. */
+function isOpen(markup: string): boolean {
+  const card = /<div[^>]*role="region"[^>]*>/.exec(markup)?.[0];
+  if (card === undefined) throw new Error("no preview card rendered");
+  return !card.includes('aria-hidden="true"');
 }
 
 afterEach(() => {
@@ -179,6 +193,10 @@ afterEach(() => {
   current.stillsStreaming = false;
   current.streamStatus = undefined;
   current.floating = undefined;
+  current.tapEnabled = undefined;
+  current.primaryEnvironmentId = "environment-local";
+  current.supported = true;
+  seedThreadState.mockClear();
 });
 
 describe("ComputerPreviewPopover", () => {
@@ -192,15 +210,13 @@ describe("ComputerPreviewPopover", () => {
 
   it("renders an armed session closed with its canvas mounted for decode", () => {
     const markup = render({ session: session("armed"), frame: false });
-    expect(markup).toContain('role="region"');
-    expect(markup).toContain("opacity-0");
+    expect(isOpen(markup)).toBe(false);
     expect(markup).toContain("<canvas");
   });
 
   it("renders a live session open with the desktop chrome", () => {
     const markup = render({ session: session("live"), state: threadState() });
-    expect(markup).toContain("scale-100 opacity-100");
-    expect(markup).toContain('aria-label="Computer preview"');
+    expect(isOpen(markup)).toBe(true);
     expect(markup).toContain("960 / 600");
     // Compact is the default footprint: small and glanceable.
     expect(markup).toContain("width:288px");
@@ -220,8 +236,7 @@ describe("ComputerPreviewPopover", () => {
 
   it("renders a live session closed until the first frame arrives", () => {
     const markup = render({ session: session("live"), state: threadState(), frame: false });
-    expect(markup).toContain("opacity-0");
-    expect(markup).not.toContain(" opacity-100");
+    expect(isOpen(markup)).toBe(false);
     expect(markup).toContain("<canvas");
   });
 
@@ -232,7 +247,7 @@ describe("ComputerPreviewPopover", () => {
       frame: false,
       stills: true,
     });
-    expect(markup).toContain("opacity-100");
+    expect(isOpen(markup)).toBe(true);
   });
 
   it.each([
@@ -250,7 +265,7 @@ describe("ComputerPreviewPopover", () => {
         frame: false,
         streamStatus,
       });
-      expect(markup).toContain("scale-100 opacity-100");
+      expect(isOpen(markup)).toBe(true);
       expect(markup).toContain(message);
       expect(markup).toContain('role="status"');
       expect(markup).toContain("<canvas");
@@ -264,7 +279,7 @@ describe("ComputerPreviewPopover", () => {
       frame: false,
       streamStatus: { kind: "error", message: "The preview connection failed." },
     });
-    expect(markup).not.toContain("scale-100 opacity-100");
+    expect(isOpen(markup)).toBe(false);
   });
 
   it("shows the waiting state, never a picture, when no window frame exists yet", () => {
@@ -281,7 +296,7 @@ describe("ComputerPreviewPopover", () => {
     // stays open on the held frame's own aspect with no empty-state label
     // pasted over a live picture.
     const markup = render({ session: session("live"), state: threadState(), tapQuiet: true });
-    expect(markup).toContain("scale-100 opacity-100");
+    expect(isOpen(markup)).toBe(true);
     expect(markup).toContain("960 / 600");
     expect(markup).not.toContain("Waiting for the window");
   });
@@ -294,8 +309,7 @@ describe("ComputerPreviewPopover", () => {
       state: threadState({ agentActive: true }),
     });
     expect(markup).toContain("Live");
-    expect(markup).not.toContain("animate-ping");
-    expect(markup).not.toContain("violet");
+    expect(markup).not.toMatch(/animate-(ping|pulse|spin)/);
   });
 
   it("offers only close: the pane is disabled and stopping lives in the composer", () => {
@@ -320,15 +334,13 @@ describe("ComputerPreviewPopover", () => {
   it("stays closed for hidden and ended sessions", () => {
     for (const phase of ["hidden-for-task", "ended"] as const) {
       const markup = render({ session: session(phase), state: threadState() });
-      expect(markup).toContain("opacity-0");
-      expect(markup).not.toContain(" opacity-100");
+      expect(isOpen(markup)).toBe(false);
     }
   });
 
   it("offers pop-out while docked and dock while floating", () => {
     const docked = render({ session: session("live"), state: threadState() });
     expect(docked).toContain("Float the computer preview as a draggable window");
-    expect(docked).not.toContain("fixed z-50");
 
     const floating = render({
       session: session("live"),
@@ -337,8 +349,61 @@ describe("ComputerPreviewPopover", () => {
     });
     expect(floating).toContain("Dock the computer preview back into the chat rail");
     expect(floating).not.toContain("Float the computer preview");
-    expect(floating).toContain("fixed z-50");
     expect(floating).toContain("left:120px");
     expect(floating).toContain("top:80px");
+  });
+});
+
+describe("ComputerPreviewRail", () => {
+  it("renders nothing while the automatic preview is disabled", () => {
+    current.session = session("live");
+    current.autoOpenComputerPane = false;
+    expect(renderToStaticMarkup(<ComputerPreviewRail threadRef={THREAD_REF} />)).toBe("");
+  });
+
+  it("shows a live session's card", () => {
+    current.session = session("live");
+    current.state = threadState();
+    const markup = renderToStaticMarkup(<ComputerPreviewRail threadRef={THREAD_REF} />);
+    expect(isOpen(markup)).toBe(true);
+  });
+
+  // After a reload or reconnect there is no preview session yet; the seed is
+  // what brings one back and what gives a send the thread's generation.
+  it("seeds the open thread's state before any preview exists", () => {
+    renderToStaticMarkup(<ComputerPreviewRail threadRef={THREAD_REF} />);
+    expect(seedThreadState).toHaveBeenCalledWith(THREAD_REF);
+  });
+
+  it("seeds the open thread's state with the automatic preview disabled", () => {
+    current.session = session("live");
+    current.autoOpenComputerPane = false;
+    renderToStaticMarkup(<ComputerPreviewRail threadRef={THREAD_REF} />);
+    expect(seedThreadState).toHaveBeenCalledWith(THREAD_REF);
+  });
+
+  it("asks nothing of an environment that cannot drive a desktop", () => {
+    current.supported = false;
+    renderToStaticMarkup(<ComputerPreviewRail threadRef={THREAD_REF} />);
+    expect(seedThreadState).not.toHaveBeenCalledWith(THREAD_REF);
+  });
+});
+
+describe("ComputerPreviewPopover frame sources", () => {
+  it("offers the desktop tap for the primary (local) environment", () => {
+    render({ session: session("live"), state: threadState() });
+    expect(current.tapEnabled).toBe(true);
+  });
+
+  it("never draws the local tap for a remote environment's thread", () => {
+    current.primaryEnvironmentId = "environment-other";
+    const markup = render({
+      session: session("live"),
+      state: threadState(),
+      frame: false,
+      stills: true,
+    });
+    expect(current.tapEnabled).toBe(false);
+    expect(isOpen(markup)).toBe(true);
   });
 });

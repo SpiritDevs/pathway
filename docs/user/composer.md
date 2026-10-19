@@ -1,0 +1,109 @@
+# Writing messages
+
+The web and desktop composer starts as a single-line input. Clicking it, opening a menu,
+or scrolling the conversation keeps its size unchanged. Text grows the input as it wraps,
+up to six lines, then scrolls inside it. Short windows use a smaller limit so the conversation
+stays visible. Deleting text or sending a message shrinks the input to fit the remaining draft.
+
+Use the paperclip beside Send to add attachments. Their previews appear above the input in a
+separate scrollable area, so a long draft or several attachments cannot fill the conversation.
+You can still preview and remove attachments, inspect upload status, and retry failed uploads.
+
+Before sending a new thread, changing the project from either the header or the project name
+above the composer moves your current message and attachments to that project. You can switch
+back without losing your draft. Branch and checkout selections reset for the selected project.
+
+Choose **New Thread** to start a separate message. Your unfinished message stays saved under
+its original project in the sidebar, where you can return to it later. Changing the project in
+the new composer only moves that new draft. After switching profiles, New Thread selects the
+first project in your project ordering for the selected profile if the previous thread's project
+is outside that profile.
+
+Checkout and branch controls sit above the input. Model, reasoning, and permission controls stay below the input. Narrow windows put additional
+controls in the options menu. These menus do not expand the composer. The same layout applies
+to new threads and existing conversations, including phone-sized web windows.
+
+Conversations without a project omit the Build/Plan toggle from the web and desktop
+composer, including its compact options menu.
+
+Notices above the checkout controls form a stack, with each card behind the first appearing
+narrower. Hover over the notices or focus their controls to lift the stack and reveal more notices.
+
+Approval requests, questions from an agent, and plan follow-ups keep their own controls. Native
+mobile apps retain their existing composer layout.
+
+When you send the first message with **New worktree** selected, a workspace preparation card
+appears beside your message. It shows preparation, checkout progress, and the setup action as
+they happen. Once the workspace is ready for the agent, the card disappears and the Working
+timer starts. Setup failures stay visible so you can inspect them.
+
+Type `$` to pick a skill. Claude skill suggestions come from the selected project or
+worktree and provider account. They refresh when you open the menu. With Claude, Pathway translates the selected `$name` into
+a direct skill invocation, including when it appears mid-message. Skills reserved
+for direct user invocation remain available. Skills switched off in Claude's
+settings or reserved for the agent are omitted from the composer menus.
+
+Claude runs one skill directly per message. If you mention several, the last
+one runs directly and earlier mentions become requests for Claude's Skill tool.
+Earlier user-only skills cannot run through that tool, so send each in its own message.
+Claude skill names come from their directory names, and a user skill takes precedence
+over a project skill with the same name.
+
+Provider slash commands appear only when `/` starts the whole message, where the
+provider can expand them. Pathway's `/model`, `/plan`, and `/default` commands
+remain available at the beginning of any line.
+
+## Action palette
+
+The action palette sits at the right of the conversation in web and desktop. When the
+conversation becomes too narrow, including when you resize a neighboring pane, the palette
+hides automatically. Toggle thread details to reopen it floating above the conversation
+without squeezing messages or the composer. Widening the conversation restores the inline
+layout. You can toggle the palette independently in each layout.
+
+## Pending questions
+
+The action palette lists pending questions for the current thread. Select a request to answer
+it in the composer, even when the original question is earlier in the conversation. Requests
+with several questions open together so you can answer each one before submitting.
+
+Select the X beside a request to ignore it. You have five seconds to select Undo before the
+request is sent. Leaving the conversation during that window keeps the question open. Native
+question forms also provide Ignore and Undo; leaving the form cancels an unsent dismissal.
+
+Ignoring removes the request from all connected clients without sending a follow-up message.
+An agent waiting for an answer receives its provider's cancellation response. If delivery fails,
+the question reappears so you can retry. The thread's Input marker clears when no pending input
+remains. Ignore is available only when the connected environment supports question dismissal.
+
+You can show, hide, and reorder Pending questions in the action palette settings.
+
+# Returning to the latest message
+
+When you scroll up in a thread, a button above the composer takes you back to the end.
+It shows a down chevron while the thread is idle, or a working orb beside “working...”
+while the agent is busy. The orb respects your reduced-motion preference.
+
+On iOS, the button shows a still orb with the current activity, including “Working…”.
+Queued work and requests waiting for your response use the down chevron. Tap the button
+to return to the latest message and resume following new replies. The changed-files
+bubble remains above the composer and opens the diff sheet.
+
+## Claude model updates
+
+Claude Opus 5.5 is available in the model picker when your environment runs Claude Code
+2.1.280 or newer. It defaults to medium reasoning effort and a 1M context window,
+with an optional Fast Mode toggle. Thinking is always enabled for this model.
+
+With provider update checks enabled, Pathway refreshes its published model catalog
+as part of provider checks, at most once per hour. Catalog updates can add Claude models,
+change their options, and move models into or out of the legacy list without another
+Pathway update. A new model can still require a newer Claude Code version or account access.
+If the catalog cannot be downloaded, Pathway keeps its last good catalog or its bundled copy.
+Connected web, desktop, and mobile clients use the catalog from their selected environment.
+
+To fetch the latest catalog immediately, open **Settings → Providers**, select the
+environment that runs your threads, and choose **Update model catalog**. This bypasses
+the hourly cache and works with automatic provider update checks disabled. Pathway
+confirms when the catalog is downloaded; if it fails, your existing models stay available.
+This updates model definitions, not the Pathway app or the provider CLI.

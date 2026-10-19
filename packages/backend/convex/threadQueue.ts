@@ -1,0 +1,1405 @@
+// @effect-diagnostics globalDate:off -- Convex mutations use the transaction clock.
+/** Cloud-owned thread intent. Acceptance is a permanent fence, never an expiring execution lease. */
+import { v } from "convex/values";
+import { paginationOptsValidator } from "convex/server";
+import type {
+  ChatAttachment,
+  ModelSelection,
+  RunId,
+  OrchestrationV2ThreadLaunchWorkspaceStrategy,
+} from "@spiritdevs/contracts";
+import type {
+  ThreadQueueAcceptance,
+  ThreadQueueDetail,
+  ThreadQueueHead,
+  ThreadQueueMessage,
+  ThreadQueueSubmission,
+  ThreadQueueSubmissionStatus,
+  ThreadQueueThread,
+} from "@spiritdevs/contracts/threadQueue";
+import {
+  canonicalQueueJson,
+  queueSubmissionFingerprint,
+  decodeQueueSubmission,
+  submissionMessage,
+  THREAD_QUEUE_MAX_MESSAGES,
+  validateAttachment,
+  validateModelSelection,
+} from "../src/threadQueue.ts";
+import type { Doc, Id } from "./_generated/dataModel.js";
+import {
+  mutation,
+  query,
+  internalMutation,
+  type MutationCtx,
+  type QueryCtx,
+} from "./_generated/server.js";
+import { backendError } from "./lib/errors.ts";
+import {
+  requireCompanyActor,
+  membershipAuthorization,
+  requirePermission,
+  requireRecordPermission,
+  type CompanyActor,
+  type MemberActor,
+} from "./lib/identity.ts";
+import { domainIdArg } from "./lib/validators.ts";
+import { internal } from "./_generated/api.js";
+import {
+  KEEP_QUEUE_LISTED,
+  QUEUE_DELIVERED_RETENTION_MS,
+  QUEUE_ORPHAN_GRACE_MS,
+  QUEUE_CLEANUP_BATCH_SIZE,
+  trackQueueAttachments,
+  pruneOrphanQueue,
+  pruneQueueAttachment,
+} from "./lib/threadQueueRetention.ts";
+
+const identityArgs = {
+  companyId: domainIdArg,
+  threadId: v.string(),
+  queueId: v.optional(v.string()),
+  environmentId: v.optional(v.string()),
+};
+type QueueIdentity = {
+  companyId: string;
+  threadId: string;
+  queueId?: string | undefined;
+  environmentId?: string | undefined;
+};
+const messageArgs = { ...identityArgs, commandId: v.string() };
+const fenceArgs = { ...messageArgs, revision: v.number() };
+const invalid = (message: string) => backendError("invalid-arguments", message);
+
+function member(actor: CompanyActor, dispatch = true): asserts actor is MemberActor {
+  if (actor.kind !== "member")
+    throw backendError(
+      "permission-denied",
+      "A signed-in member must submit or change queued work.",
+    );
+  if (dispatch) requirePermission(actor, "remoteAgents.dispatch");
+}
+function validate<T>(fn: () => T): T {
+  try {
+    return fn();
+  } catch (error) {
+    throw invalid(error instanceof Error ? error.message : "Invalid submission.");
+  }
+}
+async function threadById(
+  ctx: QueryCtx,
+  companyId: Id<"companies">,
+  threadId: string,
+  identity: { queueId?: string | undefined; environmentId?: string | undefined } = {},
+) {
+  if (identity.queueId) {
+    const id = ctx.db.normalizeId("threadQueueThreads", identity.queueId);
+    const thread = id ? await ctx.db.get(id) : null;
+    return thread?.companyId === companyId && thread.threadId === threadId ? thread : null;
+  }
+  const rows = await (
+    identity.environmentId
+      ? ctx.db
+          .query("threadQueueThreads")
+          .withIndex("by_company_environment_and_thread", (q) =>
+            q
+              .eq("companyId", companyId)
+              .eq("environmentId", identity.environmentId!)
+              .eq("threadId", threadId),
+          )
+      : ctx.db
+          .query("threadQueueThreads")
+          .withIndex("by_company_and_thread", (q) =>
+            q.eq("companyId", companyId).eq("threadId", threadId),
+          )
+  ).take(2);
+  if (rows.length > 1)
+    throw backendError(
+      "ambiguous-queue",
+      "Select this conversation's queue identity before continuing.",
+    );
+  return rows[0] ?? null;
+}
+function messageScope(thread: Doc<"threadQueueThreads">) {
+  return thread.queueVersion === 1 ? thread._id : undefined;
+}
+async function messageById(ctx: QueryCtx, thread: Doc<"threadQueueThreads">, commandId: string) {
+  return ctx.db
+    .query("threadQueueMessages")
+    .withIndex("by_queue_and_command", (q) =>
+      q
+        .eq("companyId", thread.companyId)
+        .eq("queueThreadId", messageScope(thread))
+        .eq("commandId", commandId),
+    )
+    .unique();
+}
+function threadMessageQuery(ctx: QueryCtx, thread: Doc<"threadQueueThreads">) {
+  return ctx.db
+    .query("threadQueueMessages")
+    .withIndex("by_queue_and_sequence", (q) =>
+      q
+        .eq("companyId", thread.companyId)
+        .eq("threadId", thread.threadId)
+        .eq("queueThreadId", messageScope(thread)),
+    );
+}
+function threadMessageStateQuery(
+  ctx: QueryCtx,
+  thread: Doc<"threadQueueThreads">,
+  state: Doc<"threadQueueMessages">["state"],
+) {
+  return ctx.db
+    .query("threadQueueMessages")
+    .withIndex("by_queue_and_state", (q) =>
+      q
+        .eq("companyId", thread.companyId)
+        .eq("threadId", thread.threadId)
+        .eq("queueThreadId", messageScope(thread))
+        .eq("state", state),
+    );
+}
+async function publishedThread(ctx: QueryCtx, thread: Doc<"threadQueueThreads">) {
+  return ctx.db
+    .query("agentThreads")
+    .withIndex("by_company_and_environment_and_thread", (q) =>
+      q
+        .eq("companyId", thread.companyId)
+        .eq("environmentId", thread.environmentId)
+        .eq("threadId", thread.threadId),
+    )
+    .unique();
+}
+async function canReadThread(ctx: QueryCtx, actor: MemberActor, thread: Doc<"threadQueueThreads">) {
+  if (thread.issuedByMembershipId === actor.membership._id) return true;
+  if (!actor.permissions.isOwner && !actor.permissions.company.has("environments.read"))
+    return false;
+  // Publishing is the existing conversation visibility boundary. Pending unpublished prompts
+  // remain private to their author even when another member controls the same environment.
+  return (await publishedThread(ctx, thread)) !== null;
+}
+async function authorizeThread(
+  ctx: QueryCtx,
+  actor: CompanyActor,
+  thread: Doc<"threadQueueThreads">,
+) {
+  if (actor.kind === "member") {
+    member(actor, false);
+    if (!(await canReadThread(ctx, actor, thread)))
+      throw backendError(
+        "permission-denied",
+        "This unpublished queued conversation belongs to another member.",
+      );
+  } else if (actor.registration.environmentId !== thread.environmentId) {
+    throw backendError("permission-denied", "This queue belongs to another environment.");
+  }
+}
+async function ownedThread(ctx: QueryCtx, args: QueueIdentity) {
+  const actor = await requireCompanyActor(ctx, args.companyId);
+  const thread = await threadById(ctx, actor.company._id, args.threadId, {
+    ...args,
+    environmentId:
+      actor.kind === "environment" ? actor.registration.environmentId : args.environmentId,
+  });
+  if (!thread) throw backendError("entity-not-found", "Queued thread not found.");
+  await authorizeThread(ctx, actor, thread);
+  return { actor, thread };
+}
+async function queuedMessage(ctx: QueryCtx, args: QueueIdentity & { commandId: string }) {
+  const result = await ownedThread(ctx, args);
+  const message = await messageById(ctx, result.thread, args.commandId);
+  if (!message || message.threadId !== args.threadId)
+    throw backendError("entity-not-found", "Queued message not found.");
+  return { ...result, message };
+}
+async function target(
+  ctx: QueryCtx,
+  actor: CompanyActor,
+  environmentId: string,
+  localProjectId: string | null,
+) {
+  const registration = await ctx.db
+    .query("environmentRegistrations")
+    .withIndex("by_company_and_environment", (q) =>
+      q.eq("companyId", actor.company._id).eq("environmentId", environmentId),
+    )
+    .unique();
+  if (!registration || registration.state !== "active")
+    throw backendError("environment-unavailable", "Select a registered environment.");
+  requireRecordPermission(actor, "remoteAgents.dispatch", registration.teamIds);
+  if (localProjectId === null) return null;
+  const bindings = await ctx.db
+    .query("environmentBindings")
+    .withIndex("by_company_and_environment", (q) =>
+      q.eq("companyId", actor.company._id).eq("environmentId", environmentId),
+    )
+    .collect();
+  const binding = bindings.find(
+    (row) => row.localProjectId === localProjectId && row.status === "active",
+  );
+  if (!binding)
+    throw backendError(
+      "binding-unavailable",
+      "Select an active project directory on this environment.",
+    );
+  const project = await ctx.db.get(binding.cloudProjectId);
+  if (!project || project.deletedAt !== null || project.archivedAt !== null)
+    throw backendError("binding-unavailable", "The bound project is no longer available.");
+  requireRecordPermission(actor, "remoteAgents.dispatch", project.teamIds);
+  return binding.cloudProjectId;
+}
+async function wireThread(
+  ctx: QueryCtx,
+  row: Doc<"threadQueueThreads">,
+): Promise<ThreadQueueThread> {
+  const project = row.cloudProjectId === null ? null : await ctx.db.get(row.cloudProjectId);
+  return {
+    queueId: row._id,
+    companyId: (await ctx.db.get(row.companyId))!.id,
+    originEnvironmentId: row.originEnvironmentId ?? row.environmentId,
+    threadId: row.threadId,
+    environmentId: row.environmentId,
+    localProjectId: row.localProjectId,
+    cloudProjectId: project?.id ?? null,
+    title: row.title,
+    launch: row.launch,
+    state:
+      row.state === "delivered" && (await threadMessageStateQuery(ctx, row, "canceled").first())
+        ? "canceled"
+        : row.state,
+    error: row.error,
+    revision: row.revision,
+    acceptedAt: row.acceptedAt,
+    queuedCount: row.queuedCount,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+function wireMessage(row: Doc<"threadQueueMessages">): ThreadQueueMessage {
+  return {
+    deliveryAttempt: row.deliveryAttempt ?? 0,
+    rejection: row.rejection ?? null,
+    commandId: row.commandId,
+    messageId: row.messageId,
+    sequence: row.sequence,
+    revision: row.revision,
+    state: row.state,
+    error: row.error,
+    submission: row.submission,
+    attachmentIds: row.attachmentIds,
+    acceptedAt: row.acceptedAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+async function firstOutstanding(ctx: QueryCtx, thread: Doc<"threadQueueThreads">) {
+  const states = ["queued", "accepted", "blocked"] as const;
+  const heads = await Promise.all(
+    states.map((state) => threadMessageStateQuery(ctx, thread, state).first()),
+  );
+  return heads.filter((row) => row !== null).sort((a, b) => a.sequence - b.sequence)[0] ?? null;
+}
+function workerHead(head: Doc<"threadQueueMessages"> | null) {
+  return head && head.state !== "blocked"
+    ? {
+        commandId: head.commandId,
+        revision: head.revision,
+        deliveryAttempt: head.deliveryAttempt ?? 0,
+        state: head.acceptedAt === null ? ("queued" as const) : ("accepted" as const),
+      }
+    : null;
+}
+async function refreshThread(ctx: MutationCtx, thread: Doc<"threadQueueThreads">) {
+  const head = await firstOutstanding(ctx, thread);
+  const hasCanceled =
+    !head && (await threadMessageStateQuery(ctx, thread, "canceled").first()) !== null;
+  const published = !head && !hasCanceled && (await publishedThread(ctx, thread)) !== null;
+  await ctx.db.patch(thread._id, {
+    listingExpiresAt: published ? Date.now() + QUEUE_DELIVERED_RETENTION_MS : KEEP_QUEUE_LISTED,
+    workerHead: workerHead(head),
+    state: head?.state ?? "delivered",
+    error: head?.error ?? null,
+    updatedAt: Date.now(),
+  });
+}
+
+export const generateUploadUrl = mutation({
+  args: { companyId: domainIdArg },
+  handler: async (ctx, args) => {
+    member(await requireCompanyActor(ctx, args.companyId));
+    return ctx.storage.generateUploadUrl();
+  },
+});
+export const registerAttachment = mutation({
+  args: { companyId: domainIdArg, storageId: v.id("_storage"), attachment: v.any() },
+  handler: async (ctx, args): Promise<string> => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    member(actor);
+    const attachment = validate(() => validateAttachment(args.attachment));
+    const existing = await ctx.db
+      .query("threadQueueAttachments")
+      .withIndex("by_storage", (q) => q.eq("storageId", args.storageId))
+      .unique();
+    if (existing) {
+      if (
+        existing.companyId !== actor.company._id ||
+        existing.issuedByMembershipId !== actor.membership._id ||
+        canonicalQueueJson(existing.attachment) !== canonicalQueueJson(attachment)
+      )
+        throw backendError(
+          "permission-denied",
+          "This upload is already owned by another submission.",
+        );
+      return existing._id;
+    }
+    const metadata = await ctx.db.system.get(args.storageId);
+    if (
+      !metadata ||
+      metadata.size !== attachment.sizeBytes ||
+      (metadata.contentType && metadata.contentType !== attachment.mimeType)
+    )
+      throw invalid("Uploaded bytes do not match the attachment metadata.");
+    return ctx.db.insert("threadQueueAttachments", {
+      companyId: actor.company._id,
+      issuedByMembershipId: actor.membership._id,
+      storageId: args.storageId,
+      attachment,
+      createdAt: Date.now(),
+    });
+  },
+});
+async function attachmentsForSubmission(
+  ctx: QueryCtx,
+  actor: MemberActor,
+  submission: ThreadQueueSubmission,
+  ids: string[],
+) {
+  const attachments = submissionMessage(submission).attachments;
+  if (ids.length !== attachments.length || new Set(ids).size !== ids.length)
+    throw invalid("Every attachment must be uploaded before submission.");
+  for (let index = 0; index < ids.length; index++) {
+    const storageRowId = ctx.db.normalizeId("threadQueueAttachments", ids[index]!);
+    const row = storageRowId ? await ctx.db.get(storageRowId) : null;
+    if (
+      !row ||
+      row.companyId !== actor.company._id ||
+      row.issuedByMembershipId !== actor.membership._id ||
+      canonicalQueueJson(row.attachment) !== canonicalQueueJson(attachments[index])
+    )
+      throw backendError(
+        "attachment-unavailable",
+        "An attachment is not durably uploaded for this member.",
+      );
+  }
+}
+
+export const enqueue = mutation({
+  args: {
+    ...identityArgs,
+    environmentId: v.string(),
+    submission: v.any(),
+    attachmentIds: v.array(v.string()),
+  },
+  handler: async (ctx, args): Promise<ThreadQueueDetail> => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    member(actor);
+    requirePermission(actor, "remoteAgents.control");
+    let submission = validate(() => decodeQueueSubmission(args.submission, args.threadId));
+    if (submission.kind === "launch") {
+      const companyId = submission.input.conversationCompanyId;
+      if (companyId != null && companyId !== args.companyId)
+        throw invalid("Conversation company must match its queue.");
+      // Clients display conversations in a synthetic project, while the environment creates
+      // them with a null project. Never resolve that UI identity as a directory binding.
+      if (
+        companyId === args.companyId &&
+        submission.input.projectId === `conversations:${companyId}`
+      )
+        submission = { ...submission, input: { ...submission.input, projectId: null } };
+    }
+    const input = submission.input;
+    const content = submissionMessage(submission);
+    const fingerprint = await queueSubmissionFingerprint({
+      submission,
+      attachmentIds: args.attachmentIds,
+    });
+    let thread = await threadById(ctx, actor.company._id, args.threadId, args);
+    if (!thread && args.queueId) throw backendError("entity-not-found", "Queued thread not found.");
+    if (!thread && !args.queueId) {
+      // A launch response can be lost before another device moves it. Find that exact original
+      // intent by its origin and command, never by an unscoped thread id on another host.
+      const origin = await ctx.db
+        .query("threadQueueThreads")
+        .withIndex("by_company_origin_and_thread", (q) =>
+          q
+            .eq("companyId", actor.company._id)
+            .eq("originEnvironmentId", args.environmentId)
+            .eq("threadId", args.threadId),
+        )
+        .first();
+      if (origin && (await messageById(ctx, origin, input.commandId))) thread = origin;
+    }
+    const existingMessage = thread ? await messageById(ctx, thread, input.commandId) : null;
+    if (existingMessage) {
+      if (
+        !thread ||
+        existingMessage.threadId !== args.threadId ||
+        existingMessage.issuedByMembershipId !== actor.membership._id
+      )
+        throw backendError("submission-conflict", "Command identity is already in use.");
+      await authorizeThread(ctx, actor, thread);
+      // Identity survives edits and destination changes: retries cannot resurrect old content.
+      if (
+        existingMessage.messageId !== content.messageId ||
+        existingMessage.submissionFingerprint !== fingerprint
+      )
+        throw backendError("submission-conflict", "Command identity names a different message.");
+      return { thread: await wireThread(ctx, thread), messages: [wireMessage(existingMessage)] };
+    }
+    const duplicateMessage = thread
+      ? await ctx.db
+          .query("threadQueueMessages")
+          .withIndex("by_queue_and_message", (q) =>
+            q
+              .eq("companyId", actor.company._id)
+              .eq("queueThreadId", messageScope(thread!))
+              .eq("messageId", content.messageId),
+          )
+          .unique()
+      : null;
+    if (duplicateMessage)
+      throw backendError("submission-conflict", "Message identity is already in use.");
+    await attachmentsForSubmission(ctx, actor, submission, args.attachmentIds);
+    const now = Date.now();
+    if (!thread) {
+      let localProjectId: string | null;
+      let title: string;
+      let launch: ThreadQueueThread["launch"] = null;
+      if (submission.kind === "launch" && !submission.input.reuseExistingThread) {
+        if (
+          submission.input.projectId === null &&
+          submission.input.conversationCompanyId !== args.companyId
+        )
+          throw invalid("Conversation company must match its queue.");
+        localProjectId = submission.input.projectId;
+        title = submission.input.title;
+        const { initialMessage: _initialMessage, ...metadata } = submission.input;
+        launch = metadata;
+      } else {
+        const shell = await ctx.db
+          .query("agentThreads")
+          .withIndex("by_company_and_environment_and_thread", (q) =>
+            q
+              .eq("companyId", actor.company._id)
+              .eq("environmentId", args.environmentId)
+              .eq("threadId", args.threadId),
+          )
+          .unique();
+        if (!shell)
+          throw backendError(
+            "thread-unavailable",
+            "The environment has not published this conversation yet.",
+          );
+        if (submission.kind === "launch" && submission.input.projectId !== shell.localProjectId)
+          throw invalid("Existing thread project must match its published directory.");
+        localProjectId = shell.localProjectId;
+        title = typeof shell.shell?.title === "string" ? shell.shell.title : "Conversation";
+      }
+      const cloudProjectId = await target(ctx, actor, args.environmentId, localProjectId);
+      const id = await ctx.db.insert("threadQueueThreads", {
+        companyId: actor.company._id,
+        threadId: args.threadId,
+        environmentId: args.environmentId,
+        originEnvironmentId: args.environmentId,
+        queueVersion: 1,
+        listingExpiresAt: KEEP_QUEUE_LISTED,
+        localProjectId,
+        cloudProjectId,
+        issuedByMembershipId: actor.membership._id,
+        title,
+        launch,
+        state: "queued",
+        error: null,
+        revision: 1,
+        acceptedAt: launch ? null : now,
+        nextSequence: 0,
+        queuedCount: 0,
+        createdAt: now,
+        updatedAt: now,
+      });
+      thread = (await ctx.db.get(id))!;
+    } else {
+      await authorizeThread(ctx, actor, thread);
+      if (thread.environmentId !== args.environmentId)
+        throw backendError(
+          "destination-changed",
+          "This conversation was moved to another environment. Refresh before sending.",
+        );
+      if (submission.kind === "launch")
+        throw backendError("submission-conflict", "This thread already has a launch submission.");
+      if (thread.state === "canceled")
+        throw backendError(
+          "invalid-command-state",
+          "Retry the canceled thread before adding messages.",
+        );
+    }
+    if (thread.queuedCount >= THREAD_QUEUE_MAX_MESSAGES)
+      throw invalid(
+        "This thread has too many pending messages. Cancel or deliver some before adding more.",
+      );
+    const messageId = await ctx.db.insert("threadQueueMessages", {
+      companyId: actor.company._id,
+      threadId: args.threadId,
+      ...(messageScope(thread) ? { queueThreadId: messageScope(thread)! } : {}),
+      issuedByMembershipDomainId: actor.membership.id,
+      commandId: input.commandId,
+      messageId: content.messageId,
+      issuedByMembershipId: actor.membership._id,
+      sequence: thread.nextSequence,
+      revision: 1,
+      state: "queued",
+      error: null,
+      submission,
+      submissionFingerprint: fingerprint,
+      attachmentIds: args.attachmentIds,
+      acceptedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await trackQueueAttachments(ctx, (await ctx.db.get(messageId))!);
+    await ctx.db.patch(thread._id, {
+      nextSequence: thread.nextSequence + 1,
+      queuedCount: thread.queuedCount + 1,
+      updatedAt: now,
+    });
+    await refreshThread(ctx, thread);
+    return {
+      thread: await wireThread(ctx, (await ctx.db.get(thread._id))!),
+      messages: [wireMessage((await ctx.db.get(messageId))!)],
+    };
+  },
+});
+
+export const list = query({
+  args: { companyId: domainIdArg },
+  handler: async (ctx, args): Promise<ThreadQueueThread[]> => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    member(actor, false);
+    const rows = await ctx.db
+      .query("threadQueueThreads")
+      .withIndex("by_company_and_listing_expiration", (q) =>
+        q.eq("companyId", actor.company._id).gte("listingExpiresAt", Date.now()),
+      )
+      .take(128);
+    const visible = await Promise.all(
+      rows.map(async (row) =>
+        (await canReadThread(ctx, actor, row)) ? wireThread(ctx, row) : null,
+      ),
+    );
+    return visible.filter((row) => row !== null);
+  },
+});
+/** Clients subscribe to each returned page; no update reads a company's lifetime queue. */
+export const listPage = query({
+  args: { companyId: domainIdArg, paginationOpts: paginationOptsValidator },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<import("@spiritdevs/contracts/threadQueue").ThreadQueuePage> => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    member(actor, false);
+    const numItems = args.paginationOpts.numItems;
+    if (!Number.isSafeInteger(numItems) || numItems < 1 || numItems > 128)
+      throw invalid("Queue pages must request between 1 and 128 items.");
+    const result = await ctx.db
+      .query("threadQueueThreads")
+      .withIndex("by_company_and_listing_expiration", (q) =>
+        q.eq("companyId", actor.company._id).gte("listingExpiresAt", Date.now()),
+      )
+      .paginate(args.paginationOpts);
+    const visible = await Promise.all(
+      result.page.map(async (thread) =>
+        (await canReadThread(ctx, actor, thread)) ? wireThread(ctx, thread) : null,
+      ),
+    );
+    return {
+      page: visible.filter((thread) => thread !== null),
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
+  },
+});
+export const getThread = query({
+  args: identityArgs,
+  handler: async (ctx, args): Promise<ThreadQueueDetail> => {
+    const { thread } = await ownedThread(ctx, args);
+    // Delivered bodies are environment history. Fetch only visible queued work rather than
+    // retransmitting a growing lifetime transcript for every queue update.
+    const messages = (
+      await Promise.all(
+        (["queued", "accepted", "blocked", "canceled"] as const).map((state) =>
+          threadMessageStateQuery(ctx, thread, state).collect(),
+        ),
+      )
+    )
+      .flat()
+      .sort((a, b) => a.sequence - b.sequence);
+    const attachmentEntries = await Promise.all(
+      [...new Set(messages.flatMap((message) => message.attachmentIds))].map(async (id) => {
+        const rowId = ctx.db.normalizeId("threadQueueAttachments", id);
+        const row = rowId ? await ctx.db.get(rowId) : null;
+        if (!row || row.companyId !== thread.companyId) return null;
+        const url = await ctx.storage.getUrl(row.storageId);
+        return url ? ([row.attachment.id, url] as const) : null;
+      }),
+    );
+    return {
+      thread: await wireThread(ctx, thread),
+      messages: messages.map(wireMessage),
+      attachmentUrls: Object.fromEntries(attachmentEntries.filter((entry) => entry !== null)),
+    };
+  },
+});
+export const submissionStatus = query({
+  args: { ...identityArgs, commandId: domainIdArg },
+  handler: async (ctx, args): Promise<ThreadQueueSubmissionStatus | null> => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    if (actor.kind === "member") member(actor, false);
+    const thread = await threadById(ctx, actor.company._id, args.threadId, {
+      ...args,
+      environmentId:
+        actor.kind === "environment" ? actor.registration.environmentId : args.environmentId,
+    });
+    if (!thread) return null;
+    await authorizeThread(ctx, actor, thread);
+    const message = thread ? await messageById(ctx, thread, args.commandId) : null;
+    if (!message || message.threadId !== thread.threadId) return null;
+    return {
+      queueId: thread._id,
+      threadId: thread.threadId,
+      commandId: message.commandId,
+      messageId: message.messageId,
+      state: message.state,
+      revision: message.revision,
+      deliveryAttempt: message.deliveryAttempt ?? 0,
+    };
+  },
+});
+export const environmentHead = query({
+  args: { companyId: domainIdArg },
+  handler: async (ctx, args): Promise<ThreadQueueHead[]> => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    if (actor.kind !== "environment")
+      throw backendError("permission-denied", "Only an environment can consume its queue.");
+    const threads = (
+      await Promise.all(
+        (["queued", "accepted"] as const).map((state) =>
+          ctx.db
+            .query("threadQueueThreads")
+            .withIndex("by_company_environment_and_state", (q) =>
+              q
+                .eq("companyId", actor.company._id)
+                .eq("environmentId", actor.registration.environmentId)
+                .eq("state", state),
+            )
+            .collect(),
+        ),
+      )
+    ).flat();
+    const heads: ThreadQueueHead[] = [];
+    for (const thread of threads) {
+      const head =
+        thread.workerHead === undefined
+          ? workerHead(await firstOutstanding(ctx, thread))
+          : thread.workerHead;
+      if (head) heads.push({ queueId: thread._id, threadId: thread.threadId, ...head });
+    }
+    return heads;
+  },
+});
+function checkFence(actor: CompanyActor, message: Doc<"threadQueueMessages">, revision: number) {
+  if (actor.kind !== "environment")
+    throw backendError(
+      "permission-denied",
+      "Only the assigned environment may accept queued work.",
+    );
+  if (message.revision !== revision)
+    throw backendError("stale-command-claim", "This queued message changed before acceptance.");
+}
+async function prepareAcceptance(
+  ctx: QueryCtx,
+  args: QueueIdentity & { commandId: string; revision: number },
+): Promise<ThreadQueueAcceptance | null> {
+  const actor = await requireCompanyActor(ctx, args.companyId);
+  if (actor.kind !== "environment")
+    throw backendError("permission-denied", "Only an environment can consume queued work.");
+  const thread = await threadById(ctx, actor.company._id, args.threadId, {
+    ...args,
+    environmentId:
+      actor.kind === "environment" ? actor.registration.environmentId : args.environmentId,
+  });
+  const message = thread ? await messageById(ctx, thread, args.commandId) : null;
+  if (
+    !thread ||
+    !message ||
+    thread.environmentId !== actor.registration.environmentId ||
+    message.threadId !== thread.threadId ||
+    message.revision !== args.revision ||
+    (message.state !== "queued" && message.state !== "accepted")
+  )
+    return null;
+  const head = await firstOutstanding(ctx, thread);
+  if (head?._id !== message._id) return null;
+  const membership = await ctx.db.get(message.issuedByMembershipId);
+  if (message.acceptedAt === null) {
+    if (!membership || membership.state !== "active")
+      throw backendError("permission-denied", "The submitting member no longer has access.");
+    const user = await ctx.db.get(membership.userId);
+    const owner = await ctx.db
+      .query("companyOwners")
+      .withIndex("by_company_and_membership", (q) =>
+        q.eq("companyId", actor.company._id).eq("membershipId", membership._id),
+      )
+      .unique();
+    if (!user) throw backendError("permission-denied", "The submitting account no longer exists.");
+    const authorization = await membershipAuthorization(ctx, membership, owner !== null);
+    const issuer: MemberActor = {
+      kind: "member",
+      user,
+      membership,
+      company: actor.company,
+      isOwner: owner !== null,
+      ...authorization,
+    };
+    member(issuer);
+    requirePermission(issuer, "remoteAgents.control");
+    const currentProject = await target(ctx, issuer, thread.environmentId, thread.localProjectId);
+    if (currentProject !== thread.cloudProjectId)
+      throw backendError(
+        "binding-unavailable",
+        "The selected directory now belongs to another project.",
+      );
+  }
+  const attachments: { attachment: ChatAttachment; url: string }[] = [];
+  for (const id of message.attachmentIds) {
+    const rowId = ctx.db.normalizeId("threadQueueAttachments", id);
+    const row = rowId ? await ctx.db.get(rowId) : null;
+    const url = row ? await ctx.storage.getUrl(row.storageId) : null;
+    if (!row || row.companyId !== thread.companyId || !url)
+      throw backendError("attachment-unavailable", "A queued attachment is unavailable.");
+    attachments.push({ attachment: row.attachment, url });
+  }
+  const original = message.submission as ThreadQueueSubmission;
+  const submission =
+    original.kind === "launch" && message.retryReusesThread
+      ? { ...original, input: { ...original.input, reuseExistingThread: true } }
+      : original;
+  return {
+    queueId: thread._id,
+    threadId: thread.threadId,
+    commandId: message.commandId,
+    revision: message.revision,
+    deliveryAttempt: message.deliveryAttempt ?? 0,
+    state: message.acceptedAt === null ? "queued" : "accepted",
+    submission,
+    localProjectId: thread.localProjectId,
+    issuedByMembershipId:
+      message.issuedByMembershipDomainId ?? membership?.id ?? String(message.issuedByMembershipId),
+    attachments,
+  };
+}
+/** Download and inspect prerequisites before acquiring the irreversible execution fence. */
+export const prepare = query({ args: fenceArgs, handler: prepareAcceptance });
+export const accept = mutation({
+  args: fenceArgs,
+  handler: async (ctx, args): Promise<ThreadQueueAcceptance | null> => {
+    const prepared = await prepareAcceptance(ctx, args);
+    if (!prepared) return null;
+    const { thread, message } = await queuedMessage(ctx, args);
+    const now = Date.now();
+    await ctx.db.patch(message._id, {
+      state: "accepted",
+      acceptedAt: message.acceptedAt ?? now,
+      updatedAt: now,
+      error: null,
+    });
+    await ctx.db.patch(thread._id, {
+      workerHead: workerHead({
+        ...message,
+        state: "accepted",
+        acceptedAt: message.acceptedAt ?? now,
+      }),
+      state: "accepted",
+      acceptedAt: thread.acceptedAt ?? now,
+      updatedAt: now,
+      error: null,
+    });
+    return { ...prepared, state: "accepted" };
+  },
+});
+export const acknowledge = mutation({
+  args: fenceArgs,
+  handler: async (ctx, args) => {
+    const { actor, thread, message } = await queuedMessage(ctx, args);
+    checkFence(actor, message, args.revision);
+    if (message.state === "delivered") return null;
+    if (message.state !== "accepted")
+      throw backendError(
+        "invalid-command-state",
+        "Only durably accepted work may be acknowledged.",
+      );
+    await ctx.db.patch(message._id, { state: "delivered", updatedAt: Date.now(), error: null });
+    await ctx.db.patch(thread._id, { queuedCount: Math.max(0, thread.queuedCount - 1) });
+    await refreshThread(ctx, thread);
+    return null;
+  },
+});
+export const reportBlocked = mutation({
+  args: {
+    ...fenceArgs,
+    error: v.string(),
+    phase: v.union(v.literal("preflight"), v.literal("delivery")),
+    rejection: v.optional(v.union(v.literal("command"), v.literal("initial-message"))),
+  },
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    if (actor.kind !== "environment")
+      throw backendError("permission-denied", "Only an environment can report delivery failures.");
+    const thread = await threadById(ctx, actor.company._id, args.threadId, {
+      ...args,
+      environmentId:
+        actor.kind === "environment" ? actor.registration.environmentId : args.environmentId,
+    });
+    const message = thread ? await messageById(ctx, thread, args.commandId) : null;
+    if (
+      !thread ||
+      !message ||
+      thread.environmentId !== actor.registration.environmentId ||
+      message.threadId !== thread.threadId ||
+      message.revision !== args.revision
+    )
+      return null;
+    if (args.phase === "preflight" && (message.acceptedAt !== null || message.state !== "queued"))
+      return null;
+    if (
+      args.phase === "delivery" &&
+      (message.acceptedAt === null || (message.state !== "accepted" && message.state !== "queued"))
+    )
+      return null;
+    await ctx.db.patch(message._id, {
+      state: "blocked",
+      error: args.error.slice(0, 2000),
+      ...(args.phase === "delivery" && args.rejection ? { rejection: args.rejection } : {}),
+      updatedAt: Date.now(),
+    });
+    await refreshThread(ctx, thread);
+    return null;
+  },
+});
+
+function requireRevision(message: { revision: number }, revision: number) {
+  if (message.revision !== revision)
+    throw backendError(
+      "stale-command-claim",
+      "This queued work changed on another device. Refresh before changing it.",
+    );
+}
+function requireEditable(message: Doc<"threadQueueMessages">) {
+  if (message.acceptedAt !== null || message.state === "delivered" || message.state === "accepted")
+    throw backendError("already-accepted", "The environment has already accepted this message.");
+}
+export const edit = mutation({
+  args: { ...fenceArgs, text: v.string() },
+  handler: async (ctx, args) => {
+    const { actor, thread, message } = await queuedMessage(ctx, args);
+    member(actor);
+    requirePermission(actor, "remoteAgents.control");
+    requireRevision(message, args.revision);
+    requireEditable(message);
+    const original = message.submission as ThreadQueueSubmission;
+    const submission: ThreadQueueSubmission =
+      original.kind === "launch"
+        ? {
+            ...original,
+            input: {
+              ...original.input,
+              initialMessage: { ...submissionMessage(original), text: args.text },
+            },
+          }
+        : { ...original, input: { ...original.input, text: args.text } };
+    validate(() => decodeQueueSubmission(submission, thread.threadId));
+    await ctx.db.patch(message._id, {
+      submission,
+      revision: message.revision + 1,
+      updatedAt: Date.now(),
+    });
+    await ctx.db.patch(thread._id, {
+      workerHead: workerHead(await firstOutstanding(ctx, thread)),
+      updatedAt: Date.now(),
+    });
+    return null;
+  },
+});
+async function pendingMessages(ctx: QueryCtx, thread: Doc<"threadQueueThreads">) {
+  const rows = await Promise.all([
+    threadMessageStateQuery(ctx, thread, "queued").collect(),
+    threadMessageStateQuery(ctx, thread, "blocked").collect(),
+  ]);
+  return rows
+    .flat()
+    .filter((row) => row.acceptedAt === null)
+    .sort((a, b) => a.sequence - b.sequence);
+}
+
+/** Reuse existing sequence slots so accepted work and future enqueues keep their order. */
+async function movePendingMessage(
+  ctx: MutationCtx,
+  thread: Doc<"threadQueueThreads">,
+  message: Doc<"threadQueueMessages">,
+  beforeCommandId: string | null,
+) {
+  requireEditable(message);
+  if (message.state !== "queued" && message.state !== "blocked")
+    throw invalid("Only pending messages can be reordered.");
+  if ((message.submission as ThreadQueueSubmission).kind === "launch")
+    throw invalid("The thread's first message must stay first.");
+  const rows = await pendingMessages(ctx, thread);
+  const reordered = rows.filter((row) => row._id !== message._id);
+  if (beforeCommandId === message.commandId) return;
+  const destination =
+    beforeCommandId === null
+      ? reordered.length
+      : reordered.findIndex((row) => row.commandId === beforeCommandId);
+  if (destination < 0) throw invalid("The destination message is no longer queued.");
+  reordered.splice(destination, 0, message);
+  if (
+    reordered.some(
+      (row, index) => (row.submission as ThreadQueueSubmission).kind === "launch" && index !== 0,
+    )
+  )
+    throw invalid("The thread's first message must stay first.");
+  for (const [index, row] of reordered.entries()) {
+    const sequence = rows[index]!.sequence;
+    if (row.sequence !== sequence) {
+      await ctx.db.patch(row._id, { sequence, revision: row.revision + 1, updatedAt: Date.now() });
+    }
+  }
+  await refreshThread(ctx, thread);
+}
+
+export const reorder = mutation({
+  args: { ...fenceArgs, beforeCommandId: v.union(v.string(), v.null()) },
+  handler: async (ctx, args) => {
+    const { actor, thread, message } = await queuedMessage(ctx, args);
+    member(actor);
+    requirePermission(actor, "remoteAgents.control");
+    requireRevision(message, args.revision);
+    await movePendingMessage(ctx, thread, message, args.beforeCommandId);
+    return null;
+  },
+});
+
+export const steer = mutation({
+  args: { ...fenceArgs, targetRunId: v.string() },
+  handler: async (ctx, args) => {
+    const { actor, thread, message } = await queuedMessage(ctx, args);
+    member(actor);
+    requirePermission(actor, "remoteAgents.control");
+    requireRevision(message, args.revision);
+    requireEditable(message);
+    const original = message.submission as ThreadQueueSubmission;
+    if (original.kind !== "message" || message.state !== "queued")
+      throw invalid("Only queued follow-up messages can steer an active turn.");
+    const submission: ThreadQueueSubmission = {
+      ...original,
+      input: {
+        ...original.input,
+        dispatchMode: { type: "steer_active" as const, targetRunId: args.targetRunId as RunId },
+      },
+    };
+    validate(() => decodeQueueSubmission(submission, thread.threadId));
+    const head = (await pendingMessages(ctx, thread)).find((row) => row._id !== message._id);
+    await movePendingMessage(ctx, thread, message, head?.commandId ?? null);
+    const moved = (await ctx.db.get(message._id))!;
+    await ctx.db.patch(message._id, {
+      submission,
+      revision: moved.revision + 1,
+      updatedAt: Date.now(),
+    });
+    await refreshThread(ctx, thread);
+    return null;
+  },
+});
+
+export const cancel = mutation({
+  args: fenceArgs,
+  handler: async (ctx, args) => {
+    const { actor, thread, message } = await queuedMessage(ctx, args);
+    member(actor, false);
+    if (message.issuedByMembershipId !== actor.membership._id)
+      requirePermission(actor, "remoteAgents.control");
+    requireRevision(message, args.revision);
+    const provenRejected = message.state === "blocked" && message.rejection != null;
+    if (!provenRejected) requireEditable(message);
+    if (message.state === "canceled") return null;
+    if (
+      (message.submission as ThreadQueueSubmission).kind === "launch" &&
+      thread.launch !== null &&
+      message.rejection !== "initial-message"
+    ) {
+      if (thread.acceptedAt !== null && !provenRejected)
+        throw backendError("already-accepted", "The environment has already accepted this thread.");
+      const rows = await threadMessageQuery(ctx, thread).collect();
+      for (const row of rows) {
+        if (row._id !== message._id || !provenRejected) requireEditable(row);
+        await ctx.db.patch(row._id, {
+          state: "canceled",
+          revision: row.revision + 1,
+          updatedAt: Date.now(),
+        });
+      }
+      await ctx.db.patch(thread._id, {
+        workerHead: null,
+        state: "canceled",
+        queuedCount: 0,
+        error: null,
+        updatedAt: Date.now(),
+      });
+    } else {
+      await ctx.db.patch(message._id, {
+        state: "canceled",
+        revision: message.revision + 1,
+        updatedAt: Date.now(),
+      });
+      await ctx.db.patch(thread._id, { queuedCount: Math.max(0, thread.queuedCount - 1) });
+      await refreshThread(ctx, thread);
+    }
+    return null;
+  },
+});
+export const retry = mutation({
+  args: fenceArgs,
+  handler: async (ctx, args) => {
+    const { actor, thread, message } = await queuedMessage(ctx, args);
+    member(actor);
+    requirePermission(actor, "remoteAgents.control");
+    requireRevision(message, args.revision);
+    if (message.state === "queued" || message.state === "accepted") return null;
+    if (message.state !== "blocked" && message.state !== "canceled")
+      throw backendError("invalid-command-state", "Delivered messages cannot be retried.");
+    if (
+      thread.state === "canceled" &&
+      (message.submission as ThreadQueueSubmission).kind !== "launch"
+    )
+      throw backendError(
+        "invalid-command-state",
+        "Retry the thread's first message before its follow-ups.",
+      );
+    if (message.state === "canceled" && thread.queuedCount >= THREAD_QUEUE_MAX_MESSAGES)
+      throw invalid(
+        "This thread has too many pending messages. Deliver or cancel some before retrying.",
+      );
+    // Keep the original revision after uncertain delivery: the environment retries its stable command.
+    await ctx.db.patch(message._id, {
+      state: "queued",
+      error: null,
+      updatedAt: Date.now(),
+      ...(message.state === "canceled" ? { sequence: thread.nextSequence } : {}),
+      ...(message.rejection
+        ? {
+            deliveryAttempt: (message.deliveryAttempt ?? 0) + 1,
+            revision: message.revision + 1,
+            retryReusesThread:
+              message.retryReusesThread === true || message.rejection === "initial-message",
+            rejection: null,
+          }
+        : {}),
+    });
+    if (message.state === "canceled")
+      await ctx.db.patch(thread._id, {
+        queuedCount: thread.queuedCount + 1,
+        nextSequence: thread.nextSequence + 1,
+      });
+    await refreshThread(ctx, thread);
+    return null;
+  },
+});
+export const reassign = mutation({
+  args: {
+    ...identityArgs,
+    revision: v.number(),
+    environmentId: v.string(),
+    localProjectId: v.union(v.string(), v.null()),
+    workspaceStrategy: v.optional(v.any()),
+    modelSelection: v.optional(v.any()),
+  },
+  handler: async (ctx, args): Promise<ThreadQueueThread> => {
+    const { actor, thread } = await ownedThread(ctx, {
+      companyId: args.companyId,
+      threadId: args.threadId,
+      queueId: args.queueId,
+    });
+    member(actor);
+    requirePermission(actor, "remoteAgents.control");
+    requireRevision(thread, args.revision);
+    if (!thread.launch || thread.acceptedAt !== null || (await publishedThread(ctx, thread)))
+      throw backendError(
+        "already-accepted",
+        "Only threads that have never been accepted can move to another environment.",
+      );
+    const destinationQueue = await threadById(ctx, actor.company._id, args.threadId, {
+      environmentId: args.environmentId,
+    });
+    if (destinationQueue && destinationQueue._id !== thread._id)
+      throw backendError(
+        "destination-conflict",
+        "This environment already has a different conversation with this thread id.",
+      );
+    const cloudProjectId = await target(ctx, actor, args.environmentId, args.localProjectId);
+    if (thread.cloudProjectId !== cloudProjectId)
+      throw invalid("Choose a directory bound to the same cloud project.");
+    const original = thread.launch as NonNullable<ThreadQueueThread["launch"]>;
+    const modelSelection = (args.modelSelection ?? original.modelSelection) as ModelSelection;
+    validate(() => validateModelSelection(modelSelection));
+    const capability = await ctx.db
+      .query("environmentProviderCapabilities")
+      .withIndex("by_company_and_environment", (q) =>
+        q.eq("companyId", actor.company._id).eq("environmentId", args.environmentId),
+      )
+      .unique();
+    const provider = capability?.providers.find(
+      (row) =>
+        row.instanceId === modelSelection.instanceId &&
+        row.enabled &&
+        row.available &&
+        row.modelIds.includes(modelSelection.model),
+    );
+    if (!provider)
+      throw backendError(
+        "provider-unavailable",
+        "Select an available provider and model on the replacement environment.",
+      );
+    const workspaceStrategy = (args.workspaceStrategy ??
+      original.workspaceStrategy) as OrchestrationV2ThreadLaunchWorkspaceStrategy;
+    if (
+      args.environmentId !== thread.environmentId &&
+      workspaceStrategy.type === "existing_worktree"
+    )
+      throw invalid(
+        "An existing worktree path cannot be transferred between environments. Choose the project root or a new worktree.",
+      );
+    const launch = {
+      ...original,
+      projectId: args.localProjectId as typeof original.projectId,
+      modelSelection,
+      workspaceStrategy,
+    };
+    const rows = await threadMessageQuery(ctx, thread).collect();
+    for (const row of rows) {
+      requireEditable(row);
+      const submission = row.submission as ThreadQueueSubmission;
+      const updated: ThreadQueueSubmission =
+        submission.kind === "launch"
+          ? {
+              kind: "launch",
+              input: { ...launch, initialMessage: submission.input.initialMessage },
+            }
+          : { ...submission, input: { ...submission.input, modelSelection } };
+      validate(() => decodeQueueSubmission(updated, thread.threadId));
+      await ctx.db.patch(row._id, {
+        submission: updated,
+        revision: row.revision + 1,
+        state: row.state === "blocked" ? "queued" : row.state,
+        error: null,
+        updatedAt: Date.now(),
+      });
+    }
+    await ctx.db.patch(thread._id, {
+      environmentId: args.environmentId,
+      originEnvironmentId: thread.originEnvironmentId ?? thread.environmentId,
+      localProjectId: args.localProjectId,
+      launch,
+      revision: thread.revision + 1,
+      error: null,
+      updatedAt: Date.now(),
+    });
+    if (thread.state !== "canceled") await refreshThread(ctx, thread);
+    return wireThread(ctx, (await ctx.db.get(thread._id))!);
+  },
+});
+
+/** Registered destinations and last published capabilities remain discoverable while hosts are offline. */
+export const destinations = query({
+  args: {
+    companyId: domainIdArg,
+    threadId: v.optional(v.string()),
+    queueId: v.optional(v.string()),
+    environmentId: v.optional(v.string()),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<import("@spiritdevs/contracts/threadQueue").ThreadQueueDestination[]> => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    member(actor);
+    const thread = args.threadId
+      ? await threadById(ctx, actor.company._id, args.threadId, args)
+      : null;
+    if (args.threadId && !thread)
+      throw backendError("entity-not-found", "Queued thread not found.");
+    if (thread) await authorizeThread(ctx, actor, thread);
+    const registrations = await ctx.db
+      .query("environmentRegistrations")
+      .withIndex("by_company_and_state", (q) =>
+        q.eq("companyId", actor.company._id).eq("state", "active"),
+      )
+      .collect();
+    const bindings = await ctx.db
+      .query("environmentBindings")
+      .withIndex("by_company_status_environment", (q) =>
+        q.eq("companyId", actor.company._id).eq("status", "active"),
+      )
+      .collect();
+    const activeEnvironmentIds = new Set(registrations.map((row) => row.environmentId));
+    const relevantBindings = bindings.filter(
+      (binding) =>
+        activeEnvironmentIds.has(binding.environmentId) &&
+        (!thread || binding.cloudProjectId === thread.cloudProjectId),
+    );
+    const projects = await Promise.all(
+      [...new Set(relevantBindings.map((row) => row.cloudProjectId))].map((id) => ctx.db.get(id)),
+    );
+    const capabilityRows = await Promise.all(
+      registrations.map((registration) =>
+        ctx.db
+          .query("environmentProviderCapabilities")
+          .withIndex("by_company_and_environment", (q) =>
+            q.eq("companyId", actor.company._id).eq("environmentId", registration.environmentId),
+          )
+          .unique(),
+      ),
+    );
+    return registrations.map((registration) => {
+      const capabilities = capabilityRows.find(
+        (row) => row?.environmentId === registration.environmentId,
+      );
+      return {
+        environmentId: registration.environmentId,
+        durableThreadQueue: registration.descriptor?.capabilities?.durableThreadQueue === true,
+        label:
+          typeof registration.descriptor?.label === "string"
+            ? registration.descriptor.label
+            : registration.environmentId,
+        projects: relevantBindings
+          .filter(
+            (binding) =>
+              binding.environmentId === registration.environmentId &&
+              binding.status === "active" &&
+              (!thread || binding.cloudProjectId === thread.cloudProjectId),
+          )
+          .flatMap((binding) => {
+            const project = projects.find(
+              (row) =>
+                row !== null &&
+                row.companyId === actor.company._id &&
+                row._id === binding.cloudProjectId &&
+                row.deletedAt === null &&
+                row.archivedAt === null,
+            );
+            return project
+              ? [
+                  {
+                    localProjectId: binding.localProjectId,
+                    title: project.name,
+                    workspaceRoot: binding.localWorkspaceRoot,
+                    cloudProjectId: project.id,
+                  },
+                ]
+              : [];
+          }),
+        providers: (capabilities?.providers ?? []).map((provider) => ({
+          instanceId: provider.instanceId,
+          driver: provider.driverKind,
+          displayName: provider.instanceId,
+          modelIds: provider.modelIds,
+          enabled: provider.enabled,
+          available: provider.available,
+        })),
+      };
+    });
+  },
+});
+
+/** Run once when upgrading an existing preview database; production rows are initialized at creation. */
+export const migrateListing = internalMutation({
+  args: {},
+  handler: async (ctx): Promise<number> => {
+    const rows = await ctx.db
+      .query("threadQueueThreads")
+      .withIndex("by_listing_expiration", (q) => q.eq("listingExpiresAt", undefined))
+      .take(128);
+    for (const row of rows) {
+      const hasCanceled = (await threadMessageStateQuery(ctx, row, "canceled").first()) !== null;
+      const retired =
+        row.state === "delivered" && !hasCanceled && (await publishedThread(ctx, row)) !== null;
+      await ctx.db.patch(row._id, {
+        listingExpiresAt: retired ? Date.now() + QUEUE_DELIVERED_RETENTION_MS : KEEP_QUEUE_LISTED,
+      });
+    }
+    if (rows.length === 128)
+      await ctx.scheduler.runAfter(0, internal.threadQueue.migrateListing, {});
+    return rows.length;
+  },
+});
+
+export const pruneOrphan = internalMutation({
+  args: { queueId: v.id("threadQueueThreads"), confirmedDeletion: v.optional(v.boolean()) },
+  handler: async (ctx, args): Promise<number> =>
+    pruneOrphanQueue(ctx, args.queueId, args.confirmedDeletion ?? false),
+});
+
+/** Paginated sweep repairs missed removals without expiring offline or accepted work. */
+export const pruneOrphans = internalMutation({
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<void> => {
+    const page = await ctx.db
+      .query("threadQueueThreads")
+      .withIndex("by_state_and_updated", (q) =>
+        q.eq("state", "delivered").lt("updatedAt", Date.now() - QUEUE_ORPHAN_GRACE_MS),
+      )
+      .paginate({ cursor: args.cursor ?? null, numItems: QUEUE_CLEANUP_BATCH_SIZE });
+    for (const row of page.page)
+      await ctx.scheduler.runAfter(0, internal.threadQueue.pruneOrphan, { queueId: row._id });
+    if (!page.isDone)
+      await ctx.scheduler.runAfter(0, internal.threadQueue.pruneOrphans, {
+        cursor: page.continueCursor,
+      });
+  },
+});
+
+/** Backfill old message references before collecting any unreferenced uploads. */
+export const pruneAttachments = internalMutation({
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<void> => {
+    const untracked = await ctx.db
+      .query("threadQueueMessages")
+      .withIndex("by_attachment_tracking", (q) => q.eq("attachmentReferencesTracked", undefined))
+      .take(QUEUE_CLEANUP_BATCH_SIZE);
+    if (untracked.length > 0) {
+      for (const message of untracked) await trackQueueAttachments(ctx, message);
+      await ctx.scheduler.runAfter(0, internal.threadQueue.pruneAttachments, args);
+      return;
+    }
+    const page = await ctx.db
+      .query("threadQueueAttachments")
+      .withIndex("by_creation_time", (q) =>
+        q.lt("_creationTime", Date.now() - QUEUE_DELIVERED_RETENTION_MS),
+      )
+      .paginate({ cursor: args.cursor ?? null, numItems: QUEUE_CLEANUP_BATCH_SIZE });
+    for (const row of page.page) await pruneQueueAttachment(ctx, row);
+    if (!page.isDone)
+      await ctx.scheduler.runAfter(0, internal.threadQueue.pruneAttachments, {
+        cursor: page.continueCursor,
+      });
+  },
+});

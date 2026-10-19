@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
 
 import {
   COMPUTER_ID_MAX_LENGTH,
@@ -15,7 +15,27 @@ import {
   ComputerStatusResult,
   ComputerWindow,
   ThreadComputerState,
-} from "./computer";
+} from "./computer.ts";
+
+const decodeComputerActionResult = Schema.decodeUnknownSync(ComputerActionResult);
+const decodeComputerAvailability = Schema.decodeUnknownSync(ComputerAvailability);
+const decodeComputerInputPause = Schema.decodeUnknownSync(ComputerInputPause);
+const decodeComputerLaunchAppResult = Schema.decodeUnknownSync(ComputerLaunchAppResult);
+const decodeComputerSelectTextInput = Schema.decodeUnknownSync(ComputerSelectTextInput);
+const decodeComputerSetupRequiredPayload = Schema.decodeUnknownSync(ComputerSetupRequiredPayload);
+const decodeComputerState = Schema.decodeUnknownSync(ComputerState);
+const decodeComputerStatusResult = Schema.decodeUnknownSync(ComputerStatusResult);
+const decodeComputerWindow = Schema.decodeUnknownSync(ComputerWindow);
+const decodeThreadComputerState = Schema.decodeUnknownSync(ThreadComputerState);
+const encodeComputerActionResult = Schema.encodeUnknownSync(ComputerActionResult);
+const encodeComputerAvailability = Schema.encodeUnknownSync(ComputerAvailability);
+const encodeComputerInputPause = Schema.encodeUnknownSync(ComputerInputPause);
+const encodeComputerLaunchAppResult = Schema.encodeUnknownSync(ComputerLaunchAppResult);
+const encodeComputerSetupRequiredPayload = Schema.encodeUnknownSync(ComputerSetupRequiredPayload);
+const encodeComputerState = Schema.encodeUnknownSync(ComputerState);
+const encodeComputerStatusResult = Schema.encodeUnknownSync(ComputerStatusResult);
+const encodeComputerWindow = Schema.encodeUnknownSync(ComputerWindow);
+const encodeThreadComputerState = Schema.encodeUnknownSync(ThreadComputerState);
 
 describe("ComputerWindow observed Space membership", () => {
   const window = {
@@ -34,27 +54,23 @@ describe("ComputerWindow observed Space membership", () => {
       { ...window, keyboardFocused: true },
       { ...window, spaceIds: [3, 8], currentSpaceId: 8, onCurrentSpace: true },
     ]) {
-      const decoded = Schema.decodeUnknownSync(ComputerWindow)(input);
+      const decoded = decodeComputerWindow(input);
       expect(decoded).toEqual(input);
-      expect(Schema.encodeUnknownSync(ComputerWindow)(decoded)).toEqual(input);
+      expect(encodeComputerWindow(decoded)).toEqual(input);
     }
   });
 
   it("rejects invalid or lossy native Space identifiers", () => {
     for (const id of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "3"]) {
-      expect(() =>
-        Schema.decodeUnknownSync(ComputerWindow)({ ...window, spaceIds: [id] }),
-      ).toThrow();
-      expect(() =>
-        Schema.decodeUnknownSync(ComputerWindow)({ ...window, currentSpaceId: id }),
-      ).toThrow();
+      expect(() => decodeComputerWindow({ ...window, spaceIds: [id] })).toThrow();
+      expect(() => decodeComputerWindow({ ...window, currentSpaceId: id })).toThrow();
     }
   });
 });
 
 function decodes(input: unknown): boolean {
   try {
-    Schema.decodeUnknownSync(ComputerAvailability as never)(input);
+    decodeComputerAvailability(input);
     return true;
   } catch {
     return false;
@@ -65,14 +81,14 @@ describe("ComputerAvailability permission-required", () => {
   const PERMISSION_REQUIRED = {
     kind: "permission-required",
     missing: ["accessibility", "screenRecording"],
-    message: "Synara needs Accessibility and Screen Recording to control this Mac.",
+    message: "Pathway needs Accessibility and Screen Recording to control this Mac.",
     buildSignature: "adhoc",
   } as const;
 
   it("round-trips the grants, the message and the build signature", () => {
-    const decoded = Schema.decodeUnknownSync(ComputerAvailability)(PERMISSION_REQUIRED);
+    const decoded = decodeComputerAvailability(PERMISSION_REQUIRED);
     expect(decoded).toEqual(PERMISSION_REQUIRED);
-    expect(Schema.encodeUnknownSync(ComputerAvailability)(decoded)).toEqual(PERMISSION_REQUIRED);
+    expect(encodeComputerAvailability(decoded)).toEqual(PERMISSION_REQUIRED);
   });
 
   it("keeps the other availability kinds decodable", () => {
@@ -82,9 +98,9 @@ describe("ComputerAvailability permission-required", () => {
   });
 
   it("preserves the responsible app in live permission status across the wire", () => {
-    const state = { ...PERMISSION_REQUIRED, bundleId: "com.emanueledipietro.synara.dev" };
-    const decoded = Schema.decodeUnknownSync(ComputerAvailability)(state);
-    expect(Schema.encodeUnknownSync(ComputerAvailability)(decoded)).toEqual(state);
+    const state = { ...PERMISSION_REQUIRED, bundleId: "com.spiritdevs.pathway.dev" };
+    const decoded = decodeComputerAvailability(state);
+    expect(encodeComputerAvailability(decoded)).toEqual(state);
     expect(decodes({ ...state, bundleId: "" })).toBe(false);
     expect(decodes({ ...state, bundleId: "x".repeat(257) })).toBe(false);
   });
@@ -109,11 +125,11 @@ describe("ComputerSetupRequiredPayload", () => {
       toolName: "computer_list_windows",
       missing: ["accessibility"],
       buildSignature: "adhoc",
-      bundleId: "com.emanueledipietro.synara.dev",
+      bundleId: "com.spiritdevs.pathway.dev",
     } as const;
-    const decoded = Schema.decodeUnknownSync(ComputerSetupRequiredPayload)(payload);
+    const decoded = decodeComputerSetupRequiredPayload(payload);
     expect(decoded).toEqual(payload);
-    expect(Schema.encodeUnknownSync(ComputerSetupRequiredPayload)(decoded)).toEqual(payload);
+    expect(encodeComputerSetupRequiredPayload(decoded)).toEqual(payload);
   });
 
   it("accepts a payload with no signature, and refuses an unknown one", () => {
@@ -123,7 +139,7 @@ describe("ComputerSetupRequiredPayload", () => {
     // release user.
     const decodes = (input: unknown): boolean => {
       try {
-        Schema.decodeUnknownSync(ComputerSetupRequiredPayload as never)(input);
+        decodeComputerSetupRequiredPayload(input);
         return true;
       } catch {
         return false;
@@ -182,16 +198,16 @@ describe("Computer state additions", () => {
     const inputPause = { windowId: "cua:123:456", message: "Waiting for this window." };
     const perception = { ...state, inputPause };
     const thread = { ...threadState, inputPause, activity: "Waiting for you" };
-    expect(Schema.encodeUnknownSync(ComputerState)(perception)).toEqual(perception);
-    expect(Schema.decodeUnknownSync(ComputerState)(perception)).toEqual(perception);
-    expect(Schema.encodeUnknownSync(ThreadComputerState)(thread)).toEqual(thread);
-    expect(Schema.decodeUnknownSync(ThreadComputerState)(thread)).toEqual(thread);
+    expect(encodeComputerState(perception)).toEqual(perception);
+    expect(decodeComputerState(perception)).toEqual(perception);
+    expect(encodeThreadComputerState(thread)).toEqual(thread);
+    expect(decodeThreadComputerState(thread)).toEqual(thread);
   });
 
   it("keeps older state and status payloads valid without optional additions", () => {
-    expect(Schema.decodeUnknownSync(ComputerState)(state)).toEqual(state);
-    expect(Schema.decodeUnknownSync(ThreadComputerState)(threadState)).toEqual(threadState);
-    expect(Schema.decodeUnknownSync(ComputerStatusResult)(status)).toEqual(status);
+    expect(decodeComputerState(state)).toEqual(state);
+    expect(decodeThreadComputerState(threadState)).toEqual(threadState);
+    expect(decodeComputerStatusResult(status)).toEqual(status);
   });
 
   it("bounds pause messages and window identifiers at the protocol boundary", () => {
@@ -199,30 +215,24 @@ describe("Computer state additions", () => {
       windowId: "w".repeat(COMPUTER_ID_MAX_LENGTH),
       message: "m".repeat(COMPUTER_MESSAGE_MAX_LENGTH),
     };
-    expect(Schema.decodeUnknownSync(ComputerInputPause)(pause)).toEqual(pause);
-    expect(() =>
-      Schema.decodeUnknownSync(ComputerInputPause)({ ...pause, message: `${pause.message}m` }),
-    ).toThrow();
-    expect(() =>
-      Schema.decodeUnknownSync(ComputerInputPause)({ ...pause, windowId: `${pause.windowId}w` }),
-    ).toThrow();
-    expect(Schema.decodeUnknownSync(ComputerInputPause)({ message: "Paused" })).toEqual({
+    expect(decodeComputerInputPause(pause)).toEqual(pause);
+    expect(() => decodeComputerInputPause({ ...pause, message: `${pause.message}m` })).toThrow();
+    expect(() => decodeComputerInputPause({ ...pause, windowId: `${pause.windowId}w` })).toThrow();
+    expect(decodeComputerInputPause({ message: "Paused" })).toEqual({
       message: "Paused",
     });
   });
 
   it("rejects unbounded activity text", () => {
     const bounded = { ...threadState, activity: "a".repeat(128) };
-    expect(Schema.decodeUnknownSync(ThreadComputerState)(bounded)).toEqual(bounded);
-    expect(() =>
-      Schema.decodeUnknownSync(ThreadComputerState)({ ...bounded, activity: "a".repeat(129) }),
-    ).toThrow();
+    expect(decodeThreadComputerState(bounded)).toEqual(bounded);
+    expect(() => decodeThreadComputerState({ ...bounded, activity: "a".repeat(129) })).toThrow();
   });
 
   it.each([true, false])("retains an explicit provisionable=%s status", (provisionable) => {
     const input = { ...status, provisionable };
-    expect(Schema.decodeUnknownSync(ComputerStatusResult)(input)).toEqual(input);
-    expect(Schema.encodeUnknownSync(ComputerStatusResult)(input)).toEqual(input);
+    expect(decodeComputerStatusResult(input)).toEqual(input);
+    expect(encodeComputerStatusResult(input)).toEqual(input);
   });
 });
 
@@ -239,13 +249,13 @@ describe("ComputerActionResult scroll limits", () => {
   } as const;
 
   it("preserves the overlap limit and existing Cua effect telemetry", () => {
-    expect(Schema.decodeUnknownSync(ComputerActionResult)(result)).toEqual(result);
-    expect(Schema.encodeUnknownSync(ComputerActionResult)(result)).toEqual(result);
+    expect(decodeComputerActionResult(result)).toEqual(result);
+    expect(encodeComputerActionResult(result)).toEqual(result);
   });
 
   it("rejects non-finite limited distances", () => {
     expect(() =>
-      Schema.decodeUnknownSync(ComputerActionResult)({
+      decodeComputerActionResult({
         ...result,
         scroll: { ...result.scroll, limitedTo: { deltaX: 0, deltaY: Infinity } },
       }),
@@ -257,12 +267,14 @@ describe("ComputerSelectTextInput", () => {
   const input = { label: "Display", start: 2, length: 5 } as const;
 
   it("accepts a semantic target with an in-bounds range, including a caret", () => {
-    expect(Schema.decodeUnknownSync(ComputerSelectTextInput)(input)).toEqual(input);
+    expect(decodeComputerSelectTextInput(input)).toEqual(input);
+    expect(decodeComputerSelectTextInput({ label: "Display", start: 4, length: 0 })).toEqual({
+      label: "Display",
+      start: 4,
+      length: 0,
+    });
     expect(
-      Schema.decodeUnknownSync(ComputerSelectTextInput)({ label: "Display", start: 4, length: 0 }),
-    ).toEqual({ label: "Display", start: 4, length: 0 });
-    expect(
-      Schema.decodeUnknownSync(ComputerSelectTextInput)({
+      decodeComputerSelectTextInput({
         label: "Display",
         start: 0,
         length: COMPUTER_SELECT_TEXT_RANGE_MAX,
@@ -281,7 +293,7 @@ describe("ComputerSelectTextInput", () => {
       { label: "Display", start: 0, length: COMPUTER_SELECT_TEXT_RANGE_MAX + 1 },
       { label: "Display", start: COMPUTER_SELECT_TEXT_RANGE_MAX + 1, length: 0 },
     ]) {
-      expect(() => Schema.decodeUnknownSync(ComputerSelectTextInput)(bad)).toThrow();
+      expect(() => decodeComputerSelectTextInput(bad)).toThrow();
     }
   });
 });
@@ -297,10 +309,10 @@ describe("Computer recovery RPC metadata", () => {
       windowReason: "off_space",
       focusChangedDuringLaunch: true,
     };
-    const wire = Schema.encodeUnknownSync(ComputerLaunchAppResult)(result);
-    expect(Schema.decodeUnknownSync(ComputerLaunchAppResult)(wire)).toEqual(result);
+    const wire = encodeComputerLaunchAppResult(result);
+    expect(decodeComputerLaunchAppResult(wire)).toEqual(result);
     expect(
-      Schema.decodeUnknownSync(ComputerLaunchAppResult)({
+      decodeComputerLaunchAppResult({
         computerId: "desktop",
         app: "Helium",
         window: null,
@@ -309,13 +321,9 @@ describe("Computer recovery RPC metadata", () => {
   });
   it("retains the affected app in a pause and refuses invalid process identities", () => {
     const pause = { windowId: "cua:42:7", pid: 42, message: "Observe again" };
-    expect(
-      Schema.decodeUnknownSync(ComputerInputPause)(
-        Schema.encodeUnknownSync(ComputerInputPause)(pause),
-      ),
-    ).toEqual(pause);
+    expect(decodeComputerInputPause(encodeComputerInputPause(pause))).toEqual(pause);
     for (const pid of [0, -1, 1.5, 0x80000000]) {
-      expect(() => Schema.decodeUnknownSync(ComputerInputPause)({ ...pause, pid })).toThrow();
+      expect(() => decodeComputerInputPause({ ...pause, pid })).toThrow();
     }
   });
 });

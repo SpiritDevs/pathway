@@ -1,27 +1,23 @@
-export type DeepPartial<T> = T extends readonly (infer Item)[]
-  ? readonly DeepPartial<Item>[]
+import * as P from "effect/Predicate";
+
+export type DeepPartial<T> = T extends readonly (infer U)[]
+  ? readonly DeepPartial<U>[]
   : T extends object
-    ? { readonly [Key in keyof T]?: DeepPartial<T[Key]> }
+    ? { [K in keyof T]?: DeepPartial<T[K]> }
     : T;
 
-const PROTOTYPE_MUTATION_KEYS = new Set(["__proto__", "constructor", "prototype"]);
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-export function deepMerge<T>(base: T, patch: DeepPartial<T>): T {
-  if (!isPlainRecord(base) || !isPlainRecord(patch)) {
+export function deepMerge<T extends Record<string, unknown>>(current: T, patch: DeepPartial<T>): T {
+  if (!P.isObject(current) || !P.isObject(patch)) {
     return patch as T;
   }
 
-  const next: Record<string, unknown> = { ...base };
+  const next = { ...current } as Record<string, unknown>;
   for (const [key, value] of Object.entries(patch)) {
-    if (value === undefined || PROTOTYPE_MUTATION_KEYS.has(key)) {
-      continue;
-    }
-    const current = next[key];
-    next[key] = isPlainRecord(current) && isPlainRecord(value) ? deepMerge(current, value) : value;
+    if (value === undefined) continue;
+
+    const existing = next[key];
+    next[key] = P.isObject(existing) && P.isObject(value) ? deepMerge(existing, value) : value;
   }
+
   return next as T;
 }

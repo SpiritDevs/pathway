@@ -10,7 +10,7 @@
  *   2. A **successful** result whose availability is `permission-required` — a
  *      perception read that completed and reported the desktop cannot be driven.
  *      This is the shape the user hit: the agent received a well-formed answer
- *      saying "Synara needs Accessibility", no card appeared, and the model was
+ *      saying "Pathway needs Accessibility", no card appeared, and the model was
  *      left to explain TCC in prose.
  *   3. A grant the backend knows is missing while nothing has failed yet —
  *      Screen Recording, which leaves the desktop driveable but unseeable, so
@@ -22,17 +22,21 @@
  * keystroke, arguments the desktop refused — from raising a card the user cannot
  * act on.
  *
- * @module computerSetupSignal
+ * @module computer/computerSetupSignal
  */
 import type {
   ComputerAvailability,
   ComputerBuildSignature,
   ComputerPermission,
-} from "@synara/contracts";
-import { computerGrantsBlockControl, listComputerPermissions } from "@synara/shared/computerGrants";
-import { SYNARA_DESKTOP_BUNDLE_ID_ENV } from "@synara/shared/desktopIdentity";
+} from "@spiritdevs/contracts";
+import {
+  computerGrantsBlockControl,
+  listComputerPermissions,
+  PATHWAY_DESKTOP_BUNDLE_ID_ENV,
+} from "@spiritdevs/shared/computerGrants";
+import * as Schema from "effect/Schema";
 
-import { ComputerBackendError } from "./ComputerBackend.ts";
+import { ComputerBackendError } from "./computerErrors.ts";
 
 /**
  * The app the OS files this server's TCC decisions against, or undefined when
@@ -41,15 +45,15 @@ import { ComputerBackendError } from "./ComputerBackend.ts";
  * Read here rather than passed down from the backend because it is a property
  * of the *process*, not of a tool call or a helper: the desktop shell sets it on
  * the environment it starts the server in, and a server started any other way —
- * a bare `bun run`, a remote host — genuinely has no responsible app. Its
+ * a bare `npx @spiritdevs/pathway`, a remote host — genuinely has no responsible app. Its
  * absence is the meaningful case, and it is why the card's recovery advice is
  * withheld rather than printed against a guessed identifier that would reset a
- * different Synara's grants.
+ * different Pathway's grants.
  */
 export function responsibleDesktopBundleId(
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): string | undefined {
-  const value = env[SYNARA_DESKTOP_BUNDLE_ID_ENV]?.trim();
+  const value = env[PATHWAY_DESKTOP_BUNDLE_ID_ENV]?.trim();
   return value ? value : undefined;
 }
 
@@ -83,7 +87,7 @@ export interface ComputerSetupSignal {
   /**
    * The app the missing grant is filed against, when this server has one behind
    * it. Carried with the signal rather than resolved by the card because only
-   * the server knows which flavor of Synara is running, and the card's advice
+   * the server knows which flavor of Pathway is running, and the card's advice
    * has to name that one or none at all.
    */
   readonly bundleId?: string;
@@ -94,10 +98,12 @@ export interface ComputerSetupSignal {
  * misbehaving. Unwraps one level of `cause` so a failure that travelled inside
  * another error is still recognised.
  */
+const isComputerBackendError = Schema.is(ComputerBackendError);
+
 export function computerFailureNeedsSetup(error: unknown): boolean {
-  if (error instanceof ComputerBackendError) return error.setupRequired;
+  if (isComputerBackendError(error)) return error.setupRequired;
   const cause: unknown = (error as { readonly cause?: unknown } | null)?.cause;
-  return cause instanceof ComputerBackendError && cause.setupRequired;
+  return isComputerBackendError(cause) && cause.setupRequired;
 }
 
 /**
@@ -168,7 +174,7 @@ export function computerSetupSignal(input: {
 export function computerSetupToolNote(signal: ComputerSetupSignal): string {
   const labels = listComputerPermissions(signal.missing);
   const needed = labels.length > 0 ? labels : "a macOS privacy permission";
-  const asked = `Synara needs ${needed} and has shown the user a setup card with a guided flow.`;
+  const asked = `Pathway needs ${needed} and has shown the user a setup card with a guided flow.`;
   if (signal.blocking) {
     return (
       `${asked} Nothing on the desktop can be driven without it. ` +

@@ -9,12 +9,15 @@
 import {
   RuntimeMode,
   IsoDateTime,
-  OrchestrationSessionStatus,
+  ProviderInstanceId,
   ThreadId,
   TurnId,
-} from "@synara/contracts";
-import { Option, Schema, ServiceMap } from "effect";
-import type { Effect } from "effect";
+} from "@spiritdevs/contracts";
+import { OrchestrationSessionStatus } from "@spiritdevs/contracts/legacy-orchestration";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import * as Context from "effect/Context";
+import type * as Effect from "effect/Effect";
 
 import type { ProjectionRepositoryError } from "../Errors.ts";
 
@@ -22,6 +25,7 @@ export const ProjectionThreadSession = Schema.Struct({
   threadId: ThreadId,
   status: OrchestrationSessionStatus,
   providerName: Schema.NullOr(Schema.String),
+  providerInstanceId: Schema.NullOr(ProviderInstanceId),
   runtimeMode: RuntimeMode,
   activeTurnId: Schema.NullOr(TurnId),
   lastError: Schema.NullOr(Schema.String),
@@ -68,7 +72,9 @@ export interface ProjectionThreadSessionRepositoryShape {
 /**
  * ProjectionThreadSessionRepository - Service tag for thread-session persistence.
  */
-export class ProjectionThreadSessionRepository extends ServiceMap.Service<
+export class ProjectionThreadSessionRepository extends Context.Service<
   ProjectionThreadSessionRepository,
   ProjectionThreadSessionRepositoryShape
->()("synara/persistence/Services/ProjectionThreadSessions/ProjectionThreadSessionRepository") {}
+>()(
+  "@spiritdevs/pathway/persistence/Services/ProjectionThreadSessions/ProjectionThreadSessionRepository",
+) {}

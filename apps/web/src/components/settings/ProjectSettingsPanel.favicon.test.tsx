@@ -1,0 +1,775 @@
+import type { ReactElement } from "react";
+import {
+  DEFAULT_UNIFIED_SETTINGS,
+  EnvironmentId,
+  ProjectId,
+  type ProjectEntry,
+} from "@spiritdevs/contracts";
+import { companyEntityCodec } from "@spiritdevs/client-runtime/sync";
+import { CompanyId } from "@spiritdevs/contracts/company";
+import * as Cause from "effect/Cause";
+import * as Option from "effect/Option";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+
+import { visitElements } from "../../test/reactElementTree";
+import { reactHookHarness as hooks } from "../../test/reactHookHarness";
+
+const atoms = vi.hoisted(() => ({
+  projectUpdate: Symbol("projectUpdate"),
+  projectDelete: Symbol("projectDelete"),
+  upsertKeybinding: Symbol("upsertKeybinding"),
+  removeKeybinding: Symbol("removeKeybinding"),
+  providers: Symbol("providers"),
+  companies: Symbol("companies"),
+  keybindings: Symbol("keybindings"),
+}));
+
+const commands = vi.hoisted(() => ({
+  updateProject: vi.fn(),
+  deleteProject: vi.fn(),
+  upsertKeybinding: vi.fn(),
+  removeKeybinding: vi.fn(),
+}));
+
+const pickerState = vi.hoisted(() => ({
+  entries: [
+    {
+      kind: "file",
+      path: "brand assets/nested/project icon.svg",
+    },
+  ] as ProjectEntry[],
+}));
+
+const toastState = vi.hoisted(() => ({ add: vi.fn() }));
+const threadState = vi.hoisted(() => ({
+  threads: [] as Array<{ environmentId: EnvironmentId; projectId: ProjectId }>,
+}));
+const dialogState = vi.hoisted(() => ({ confirm: vi.fn() }));
+const cloudState = vi.hoisted(() => ({
+  deleteCompanyProject: vi.fn(),
+  setPreferredEnvironmentBinding: vi.fn(),
+}));
+const companyState = vi.hoisted(() => ({
+  companies: [] as Array<{
+    id: CompanyId;
+    name: string;
+    workspaceKind: "personal" | "organization";
+    issueKeyPrefix: string;
+  }>,
+}));
+
+vi.mock("react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react")>();
+  const { reactHookHarness } = await import("../../test/reactHookHarness");
+  return {
+    ...actual,
+    useCallback: reactHookHarness.useCallback,
+    useMemo: reactHookHarness.useMemo,
+    useRef: reactHookHarness.useRef,
+    useState: reactHookHarness.useState,
+  };
+});
+
+vi.mock("react/compiler-runtime", async () => {
+  const { reactHookHarness } = await import("../../test/reactHookHarness");
+  return { c: reactHookHarness.useMemoCache };
+});
+
+vi.mock("@effect/atom-react", () => ({
+  useAtomValue: (atom: symbol) => {
+    if (atom === atoms.providers) return [];
+    if (atom === atoms.companies) return companyState.companies;
+    return null;
+  },
+}));
+
+vi.mock("../../cloud/activeCompany", () => ({ companyListAtom: atoms.companies }));
+
+vi.mock("@tanstack/react-router", () => ({
+  Link: ({ children }: { children?: unknown }) => children,
+  useCanGoBack: () => false,
+  useNavigate: () => vi.fn(),
+}));
+
+vi.mock("../../env", () => ({ isElectron: false }));
+vi.mock("../../hooks/useSettings", () => ({
+  useClientSettings: () => ({
+    sidebarProjectGroupingMode: "repository",
+    sidebarProjectGroupingOverrides: {},
+    sidebarProjectGroupAssignments: {},
+  }),
+  usePrimarySettings: () => DEFAULT_UNIFIED_SETTINGS,
+  useUpdateClientSettings: () => vi.fn(),
+}));
+vi.mock("../../hooks/useCopyToClipboard", () => ({
+  useCopyToClipboard: () => ({ copyToClipboard: vi.fn() }),
+}));
+vi.mock("../../hooks/usePathwayProjectFileScripts", () => ({
+  usePathwayProjectFileState: () => ({ file: null, scripts: [] }),
+}));
+vi.mock("../../localApi", () => ({
+  readLocalApi: () => ({ dialogs: { confirm: dialogState.confirm } }),
+}));
+vi.mock("../../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
+vi.mock("../../state/entities", () => ({
+  useProjects: () => [],
+  useThreadShells: () => threadState.threads,
+}));
+vi.mock("../../state/environments", () => ({
+  useEnvironments: () => ({ environments: [], presentationById: new Map() }),
+  usePrimaryEnvironmentId: () => EnvironmentId.make("local"),
+}));
+vi.mock("../../state/projects", () => ({
+  projectEnvironment: {
+    update: atoms.projectUpdate,
+    delete: atoms.projectDelete,
+  },
+}));
+vi.mock("../../state/server", () => ({
+  primaryServerKeybindingsAtom: atoms.keybindings,
+  primaryServerProvidersAtom: atoms.providers,
+  serverEnvironment: {
+    configValueAtom: () => Symbol("config"),
+    upsertKeybinding: atoms.upsertKeybinding,
+    removeKeybinding: atoms.removeKeybinding,
+  },
+}));
+vi.mock("../../state/use-atom-command", () => ({
+  useAtomCommand: (atom: symbol) => {
+    if (atom === atoms.projectUpdate) return commands.updateProject;
+    if (atom === atoms.projectDelete) return commands.deleteProject;
+    if (atom === atoms.upsertKeybinding) return commands.upsertKeybinding;
+    return commands.removeKeybinding;
+  },
+}));
+vi.mock("../files/projectFilesQueryState", () => ({
+  useProjectFilePickerQuery: () => ({
+    entries: pickerState.entries,
+    error: null,
+    isPending: false,
+    matchedQuery: "",
+  }),
+}));
+vi.mock("../ui/toast", () => ({
+  stackedThreadToast: (input: unknown) => input,
+  toastManager: toastState,
+}));
+
+import { buildSidebarProjectSnapshots } from "../../sidebarProjectGrouping";
+import type { Project } from "../../types";
+import { ProjectFavicon } from "../ProjectFavicon";
+import { MoveProjectWizard } from "../projects/MoveProjectWizard";
+import { Button } from "../ui/button";
+import { MenuItem } from "../ui/menu";
+import { Select, SelectValue } from "../ui/select";
+import { Sheet } from "../ui/sheet";
+import { ProjectFaviconPickerDialog } from "./ProjectFaviconPickerDialog";
+import { ProjectAlertOverride } from "./NotificationsSettings";
+import { CheckoutlessProjectSettings, ProjectDetail } from "./ProjectSettingsPanel";
+
+const localEnvironmentId = EnvironmentId.make("local");
+const remoteEnvironmentId = EnvironmentId.make("remote");
+const selectedPath = "brand assets/nested/project icon.svg";
+
+function makeProject(
+  environmentId: EnvironmentId,
+  id: string,
+  workspaceRoot: string,
+  faviconPath: string | null,
+): Project {
+  return {
+    environmentId,
+    id: ProjectId.make(id),
+    title: "Pathway",
+    workspaceRoot,
+    repositoryIdentity: {
+      canonicalKey: "github.com/spiritdevs/pathway",
+      locator: {
+        source: "git-remote",
+        remoteName: "origin",
+        remoteUrl: "https://github.com/spiritdevs/pathway.git",
+      },
+      provider: "github",
+      owner: "spiritdevs",
+      name: "pathway",
+      displayName: "Pathway",
+    },
+    faviconPath,
+    defaultModelSelection: null,
+    scripts: [],
+    createdAt: "2026-08-13T00:00:00.000Z",
+    updatedAt: "2026-08-13T00:00:00.000Z",
+  };
+}
+
+function makeGroup(faviconPath: string | null, includeRemote = true) {
+  return buildSidebarProjectSnapshots({
+    projects: [
+      makeProject(localEnvironmentId, "project-local", "/workspace/pathway", faviconPath),
+      ...(includeRemote
+        ? [makeProject(remoteEnvironmentId, "project-remote", "/remote/pathway", faviconPath)]
+        : []),
+    ],
+    settings: {
+      sidebarProjectGroupingMode: "repository",
+      sidebarProjectGroupingOverrides: {},
+      sidebarProjectGroupAssignments: {},
+    },
+    primaryEnvironmentId: localEnvironmentId,
+    resolveEnvironmentLabel: (environmentId) =>
+      environmentId === localEnvironmentId ? "This machine" : "Remote Mac",
+  })[0]!;
+}
+
+function companyEntity(
+  kind: "cloudProject" | "environmentBinding" | "environmentRegistration",
+  value: unknown,
+) {
+  const codec = companyEntityCodec(kind);
+  if (codec === null) throw new Error(`Missing ${kind} codec`);
+  return Option.getOrThrow(codec.decode(value));
+}
+
+function renderDetail(
+  faviconPath: string | null,
+  includeRemote = true,
+): ReactElement<Record<string, unknown>> {
+  hooks.beginRender();
+  return ProjectDetail({
+    group: makeGroup(faviconPath, includeRemote),
+  }) as ReactElement<Record<string, unknown>>;
+}
+
+async function flushPromises(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+describe("Project settings favicon selection", () => {
+  beforeEach(() => {
+    hooks.reset();
+    toastState.add.mockReset();
+    commands.updateProject.mockReset().mockResolvedValue({ _tag: "Success", value: undefined });
+    commands.deleteProject.mockReset().mockResolvedValue({ _tag: "Success", value: undefined });
+    commands.upsertKeybinding.mockReset().mockResolvedValue({
+      _tag: "Success",
+      value: undefined,
+    });
+    commands.removeKeybinding.mockReset().mockResolvedValue({
+      _tag: "Success",
+      value: undefined,
+    });
+    threadState.threads = [
+      { environmentId: localEnvironmentId, projectId: ProjectId.make("project-local") },
+      { environmentId: localEnvironmentId, projectId: ProjectId.make("project-local") },
+    ];
+    dialogState.confirm.mockReset().mockResolvedValue(true);
+    cloudState.deleteCompanyProject.mockReset().mockResolvedValue({ deleted: true });
+    cloudState.setPreferredEnvironmentBinding.mockReset().mockResolvedValue(undefined);
+    companyState.companies = [];
+  });
+
+  it("uses the repository policy when the representative has lost its identity", () => {
+    const group = makeGroup(null);
+    const staleGroup = {
+      ...group,
+      memberProjects: group.memberProjects.map((member) => {
+        if (member.environmentId !== group.environmentId || member.id !== group.id) return member;
+        const { repositoryIdentity: _identity, ...stale } = member;
+        return stale;
+      }),
+    };
+    hooks.beginRender();
+    const tree = ProjectDetail({ group: staleGroup }) as ReactElement<Record<string, unknown>>;
+    const override = visitElements(tree, (element) => element.type === ProjectAlertOverride);
+    expect(override?.props.scopeKey).toBe("github.com/spiritdevs/pathway");
+  });
+
+  it("fans the selected relative path out to every member and renders projected state", async () => {
+    const initial = renderDetail(null);
+    const chooseButton = visitElements(
+      initial,
+      (element) => element.props["aria-label"] === "Choose a project icon file",
+    );
+    expect(chooseButton).not.toBeNull();
+    (chooseButton?.props.onClick as (() => void) | undefined)?.();
+
+    const picker = visitElements(
+      renderDetail(null),
+      (element) => element.type === ProjectFaviconPickerDialog && element.props.open === true,
+    );
+    expect(picker).not.toBeNull();
+    if (!picker) throw new Error("Expected the project favicon picker to open.");
+    await (picker.props.onSelect as (path: string) => Promise<void>)(selectedPath);
+
+    expect(commands.updateProject.mock.calls).toEqual([
+      [
+        {
+          environmentId: localEnvironmentId,
+          input: { projectId: ProjectId.make("project-local"), faviconPath: selectedPath },
+        },
+      ],
+      [
+        {
+          environmentId: remoteEnvironmentId,
+          input: { projectId: ProjectId.make("project-remote"), faviconPath: selectedPath },
+        },
+      ],
+    ]);
+
+    const projected = renderDetail(selectedPath);
+    const projectIconRow = visitElements(
+      projected,
+      (element) => element.props.title === "Project icon",
+    );
+    expect(projectIconRow?.props.description).toBe(selectedPath);
+    expect(
+      visitElements(
+        projected,
+        (element) => element.type === ProjectFavicon && element.props.faviconPath === selectedPath,
+      ),
+    ).not.toBeNull();
+  });
+
+  it("persists a repository-basename rename as an explicit group title", async () => {
+    const detail = renderDetail(null);
+    const nameInput = visitElements(
+      detail,
+      (element) => element.props["aria-label"] === "Project name",
+    );
+    expect(nameInput).not.toBeNull();
+
+    (nameInput?.props.onChange as (() => void) | undefined)?.();
+    (nameInput?.props.onBlur as ((event: unknown) => void) | undefined)?.({
+      currentTarget: { value: "pathway" },
+    });
+    await flushPromises();
+
+    expect(commands.updateProject.mock.calls).toEqual([
+      [
+        {
+          environmentId: localEnvironmentId,
+          input: {
+            projectId: ProjectId.make("project-local"),
+            title: "pathway",
+            titleIsCustom: true,
+          },
+        },
+      ],
+      [
+        {
+          environmentId: remoteEnvironmentId,
+          input: {
+            projectId: ProjectId.make("project-remote"),
+            title: "pathway",
+            titleIsCustom: true,
+          },
+        },
+      ],
+    ]);
+  });
+
+  it("keeps the prior projected icon and reports a failed grouped save", async () => {
+    commands.updateProject.mockResolvedValueOnce({
+      _tag: "Failure",
+      cause: Cause.fail(new Error("Unsupported or missing workspace image")),
+    });
+    const priorPath = "branding/previous.png";
+    const detail = renderDetail(priorPath);
+    const picker = visitElements(detail, (element) => element.type === ProjectFaviconPickerDialog);
+    if (!picker) throw new Error("Expected the project favicon picker to render.");
+    await (picker.props.onSelect as (path: string) => Promise<void>)(selectedPath);
+
+    expect(commands.updateProject).toHaveBeenCalledTimes(1);
+    expect(toastState.add).toHaveBeenCalledOnce();
+    expect(toastState.add.mock.calls[0]?.[0]).toMatchObject({
+      type: "error",
+      title: "Failed to update project icon on This machine",
+    });
+    expect(
+      visitElements(
+        renderDetail(priorPath),
+        (element) => element.type === ProjectFavicon && element.props.faviconPath === priorPath,
+      ),
+    ).not.toBeNull();
+  });
+
+  it("shows thread counts on connections and protects the final connection", () => {
+    const grouped = renderDetail(null);
+    expect(
+      visitElements(grouped, (element) => element.props.children === "2 threads"),
+    ).not.toBeNull();
+    const editConnection = visitElements(
+      grouped,
+      (element) =>
+        element.type === MenuItem &&
+        Array.isArray(element.props.children) &&
+        element.props.children.includes("Edit"),
+    );
+    expect(editConnection).not.toBeNull();
+    expect(
+      visitElements(grouped, (element) =>
+        String(element.props["aria-label"] ?? "").startsWith("Configure "),
+      ),
+    ).toBeNull();
+    (editConnection?.props.onClick as (() => void) | undefined)?.();
+    expect(
+      visitElements(
+        renderDetail(null),
+        (element) => element.type === Sheet && element.props.open === true,
+      ),
+    ).not.toBeNull();
+    const removable = visitElements(
+      grouped,
+      (element) =>
+        element.type === MenuItem &&
+        Array.isArray(element.props.children) &&
+        element.props.children.includes("Remove connection"),
+    );
+    expect(removable?.props.disabled).toBe(false);
+
+    hooks.reset();
+    const onlyConnection = renderDetail(null, false);
+    const protectedRemoval = visitElements(
+      onlyConnection,
+      (element) =>
+        element.type === MenuItem &&
+        Array.isArray(element.props.children) &&
+        element.props.children.includes("Remove connection"),
+    );
+    expect(protectedRemoval?.props.disabled).toBe(true);
+  });
+
+  it.each([true, false])(
+    "only deletes a shared project when confirmation is %s",
+    async (confirmed) => {
+      dialogState.confirm.mockResolvedValue(confirmed);
+      const companyA = CompanyId.make("company-a");
+      const companyB = CompanyId.make("company-b");
+      const group = makeGroup(null);
+      hooks.beginRender();
+      const detail = ProjectDetail({
+        group,
+        workspaceProject: {
+          projectKey: group.projectKey,
+          displayName: group.displayName,
+          companyIds: [companyA, companyB],
+          group,
+          checkoutCount: group.memberProjects.length,
+          cloudProjectId: "cloud-pathway",
+        },
+        companyContext: {
+          companyId: companyA,
+          replica: null,
+          environmentControl: {
+            deleteCompanyProject: cloudState.deleteCompanyProject,
+          } as never,
+        },
+      }) as ReactElement<Record<string, unknown>>;
+      const removeProject = visitElements(
+        detail,
+        (element) =>
+          element.type === Button &&
+          Array.isArray(element.props.children) &&
+          element.props.children.includes("Remove all entries"),
+      );
+      expect(removeProject).not.toBeNull();
+      (removeProject?.props.onClick as (() => void) | undefined)?.();
+      await flushPromises();
+      await flushPromises();
+
+      expect(dialogState.confirm).toHaveBeenCalledWith(
+        expect.stringContaining("This action cannot be undone."),
+        { variant: "destructive" },
+      );
+      expect(cloudState.deleteCompanyProject.mock.calls).toEqual(
+        confirmed
+          ? [
+              [{ companyId: companyA, cloudProjectId: "cloud-pathway" }],
+              [{ companyId: companyB, cloudProjectId: "cloud-pathway" }],
+            ]
+          : [],
+      );
+    },
+  );
+
+  it("offers each connected environment as the new-thread default", async () => {
+    const companyId = CompanyId.make("company-a");
+    const group = makeGroup(null);
+    const replicaValues = [
+      companyEntity("cloudProject", {
+        id: "cloud-pathway",
+        name: "Pathway",
+        description: "",
+        teamIds: [],
+        defaultWorkflowOwner: null,
+        preferredBindingId: "binding-local",
+        archivedAt: null,
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      }),
+      companyEntity("environmentBinding", {
+        id: "binding-local",
+        cloudProjectId: "cloud-pathway",
+        environmentId: localEnvironmentId,
+        localProjectId: "project-local",
+        localWorkspaceRoot: "/workspace/pathway",
+        status: "active",
+        lastSeenAt: 2_000,
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      }),
+      companyEntity("environmentBinding", {
+        id: "binding-remote",
+        cloudProjectId: "cloud-pathway",
+        environmentId: remoteEnvironmentId,
+        localProjectId: "project-remote",
+        localWorkspaceRoot: "/remote/pathway",
+        status: "active",
+        lastSeenAt: 2_000,
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      }),
+    ];
+
+    hooks.beginRender();
+    const detail = ProjectDetail({
+      group,
+      workspaceProject: {
+        projectKey: group.projectKey,
+        displayName: group.displayName,
+        companyIds: [companyId],
+        group,
+        checkoutCount: group.memberProjects.length,
+        cloudProjectId: "cloud-pathway",
+      },
+      companyContext: {
+        companyId,
+        replica: { view: { values: () => replicaValues } } as never,
+        environmentControl: {
+          setPreferredEnvironmentBinding: cloudState.setPreferredEnvironmentBinding,
+        } as never,
+      },
+    }) as ReactElement<Record<string, unknown>>;
+
+    const currentDefault = visitElements(
+      detail,
+      (element) =>
+        element.type === MenuItem &&
+        Array.isArray(element.props.children) &&
+        element.props.children.includes("New-thread default"),
+    );
+    expect(currentDefault?.props.disabled).toBe(true);
+
+    const chooseRemote = visitElements(
+      detail,
+      (element) =>
+        element.type === MenuItem &&
+        Array.isArray(element.props.children) &&
+        element.props.children.includes("Set as new-thread default"),
+    );
+    expect(chooseRemote?.props.disabled).toBe(false);
+    (chooseRemote?.props.onClick as (() => void) | undefined)?.();
+    await flushPromises();
+
+    expect(cloudState.setPreferredEnvironmentBinding).toHaveBeenCalledWith({
+      companyId,
+      cloudProjectId: "cloud-pathway",
+      bindingId: "binding-remote",
+    });
+  });
+
+  it("lets a project with no checkout be removed manually", async () => {
+    const companyId = CompanyId.make("company-a");
+    hooks.beginRender();
+    const settings = CheckoutlessProjectSettings({
+      project: {
+        projectKey: "cloud:cloud-pathway",
+        displayName: "Orphan Pathway",
+        companyIds: [companyId],
+        group: null,
+        checkoutCount: 0,
+        cloudProjectId: "cloud-pathway",
+      },
+      environmentControl: {
+        deleteCompanyProject: cloudState.deleteCompanyProject,
+      } as never,
+    }) as ReactElement<Record<string, unknown>>;
+    const removeProject = visitElements(
+      settings,
+      (element) =>
+        element.type === Button &&
+        Array.isArray(element.props.children) &&
+        element.props.children.includes("Remove project"),
+    );
+    expect(removeProject).not.toBeNull();
+    (removeProject?.props.onClick as (() => void) | undefined)?.();
+    await flushPromises();
+    await flushPromises();
+
+    expect(cloudState.deleteCompanyProject).toHaveBeenCalledWith({
+      companyId,
+      cloudProjectId: "cloud-pathway",
+    });
+  });
+
+  it("asks every owning workspace even after one of them fails", async () => {
+    const companyA = CompanyId.make("company-a");
+    const companyB = CompanyId.make("company-b");
+    cloudState.deleteCompanyProject
+      .mockReset()
+      .mockRejectedValueOnce(new Error("You cannot manage projects here."))
+      .mockResolvedValue({ deleted: true });
+    hooks.beginRender();
+    const settings = CheckoutlessProjectSettings({
+      project: {
+        projectKey: "cloud:cloud-pathway",
+        displayName: "Orphan Pathway",
+        companyIds: [companyA, companyB],
+        group: null,
+        checkoutCount: 0,
+        cloudProjectId: "cloud-pathway",
+      },
+      environmentControl: {
+        deleteCompanyProject: cloudState.deleteCompanyProject,
+      } as never,
+    }) as ReactElement<Record<string, unknown>>;
+    const removeProject = visitElements(
+      settings,
+      (element) =>
+        element.type === Button &&
+        Array.isArray(element.props.children) &&
+        element.props.children.includes("Remove project"),
+    );
+    (removeProject?.props.onClick as (() => void) | undefined)?.();
+    await flushPromises();
+    await flushPromises();
+
+    // The second owner is the one still holding the project. Aborting on the first error is what
+    // left it on screen after the user removed it.
+    expect(cloudState.deleteCompanyProject.mock.calls).toEqual([
+      [{ companyId: companyA, cloudProjectId: "cloud-pathway" }],
+      [{ companyId: companyB, cloudProjectId: "cloud-pathway" }],
+    ]);
+    expect(toastState.add).toHaveBeenCalledOnce();
+    expect(toastState.add.mock.calls[0]?.[0]).toMatchObject({
+      description: "You cannot manage projects here.",
+    });
+  });
+
+  it("reports a removal that deleted nothing instead of reporting success", async () => {
+    const companyId = CompanyId.make("company-a");
+    cloudState.deleteCompanyProject.mockReset().mockResolvedValue({ deleted: false });
+    hooks.beginRender();
+    const settings = CheckoutlessProjectSettings({
+      project: {
+        projectKey: "cloud:cloud-pathway",
+        displayName: "Orphan Pathway",
+        companyIds: [companyId],
+        group: null,
+        checkoutCount: 0,
+        cloudProjectId: "cloud-pathway",
+      },
+      environmentControl: {
+        deleteCompanyProject: cloudState.deleteCompanyProject,
+      } as never,
+    }) as ReactElement<Record<string, unknown>>;
+    const removeProject = visitElements(
+      settings,
+      (element) =>
+        element.type === Button &&
+        Array.isArray(element.props.children) &&
+        element.props.children.includes("Remove project"),
+    );
+    (removeProject?.props.onClick as (() => void) | undefined)?.();
+    await flushPromises();
+    await flushPromises();
+
+    expect(toastState.add).toHaveBeenCalledOnce();
+    expect(toastState.add.mock.calls[0]?.[0]).toMatchObject({
+      title: 'Failed to remove "Orphan Pathway"',
+    });
+  });
+
+  it("opens the migration warning flow when the project company changes", () => {
+    const companyA = CompanyId.make("company-a");
+    const companyB = CompanyId.make("company-b");
+    companyState.companies = [
+      {
+        id: companyA,
+        name: "Source Co",
+        workspaceKind: "organization",
+        issueKeyPrefix: "SRC",
+      },
+      {
+        id: companyB,
+        name: "Target Co",
+        workspaceKind: "organization",
+        issueKeyPrefix: "TGT",
+      },
+    ];
+    const group = makeGroup(null);
+    const renderCompanyProject = () => {
+      hooks.beginRender();
+      return ProjectDetail({
+        group,
+        workspaceProject: {
+          projectKey: group.projectKey,
+          displayName: group.displayName,
+          companyIds: [companyA],
+          group,
+          checkoutCount: group.memberProjects.length,
+          cloudProjectId: "cloud-pathway",
+        },
+        companyContext: { companyId: companyA, replica: null, environmentControl: {} as never },
+      }) as ReactElement<Record<string, unknown>>;
+    };
+
+    const companySelect = visitElements(
+      renderCompanyProject(),
+      (element) => element.type === Select && element.props.value === companyA,
+    );
+    expect(companySelect).not.toBeNull();
+    const companySelectValue = visitElements(
+      renderCompanyProject(),
+      (element) => element.type === SelectValue && element.props.placeholder === "No company",
+    );
+    expect(companySelectValue?.props.children).toBe("Source Co");
+    (companySelect?.props.onValueChange as ((value: CompanyId) => void) | undefined)?.(companyB);
+
+    const wizard = visitElements(
+      renderCompanyProject(),
+      (element) => element.type === MoveProjectWizard,
+    );
+    expect(wizard?.props).toMatchObject({
+      initialDestination: companyB,
+      open: true,
+    });
+  });
+
+  it("uses one retained picker action for pointer and Enter activation", async () => {
+    hooks.reset();
+    const onOpenChange = vi.fn();
+    const onSelect = vi.fn().mockResolvedValue(undefined);
+    hooks.beginRender();
+    const dialog = ProjectFaviconPickerDialog({
+      cwd: "/workspace/pathway",
+      environmentId: localEnvironmentId,
+      onOpenChange,
+      onSelect,
+      open: true,
+      projectName: "Pathway",
+    }) as ReactElement<Record<string, unknown>>;
+    const results = visitElements(
+      dialog,
+      (element) => typeof element.props.onExecuteItem === "function",
+    );
+    if (!results) throw new Error("Expected picker results to render.");
+    const item = (results.props.groups as Array<{ items: unknown[] }>)[0]?.items[0];
+    (results.props.onExecuteItem as (selected: unknown) => void)(item);
+    await flushPromises();
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(onSelect).toHaveBeenCalledWith(selectedPath);
+  });
+});

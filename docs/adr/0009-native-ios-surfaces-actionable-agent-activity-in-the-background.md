@@ -1,0 +1,3 @@
+# Native iOS surfaces actionable agent activity in the background
+
+The native iOS client registers through Pathway Connect for mobile agent activity and notifies when a thread needs approval or user input, when a turn completes or fails, and when connection loss prevents an awaited action. An active turn may use a Live Activity so progress remains visible while the app is backgrounded; routine streaming deltas, reasoning, tool calls, and command events remain silent. Foregrounding or opening a notification reconnects to the owning environment and replaces notification or cached state with the authoritative thread projection.

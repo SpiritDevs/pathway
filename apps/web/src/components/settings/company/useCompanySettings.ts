@@ -1,0 +1,107 @@
+import { useAuth } from "@clerk/react";
+import { useAtom, useAtomValue } from "@effect/atom-react";
+import type { CompanyId } from "@spiritdevs/contracts/company";
+import { useEffect, useMemo } from "react";
+
+import { companyListAtom } from "../../../cloud/activeCompany";
+import { makeCompanyAdminClient, type CompanyAdminClient } from "../../../cloud/companyAdmin";
+import {
+  companyRegistryMembershipIdsAtom,
+  companyRegistryReplicasAtom,
+} from "../../../cloud/companyRegistryReplica";
+import { useAuthenticatedConvexClient } from "../../../cloud/useAuthenticatedConvexClient";
+import {
+  hasMultipleCompanies,
+  organizationCompanies,
+  personalCompany,
+  resolveSettingsContentCompanyId,
+  resolveSettingsCompanyId,
+  settingsCompanyScopeAtom,
+} from "../../../cloud/settingsCompany";
+import {
+  companyDirectoryFromReplicaValues,
+  deriveCurrentMemberPermissions,
+} from "./companySettings.logic";
+
+export function useCompanySettings() {
+  const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
+  const companies = useAtomValue(companyListAtom);
+  const [settingsCompanyScope, setSettingsCompanyScope] = useAtom(settingsCompanyScopeAtom);
+  const companyId = resolveSettingsCompanyId({
+    companies,
+    scope: settingsCompanyScope,
+  });
+  const contentCompanyId = resolveSettingsContentCompanyId({
+    companies,
+    scope: settingsCompanyScope,
+  });
+  const activeCompany = companies.find((company) => company.id === companyId) ?? null;
+  const replicas = useAtomValue(companyRegistryReplicasAtom);
+  const membershipIds = useAtomValue(companyRegistryMembershipIdsAtom);
+  const replica = companyId === null ? null : (replicas.get(companyId) ?? null);
+  const contentReplica =
+    contentCompanyId === null ? null : (replicas.get(contentCompanyId) ?? null);
+  const directory = useMemo(
+    () => companyDirectoryFromReplicaValues(replica?.view.values() ?? []),
+    [replica],
+  );
+  const { client: shared, url } = useAuthenticatedConvexClient();
+  const admin = useMemo<CompanyAdminClient | null>(
+    () =>
+      shared && url
+        ? makeCompanyAdminClient({ convexUrl: url, client: shared, fetchToken: async () => null })
+        : null,
+    [shared, url],
+  );
+  const currentMembership = useMemo(() => {
+    if (companyId === null) return null;
+    const membershipId = membershipIds.get(companyId);
+    if (membershipId === undefined) return null;
+    return {
+      membershipId,
+      isOwner:
+        directory.company?.owners.some((owner) => owner.membershipId === membershipId) ?? false,
+    };
+  }, [companyId, directory.company?.owners, membershipIds]);
+
+  useEffect(() => {
+    return () => {
+      void admin?.close();
+    };
+  }, [admin]);
+
+  const permissions = useMemo(
+    () =>
+      deriveCurrentMemberPermissions({
+        directory,
+        membershipId: currentMembership?.membershipId ?? null,
+        isOwner: currentMembership?.isOwner ?? null,
+      }),
+    [currentMembership, directory],
+  );
+
+  return {
+    admin,
+    activeCompany,
+    companies,
+    companyId: companyId as CompanyId | null,
+    currentMembership,
+    directory,
+    isAuthLoaded: isLoaded,
+    isSignedIn: Boolean(isSignedIn),
+    permissions,
+    replica,
+    organizationCompanies: organizationCompanies(companies),
+    hasMultipleCompanies: hasMultipleCompanies(companies),
+    contentCompanyId,
+    contentReplica,
+    personalCompany: personalCompany(companies),
+    registryMembershipIds: membershipIds,
+    registryReplicas: replicas,
+    settingsCompanyScope,
+    setSettingsCompanyScope,
+    workspaceKind: activeCompany === null ? ("profile" as const) : activeCompany.workspaceKind,
+  };
+}
+
+export type CompanySettings = ReturnType<typeof useCompanySettings>;

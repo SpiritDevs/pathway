@@ -1,562 +1,757 @@
-import { requestCurrentAppSnap } from "../appSnap.logic";
-// FILE: BranchToolbar.tsx
-// Purpose: Renders the chat thread's compact workspace controls, including the
-// local usage popover, inline workspace handoff actions, and runtime access toggle.
-import type {
-  ProviderKind,
-  ProviderModelDescriptor,
-  ServerProviderStatus,
-  ThreadId,
-  RuntimeMode,
-} from "@synara/contracts";
-import { ChevronDownIcon, WorktreeIcon } from "~/lib/icons";
-import { HiOutlineHandRaised } from "react-icons/hi2";
-import { CentralIcon } from "~/lib/central-icons";
-import { useCallback, useMemo, useState, type ReactNode } from "react";
-import { useAppSettings } from "~/appSettings";
+import { useEnvironmentQuery } from "../state/query";
+import type { Project } from "../types";
+import { vcsEnvironment } from "../state/vcs";
+import { useVcsInitAction } from "../state/sourceControlActions";
+import {
+  squashAtomCommandFailure,
+  isAtomCommandInterrupted,
+} from "@spiritdevs/client-runtime/state/runtime";
+import { toastManager } from "./ui/toast";
+import { EnvironmentStorageIcon } from "./navigation/EnvironmentStorageIcon";
+import { InternalProjectWorkspace } from "./projects/InternalProjectWorkspace";
+import { scopeProjectRef, scopeThreadRef } from "@spiritdevs/client-runtime/environment";
+import type { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
+import {
+  ChevronDownIcon,
+  CloudIcon,
+  FolderGit2Icon,
+  FolderGitIcon,
+  FolderIcon,
+  GitBranchPlusIcon,
+  HistoryIcon,
+  MonitorIcon,
+  PlusIcon,
+} from "lucide-react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { newCommandId, cn } from "../lib/utils";
-import { readNativeApi } from "../nativeApi";
-import { useComposerDraftStore } from "../composerDraftStore";
-import { useProviderUsageSummary } from "../hooks/useProviderUsageSummary";
-import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
+import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
+import { useProject, useThreadShell, useThreadShellsForProjectRefs } from "../state/entities";
+import { useEnsureProjectWorkspace } from "../hooks/useEnsureProjectWorkspace";
+import { useIsMobile } from "../hooks/useMediaQuery";
 import {
-  RUNTIME_MODE_PRESENTATION,
-  providerModelSupportsAutoRuntimeMode,
-} from "../lib/runtimeMode";
-import { useStore } from "../store";
-import {
-  createAccountRateLimitThreadsSelector,
-  createProjectSelector,
-  createThreadSelector,
-} from "../storeSelectors";
-import {
-  EnvMode,
-  resolveAssociatedWorktreeMetadataAfterWorkspacePatch,
-  resolveDraftEnvModeAfterBranchChange,
+  canOpenEnvironmentPicker,
+  type EnvMode,
+  type AutoPlacementOption,
+  type EnvironmentOption,
+  hasEnvironmentChoice,
+  resolveCurrentWorkspaceLabel,
+  resolveEnvModeLabel,
   resolveEffectiveEnvMode,
-  resolveFixedLocalWorkspacePatch,
+  resolveLockedWorkspaceLabel,
+  resolvePreviousWorktreeLabel,
+  resolvePreviousWorktreeSeed,
+  shouldShowEnvironmentIndicator,
 } from "./BranchToolbar.logic";
-import {
-  BranchToolbarBranchSelector,
-  type BranchSelectorVariant,
-} from "./BranchToolbarBranchSelector";
-import {
-  RUNTIME_AUTO_ACCENT_CLASS_NAME,
-  RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME,
-  COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
-} from "./chat/composerPickerStyles";
-import {
-  ENVIRONMENT_ROW_CLASS_NAME,
-  ENVIRONMENT_ROW_ICON_CLASS_NAME,
-  EnvironmentRowBody,
-} from "./chat/environment/EnvironmentRow";
-import type { ContextWindowSnapshot } from "../lib/contextWindow";
-import { ProviderUsagePanelContent } from "./ProviderUsagePanelContent";
-import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
-import { ComposerEnvironmentPicker } from "./chat/ComposerEnvironmentPicker";
+import { BranchToolbarBranchSelector } from "./BranchToolbarBranchSelector";
+import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
+import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
 import { Button } from "./ui/button";
-import { Collapsible, CollapsiblePanel } from "./ui/collapsible";
-import { DisclosureChevron } from "./ui/DisclosureChevron";
 import {
   Menu,
+  MenuGroup,
+  MenuGroupLabel,
   MenuItem,
+  MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
   MenuSeparator,
   MenuTrigger,
 } from "./ui/menu";
-import type { ThreadWorkspacePatch } from "../types";
+import { Separator } from "./ui/separator";
 
-function WorktreeGlyph({ className }: { className?: string }) {
-  return <WorktreeIcon className={className} />;
+export interface BranchToolbarWorkspaceContext {
+  project: Project;
+  worktreePath: string | null;
+  temporary: boolean;
 }
 
-function RuntimeModeMenuItem({
-  mode,
-  icon,
-  accent = false,
-}: {
-  mode: RuntimeMode;
-  icon: ReactNode;
-  accent?: boolean;
-}) {
-  const presentation = RUNTIME_MODE_PRESENTATION[mode];
-  return (
-    <MenuRadioItem
-      value={mode}
-      className={cn(
-        "runtime-mode-menu-item",
-        mode === "auto" && "runtime-mode-menu-item--auto",
-        accent &&
-          "text-[var(--runtime-full-access-accent)] data-highlighted:text-[var(--runtime-full-access-accent)]",
-      )}
-    >
-      <span className="grid w-full min-w-0 flex-1 grid-cols-[1.25rem_minmax(0,1fr)] items-start gap-x-3">
-        <span className="flex h-5 items-center justify-center">{icon}</span>
-        <span className="flex min-w-0 flex-col gap-0.5">
-          <span>{presentation.label}</span>
-          <span
-            className={cn(
-              "runtime-mode-menu-description text-ui leading-snug font-normal",
-              accent ? "text-current" : "text-muted-foreground",
-            )}
-          >
-            {presentation.description}
-          </span>
-        </span>
-      </span>
-    </MenuRadioItem>
-  );
-}
-
-export interface BranchToolbarProps {
+interface BranchToolbarProps {
+  workspaceContext?: BranchToolbarWorkspaceContext;
+  layout?: "composer" | "panel";
+  panelSection?: "all" | "workspace" | "branch";
+  onOpenDirectory?: ((cwd: string) => void) | undefined;
+  environmentId: EnvironmentId;
   threadId: ThreadId;
-  className?: string;
+  showGitControls: boolean;
+  draftId?: DraftId;
   onEnvModeChange: (mode: EnvMode) => void;
+  effectiveEnvModeOverride?: EnvMode;
+  activeThreadBranchOverride?: string | null;
+  onActiveThreadBranchOverrideChange?: (branch: string | null) => void;
+  startFromOrigin: boolean;
+  onStartFromOriginChange: (startFromOrigin: boolean) => void;
+  autoPlacement?: AutoPlacementOption | undefined;
+  environmentLocked?: boolean | undefined;
   envLocked: boolean;
-  threadDetailReady: boolean;
-  onHandoffToWorktree?: () => void;
-  onHandoffToLocal?: () => void;
-  handoffBusy?: boolean;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
-  // `toolbar` renders the compact composer-footer row; `panel` stacks the env and branch
-  // pickers as full-width Environment panel rows that open downward.
-  variant?: BranchSelectorVariant;
-  // Keeps the Local/Worktree control visible while hiding Git-only branch UI for non-repo cwd.
-  showBranchSelector?: boolean;
-  // Studio-like containers bind the toolbar to one concrete local folder and
-  // must not persist project/worktree metadata from branch selector actions.
-  fixedLocalWorkspaceCwd?: string | null;
+  availableEnvironments?: readonly EnvironmentOption[];
+  onEnvironmentChange?: (environmentId: EnvironmentId) => void;
+  onLinkEnvironmentRequest?: () => void;
+  onMoveToWorktree?: () => void;
+  moveToWorktreeDisabled?: boolean;
+  moveToWorktreeTooltip?: string;
 }
 
-export interface RuntimeUsageControlsProps {
-  provider?: ProviderKind | undefined;
-  runtimeModel?: ProviderModelDescriptor | undefined;
-  providerStatus?: ServerProviderStatus | null | undefined;
-  runtimeMode?: RuntimeMode | undefined;
-  onRuntimeModeChange?: ((mode: RuntimeMode) => void) | undefined;
-  contextWindow?: ContextWindowSnapshot | null | undefined;
-  cumulativeCostUsd?: number | null | undefined;
-  activeContextWindowLabel?: string | null | undefined;
-  pendingContextWindowLabel?: string | null | undefined;
-  className?: string | undefined;
-  // Force icon-only rendering regardless of container width. Used when the
-  // control is relocated outside the composer footer (which provides the
-  // @container the responsive sr-only fallback depends on).
-  hideLabel?: boolean | undefined;
+interface MobileRunContextSelectorProps {
+  autoPlacement?: AutoPlacementOption | undefined;
+  environmentLocked?: boolean | undefined;
+  envLocked: boolean;
+  envModeLocked: boolean;
+  repositoryReady: boolean;
+  onInitializeGit: (() => void) | undefined;
+  initializingGit: boolean;
+  environmentId: EnvironmentId;
+  availableEnvironments: readonly EnvironmentOption[] | undefined;
+  showEnvironmentPicker: boolean;
+  showEnvironmentIndicator: boolean;
+  onEnvironmentChange: ((environmentId: EnvironmentId) => void) | undefined;
+  onLinkEnvironmentRequest: (() => void) | undefined;
+  effectiveEnvMode: EnvMode;
+  activeWorktreePath: string | null;
+  onEnvModeChange: (mode: EnvMode) => void;
+  previousWorktreeLabel: string | null;
+  onUsePreviousWorktree: () => void;
 }
 
-export function RuntimeUsageControls({
-  provider,
-  runtimeModel,
-  providerStatus,
-  runtimeMode,
-  onRuntimeModeChange,
-  className,
-  hideLabel: hideLabelProp,
-}: RuntimeUsageControlsProps) {
-  const autoModeAvailable =
-    provider !== undefined &&
-    providerModelSupportsAutoRuntimeMode(provider, runtimeModel, providerStatus);
-  const runtimePresentation = RUNTIME_MODE_PRESENTATION[runtimeMode ?? "approval-required"];
-  const hideLabel = hideLabelProp ?? false;
+const MobileRunContextSelector = memo(function MobileRunContextSelector({
+  envLocked,
+  envModeLocked,
+  repositoryReady,
+  onInitializeGit,
+  initializingGit,
+  environmentId,
+  availableEnvironments,
+  showEnvironmentPicker,
+  showEnvironmentIndicator,
+  onEnvironmentChange,
+  autoPlacement,
+  environmentLocked,
+  onLinkEnvironmentRequest,
+  effectiveEnvMode,
+  activeWorktreePath,
+  onEnvModeChange,
+  previousWorktreeLabel,
+  onUsePreviousWorktree,
+}: MobileRunContextSelectorProps) {
+  const activeEnvironment = useMemo(
+    () => availableEnvironments?.find((env) => env.environmentId === environmentId) ?? null,
+    [availableEnvironments, environmentId],
+  );
+  const WorkspaceIcon =
+    effectiveEnvMode === "worktree"
+      ? FolderGit2Icon
+      : activeWorktreePath
+        ? FolderGitIcon
+        : FolderIcon;
+  const workspaceLabel = envModeLocked
+    ? resolveLockedWorkspaceLabel(activeWorktreePath)
+    : effectiveEnvMode === "worktree"
+      ? resolveEnvModeLabel("worktree")
+      : resolveCurrentWorkspaceLabel(activeWorktreePath);
+  const isLocked = (environmentLocked ?? envLocked) && envModeLocked;
+  const EnvironmentIcon = activeEnvironment?.isPrimary ? MonitorIcon : CloudIcon;
+  const icon = showEnvironmentIndicator ? (
+    // Button's base styles apply `-mx-0.5` to descendant SVGs, which eats 4px
+    // out of whatever gap we set. mx-0! cancels that so gap-0.5 reads as 2px.
+    <span className="inline-flex shrink-0 items-center gap-0.5">
+      <EnvironmentIcon className="size-3 shrink-0 mx-0!" />
+      <WorkspaceIcon className="size-3 shrink-0 mx-0!" />
+    </span>
+  ) : (
+    <WorkspaceIcon className="size-3 shrink-0" />
+  );
+  const triggerContent = (
+    <>
+      {icon}
+      <span className="min-w-0 truncate">
+        {autoPlacement?.active
+          ? autoPlacement.label
+          : showEnvironmentIndicator
+            ? (activeEnvironment?.label ?? "Run on")
+            : workspaceLabel}
+      </span>
+    </>
+  );
+
+  if (isLocked) {
+    return (
+      <span className="inline-flex h-7 min-w-0 max-w-[48%] flex-1 items-center justify-start gap-1 rounded-md border border-transparent px-[calc(--spacing(2)-1px)] text-sm font-medium text-muted-foreground/70 sm:h-6 md:hidden">
+        {triggerContent}
+      </span>
+    );
+  }
+
   return (
-    <div
-      className={cn(
-        "flex items-center gap-1.5 text-[var(--color-text-foreground-secondary)]",
-        className,
-      )}
-    >
-      {runtimeMode && onRuntimeModeChange ? (
-        <Menu>
-          <MenuTrigger
-            render={
-              <Button
-                size="sm"
-                variant="chrome"
-                className={cn(
-                  "min-w-0 shrink-0 justify-start gap-1.5 whitespace-nowrap px-2 [&_svg]:mx-0 sm:px-2.5",
-                  COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
-                  runtimeMode === "auto" && RUNTIME_AUTO_ACCENT_CLASS_NAME,
-                  runtimeMode === "full-access" && RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME,
+    <Menu>
+      <MenuTrigger
+        render={<Button variant="ghost" size="xs" />}
+        className="min-w-0 max-w-[48%] flex-1 justify-start text-muted-foreground/70 hover:text-foreground/80 md:hidden"
+      >
+        {triggerContent}
+        {showEnvironmentIndicator && !autoPlacement?.active ? (
+          <EnvironmentStorageIcon environmentId={environmentId} />
+        ) : null}
+        <ChevronDownIcon className="size-3 shrink-0 opacity-50" />
+      </MenuTrigger>
+      <MenuPopup align="start" side="top" className="w-64">
+        {showEnvironmentIndicator && showEnvironmentPicker && availableEnvironments ? (
+          <>
+            <MenuGroup>
+              <MenuGroupLabel>Run on</MenuGroupLabel>
+              <MenuRadioGroup
+                value={autoPlacement?.active ? "__auto-placement__" : environmentId}
+                onValueChange={(value) =>
+                  value === "__auto-placement__"
+                    ? autoPlacement?.onSelect()
+                    : onEnvironmentChange?.(value as EnvironmentId)
+                }
+              >
+                {autoPlacement && (
+                  <>
+                    <MenuRadioItem value="__auto-placement__" disabled={autoPlacement.disabled}>
+                      {autoPlacement.label}
+                    </MenuRadioItem>
+                    <MenuSeparator />
+                  </>
                 )}
-                title={`${runtimePresentation.label}: ${runtimePresentation.description}. Click to change permissions.`}
-              />
-            }
-          >
-            <span className="inline-flex items-center gap-1.5">
-              {runtimeMode === "full-access" ? (
-                <CentralIcon name="shield-access" className="size-3.5 shrink-0" />
-              ) : runtimeMode === "auto" ? (
-                <CentralIcon name="shield-code" className="size-3.5 shrink-0" />
-              ) : (
-                <HiOutlineHandRaised className="size-3.5 shrink-0" />
-              )}
-              <span className={cn("truncate", hideLabel ? "sr-only" : "@max-[480px]:sr-only")}>
-                {runtimePresentation.label}
-              </span>
-              <ChevronDownIcon
-                className={cn(
-                  "size-3 shrink-0 opacity-70",
-                  hideLabel ? "hidden" : "@max-[480px]:hidden",
-                )}
-              />
-            </span>
-          </MenuTrigger>
-          <ComposerPickerMenuPopup
-            align="start"
-            side="top"
-            className="runtime-mode-menu w-[26rem] min-w-[26rem]"
-          >
+                {availableEnvironments.map((env) => {
+                  const Icon = env.isPrimary ? MonitorIcon : CloudIcon;
+                  return (
+                    <MenuRadioItem
+                      key={env.environmentId}
+                      disabled={environmentLocked ?? envLocked}
+                      value={env.environmentId}
+                    >
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <Icon className="size-3" />
+                        <span className="min-w-0 flex-1 truncate">{env.label}</span>
+                        <EnvironmentStorageIcon environmentId={env.environmentId} />
+                      </span>
+                    </MenuRadioItem>
+                  );
+                })}
+              </MenuRadioGroup>
+              {onLinkEnvironmentRequest ? (
+                <>
+                  <MenuSeparator />
+                  <MenuItem onClick={onLinkEnvironmentRequest}>
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <PlusIcon className="size-3" />
+                      <span className="min-w-0 truncate">Link environment</span>
+                    </span>
+                  </MenuItem>
+                </>
+              ) : null}
+            </MenuGroup>
+            <MenuSeparator />
+          </>
+        ) : null}
+        <MenuGroup>
+          <MenuGroupLabel>Workspace</MenuGroupLabel>
+          {repositoryReady ? (
             <MenuRadioGroup
-              className="flex flex-col gap-1"
-              value={runtimeMode}
+              value={effectiveEnvMode}
               onValueChange={(value) => {
-                if (
-                  !value ||
-                  (value !== "full-access" && value !== "auto" && value !== "approval-required") ||
-                  (value === "auto" && !autoModeAvailable) ||
-                  value === runtimeMode
-                ) {
+                if (value === "previous-worktree") {
+                  onUsePreviousWorktree();
                   return;
                 }
-                onRuntimeModeChange(value);
+                onEnvModeChange(value as EnvMode);
               }}
             >
-              <RuntimeModeMenuItem
-                mode="approval-required"
-                icon={<HiOutlineHandRaised className="size-4 shrink-0" />}
-              />
-              {autoModeAvailable ? (
-                <RuntimeModeMenuItem
-                  mode="auto"
-                  icon={<CentralIcon name="shield-code" className="size-4 shrink-0" />}
-                />
+              <MenuRadioItem disabled={envModeLocked} value="local">
+                <span className="flex min-w-0 items-center gap-1.5">
+                  {activeWorktreePath ? (
+                    <FolderGitIcon className="size-3" />
+                  ) : (
+                    <FolderIcon className="size-3" />
+                  )}
+                  <span className="min-w-0 truncate">
+                    {resolveCurrentWorkspaceLabel(activeWorktreePath)}
+                  </span>
+                </span>
+              </MenuRadioItem>
+              <MenuRadioItem disabled={envModeLocked} value="worktree">
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <FolderGit2Icon className="size-3" />
+                  <span className="min-w-0 truncate">{resolveEnvModeLabel("worktree")}</span>
+                </span>
+              </MenuRadioItem>
+              {previousWorktreeLabel ? (
+                <MenuRadioItem disabled={envModeLocked} value="previous-worktree">
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <HistoryIcon className="size-3" />
+                    <span className="min-w-0 truncate">{previousWorktreeLabel}</span>
+                  </span>
+                </MenuRadioItem>
               ) : null}
-              <RuntimeModeMenuItem
-                mode="full-access"
-                accent
-                icon={<CentralIcon name="shield-access" className="size-4 shrink-0" />}
-              />
             </MenuRadioGroup>
-            {typeof window !== "undefined" && window.desktopBridge?.appSnap?.captureCurrentApp ? (
-              <>
-                <MenuSeparator />
-                <MenuItem onClick={requestCurrentAppSnap}>Share current app</MenuItem>
-              </>
-            ) : null}
-          </ComposerPickerMenuPopup>
-        </Menu>
-      ) : null}
-    </div>
+          ) : (
+            <MenuItem disabled={!onInitializeGit || initializingGit} onClick={onInitializeGit}>
+              <GitBranchPlusIcon className="size-3" />
+              {initializingGit
+                ? "Initializing..."
+                : onInitializeGit
+                  ? "Initialize Git"
+                  : "Checking repository..."}
+            </MenuItem>
+          )}
+        </MenuGroup>
+      </MenuPopup>
+    </Menu>
   );
+});
+
+/**
+ * Collapse the strip's labels to icons only when the text no longer fits.
+ *
+ * Hidden labels stay measurable because their inner text keeps its natural
+ * width while the outer layout box collapses. This lets every pass recompute
+ * the expanded width without remembered values that could go stale or latch
+ * the strip compact. A small hysteresis keeps the boundary from flapping.
+ */
+const COMPACT_EXPAND_HYSTERESIS_PX = 16;
+const COMPOSER_CONTEXT_MOTION_DURATION_MS = 180;
+const COMPOSER_CONTEXT_MOTION_EASING = "cubic-bezier(0.32, 0.72, 0, 1)";
+const COMPOSER_CONTEXT_CONTROL_SELECTOR = "[data-composer-context-control]";
+
+function useLabelsOverflow(element: HTMLDivElement | null): boolean {
+  const [overflows, setOverflows] = useState(false);
+  const pendingControlRectsRef = useRef<Map<HTMLElement, DOMRect> | null>(null);
+  const controlAnimationsRef = useRef(new Map<HTMLElement, Animation>());
+  // A render-synced mirror instead of useEffectEvent: the compiler memoizes
+  // the event callback, which left observers reading the first render's null
+  // element forever.
+  const stateRef = useRef({ element, overflows });
+  stateRef.current = { element, overflows };
+
+  const measure = useCallback(() => {
+    const { element: current, overflows: compact } = stateRef.current;
+    if (!current) return;
+    const available = current.clientWidth;
+    if (available === 0) return;
+    // flex-1 stretches the groups to fill the strip, so their own boxes always
+    // measure "full". Sum the laid-out content instead, skipping hidden form
+    // artifacts and other out-of-flow nodes.
+    const contentWidth = (parent: Element): number => {
+      const gap = Number.parseFloat(getComputedStyle(parent).columnGap) || 0;
+      let width = 0;
+      let counted = 0;
+      for (const child of parent.children) {
+        if (!(child instanceof HTMLElement)) continue;
+        if (child.offsetWidth <= 1) continue;
+        const position = getComputedStyle(child).position;
+        if (position === "absolute" || position === "fixed") continue;
+        width += child.offsetWidth;
+        counted += 1;
+      }
+      return width + gap * Math.max(0, counted - 1);
+    };
+    const stripGap = Number.parseFloat(getComputedStyle(current).columnGap) || 0;
+    let needed = 0;
+    let groups = 0;
+    for (const child of current.children) {
+      if (!(child instanceof HTMLElement) || child.offsetWidth <= 1) continue;
+      needed += contentWidth(child);
+      groups += 1;
+    }
+    needed += stripGap * Math.max(0, groups - 1);
+    for (const label of current.querySelectorAll<HTMLElement>("[data-composer-label]")) {
+      // The clipping can happen below the marker (SelectValue truncates
+      // internally), where the outer span's scrollWidth matches its clipped
+      // box. The text's real width is the largest scrollWidth in the subtree.
+      let textWidth = label.scrollWidth;
+      for (const inner of label.querySelectorAll<HTMLElement>("*")) {
+        textWidth = Math.max(textWidth, inner.scrollWidth);
+      }
+      if (compact) {
+        // Compact: the label is squeezed to zero width but keeps reporting
+        // the full width it would need when expanded.
+        needed += textWidth;
+      } else {
+        // Expanded: the label is in flow; only the clipped remainder is
+        // missing from the content sum.
+        needed += Math.max(0, textWidth - label.clientWidth);
+      }
+    }
+    const nextOverflows = compact
+      ? needed > available - COMPACT_EXPAND_HYSTERESIS_PX
+      : needed > available;
+    if (nextOverflows !== compact) {
+      pendingControlRectsRef.current = new Map(
+        Array.from(current.querySelectorAll<HTMLElement>(COMPOSER_CONTEXT_CONTROL_SELECTOR)).map(
+          (control) => [control, control.getBoundingClientRect()],
+        ),
+      );
+    }
+    setOverflows(nextOverflows);
+  }, []);
+
+  useLayoutEffect(() => {
+    const previousRects = pendingControlRectsRef.current;
+    if (!previousRects) return;
+    pendingControlRectsRef.current = null;
+
+    for (const animation of controlAnimationsRef.current.values()) {
+      animation.cancel();
+    }
+    controlAnimationsRef.current.clear();
+
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+    for (const [control, previousRect] of previousRects) {
+      if (!control.isConnected) continue;
+      const nextRect = control.getBoundingClientRect();
+      const deltaX = previousRect.left - nextRect.left;
+      const deltaY = previousRect.top - nextRect.top;
+      if (Math.abs(deltaX) < 0.5 && Math.abs(deltaY) < 0.5) continue;
+
+      const animation = control.animate(
+        [
+          { transform: `translate3d(${deltaX}px, ${deltaY}px, 0)` },
+          { transform: "translate3d(0, 0, 0)" },
+        ],
+        {
+          duration: COMPOSER_CONTEXT_MOTION_DURATION_MS,
+          easing: COMPOSER_CONTEXT_MOTION_EASING,
+          fill: "backwards",
+        },
+      );
+      controlAnimationsRef.current.set(control, animation);
+      animation.addEventListener(
+        "finish",
+        () => {
+          if (controlAnimationsRef.current.get(control) === animation) {
+            controlAnimationsRef.current.delete(control);
+          }
+        },
+        { once: true },
+      );
+    }
+  }, [overflows]);
+
+  useEffect(
+    () => () => {
+      for (const animation of controlAnimationsRef.current.values()) {
+        animation.cancel();
+      }
+    },
+    [],
+  );
+
+  // Label widths can change without the strip box moving (font family or
+  // size preferences), so re-measure on every render as well as on resize
+  // and font loads.
+  useEffect(() => {
+    measure();
+  });
+
+  useEffect(() => {
+    if (!element) return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    document.fonts.addEventListener("loadingdone", measure);
+    return () => {
+      observer.disconnect();
+      document.fonts.removeEventListener("loadingdone", measure);
+    };
+  }, [element, measure]);
+
+  return overflows;
 }
 
-export default function BranchToolbar({
+export const BranchToolbar = memo(function BranchToolbar({
+  workspaceContext,
+  layout = "composer",
+  panelSection = "all",
+  onOpenDirectory,
+  environmentId,
   threadId,
-  className,
+  showGitControls,
+  draftId,
   onEnvModeChange,
+  effectiveEnvModeOverride,
+  activeThreadBranchOverride,
+  onActiveThreadBranchOverrideChange,
+  startFromOrigin,
+  onStartFromOriginChange,
   envLocked,
-  threadDetailReady,
-  onHandoffToWorktree,
-  onHandoffToLocal,
-  handoffBusy: handoffBusyProp,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
-  variant: variantProp,
-  showBranchSelector: showBranchSelectorProp,
-  fixedLocalWorkspaceCwd,
+  availableEnvironments,
+  onEnvironmentChange,
+  autoPlacement,
+  environmentLocked,
+  onLinkEnvironmentRequest,
+  onMoveToWorktree,
+  moveToWorktreeDisabled,
+  moveToWorktreeTooltip,
 }: BranchToolbarProps) {
-  const handoffBusy = handoffBusyProp ?? false;
-  const variant = variantProp ?? "toolbar";
-  const showBranchSelector = showBranchSelectorProp ?? true;
-  const isPanel = variant === "panel";
-  const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
-  const draftThread = useComposerDraftStore((store) => store.getDraftThread(threadId));
+  const threadRef = useMemo(
+    () => scopeThreadRef(environmentId, threadId),
+    [environmentId, threadId],
+  );
+  const serverThread = useThreadShell(threadRef);
+  const draftThread = useComposerDraftStore((store) =>
+    draftId ? store.getDraftSession(draftId) : store.getDraftThreadByRef(threadRef),
+  );
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
-  const [rateLimitThreadsSelector] = useState(() => createAccountRateLimitThreadsSelector());
-  const threads = useStore(rateLimitThreadsSelector);
-  const { settings } = useAppSettings();
-
-  const serverThread = useStore(useMemo(() => createThreadSelector(threadId), [threadId]));
-  const activeProjectId = serverThread?.projectId ?? draftThread?.projectId ?? null;
-  const activeProject = useStore(
-    useMemo(() => createProjectSelector(activeProjectId), [activeProjectId]),
+  const activeProjectRef =
+    serverThread && serverThread.projectId !== null
+      ? scopeProjectRef(serverThread.environmentId, serverThread.projectId)
+      : workspaceContext
+        ? scopeProjectRef(workspaceContext.project.environmentId, workspaceContext.project.id)
+        : draftThread && draftThread.projectId !== null
+          ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
+          : null;
+  const serverProject = useProject(activeProjectRef);
+  const activeProject = serverProject ?? workspaceContext?.project ?? null;
+  // A worktree is cut from a repository, so picking one on a rootless project asks for a directory
+  // first and applies the mode once there is one. Nothing needs re-reading afterwards: the mode is
+  // draft state, and the send path resolves the root again anyway (`ChatView.tsx:5134`).
+  const repositoryCwd = activeProject?.workspaceRoot ?? null;
+  const repositoryStatus = useEnvironmentQuery(
+    repositoryCwd ? vcsEnvironment.status({ environmentId, input: { cwd: repositoryCwd } }) : null,
   );
-  const hasServerThread = serverThread !== undefined;
-  const activeThreadId = serverThread?.id ?? (draftThread ? threadId : undefined);
-  const activeThreadBranch = hasServerThread
-    ? (serverThread.branch ?? null)
-    : (draftThread?.branch ?? null);
-  const activeWorktreePath = hasServerThread
-    ? (serverThread.worktreePath ?? null)
-    : (draftThread?.worktreePath ?? null);
-  const activeWorkingDirectory = hasServerThread
-    ? (serverThread.workingDirectory ?? null)
-    : (draftThread?.workingDirectory ?? null);
-  const activeProvider =
-    serverThread?.session?.provider ?? serverThread?.modelSelection.provider ?? null;
-  const usesFixedLocalWorkspace = fixedLocalWorkspaceCwd !== undefined;
-  const branchCwd = usesFixedLocalWorkspace
-    ? fixedLocalWorkspaceCwd
-    : (activeWorktreePath ?? activeWorkingDirectory ?? activeProject?.cwd ?? null);
-  const branchProjectCwd = usesFixedLocalWorkspace ? branchCwd : (activeProject?.cwd ?? null);
-  const effectiveEnvMode = resolveEffectiveEnvMode({
-    activeWorktreePath,
-    hasServerThread,
-    draftThreadEnvMode: draftThread?.envMode,
-    serverThreadEnvMode: serverThread?.envMode,
-  });
-  const environmentPresentation = resolveThreadEnvironmentPresentation({
-    envMode: effectiveEnvMode,
-    worktreePath: activeWorktreePath,
-  });
-
-  const setThreadWorkspace = useCallback(
-    (patch: ThreadWorkspacePatch) => {
-      if (!activeThreadId) return;
-      if (usesFixedLocalWorkspace) {
-        const nextWorkspace = resolveFixedLocalWorkspacePatch({
-          currentWorkingDirectory: activeWorkingDirectory,
-          patch,
-        });
-        const nextWorkingDirectory = nextWorkspace.workingDirectory ?? null;
-        if (nextWorkingDirectory === activeWorkingDirectory) {
-          return;
-        }
-
-        const api = readNativeApi();
-        if (serverThread?.session && api) {
-          void api.orchestration
-            .dispatchCommand({
-              type: "thread.session.stop",
-              commandId: newCommandId(),
-              threadId: activeThreadId,
-              createdAt: new Date().toISOString(),
-            })
-            .catch(() => undefined);
-        }
-        if (api && hasServerThread) {
-          void api.orchestration.dispatchCommand({
-            type: "thread.meta.update",
-            commandId: newCommandId(),
-            threadId: activeThreadId,
-            ...nextWorkspace,
-          });
-        }
-        if (hasServerThread) {
-          setThreadWorkspaceAction(activeThreadId, nextWorkspace);
-          return;
-        }
-        setDraftThreadContext(threadId, nextWorkspace);
+  const initScope = useMemo(
+    () => ({ environmentId, cwd: repositoryCwd }),
+    [environmentId, repositoryCwd],
+  );
+  const initAction = useVcsInitAction(initScope);
+  const initializeGit = useCallback(() => {
+    void initAction.run().then((result) => {
+      if (result._tag === "Success" || isAtomCommandInterrupted(result)) return;
+      const error = squashAtomCommandFailure(result);
+      toastManager.add({
+        type: "error",
+        title: "Git initialization failed",
+        description: error instanceof Error ? error.message : "Unable to initialize Git.",
+      });
+    });
+  }, [initAction]);
+  const repositoryReady = repositoryStatus.data?.isRepo === true;
+  const repositoryMissing = repositoryStatus.data?.isRepo === false;
+  const { isRootless: isRootlessProject, ensureWorkspaceRoot } =
+    useEnsureProjectWorkspace(activeProject);
+  const handleEnvModeChange = useCallback(
+    (mode: EnvMode) => {
+      if (mode !== "worktree" || !isRootlessProject) {
+        onEnvModeChange(mode);
         return;
       }
-
-      const branch = patch.branch !== undefined ? patch.branch : activeThreadBranch;
-      const worktreePath =
-        patch.worktreePath !== undefined ? patch.worktreePath : activeWorktreePath;
-      const nextEnvMode =
-        patch.envMode !== undefined ? patch.envMode : worktreePath ? "worktree" : effectiveEnvMode;
-      const nextAssociatedWorktree = resolveAssociatedWorktreeMetadataAfterWorkspacePatch({
-        branch,
-        worktreePath,
-        existingAssociatedWorktreePath: serverThread?.associatedWorktreePath ?? null,
-        existingAssociatedWorktreeBranch: serverThread?.associatedWorktreeBranch ?? null,
-        existingAssociatedWorktreeRef: serverThread?.associatedWorktreeRef ?? null,
-        ...(patch.associatedWorktreePath !== undefined
-          ? { patchAssociatedWorktreePath: patch.associatedWorktreePath }
-          : {}),
-        ...(patch.associatedWorktreeBranch !== undefined
-          ? { patchAssociatedWorktreeBranch: patch.associatedWorktreeBranch }
-          : {}),
-        ...(patch.associatedWorktreeRef !== undefined
-          ? { patchAssociatedWorktreeRef: patch.associatedWorktreeRef }
-          : {}),
-      });
-      const api = readNativeApi();
-      // If the effective cwd is about to change, stop the running session so the
-      // next message creates a new one with the correct cwd.
-      if (serverThread?.session && worktreePath !== activeWorktreePath && api) {
-        void api.orchestration
-          .dispatchCommand({
-            type: "thread.session.stop",
-            commandId: newCommandId(),
-            threadId: activeThreadId,
-            createdAt: new Date().toISOString(),
-          })
-          .catch(() => undefined);
-      }
-      if (api && hasServerThread) {
-        void api.orchestration.dispatchCommand({
-          type: "thread.meta.update",
-          commandId: newCommandId(),
-          threadId: activeThreadId,
-          envMode: nextEnvMode,
-          branch,
-          worktreePath,
-          associatedWorktreePath: nextAssociatedWorktree.associatedWorktreePath,
-          associatedWorktreeBranch: nextAssociatedWorktree.associatedWorktreeBranch,
-          associatedWorktreeRef: nextAssociatedWorktree.associatedWorktreeRef,
-        });
-      }
-      if (hasServerThread) {
-        setThreadWorkspaceAction(activeThreadId, {
-          envMode: nextEnvMode,
-          branch,
-          worktreePath,
-          ...nextAssociatedWorktree,
-        });
-        return;
-      }
-      const nextDraftEnvMode = resolveDraftEnvModeAfterBranchChange({
-        nextWorktreePath: worktreePath,
-        currentWorktreePath: activeWorktreePath,
-        effectiveEnvMode,
-      });
-      setDraftThreadContext(threadId, {
-        branch,
-        worktreePath,
-        envMode: nextDraftEnvMode,
-      });
+      void ensureWorkspaceRoot("A worktree is cut from the project's git repository.").then(
+        (workspaceRoot) => {
+          if (workspaceRoot === null) return;
+          onEnvModeChange(mode);
+        },
+      );
     },
-    [
-      activeThreadId,
-      activeThreadBranch,
-      activeWorkingDirectory,
-      serverThread?.session,
+    [ensureWorkspaceRoot, isRootlessProject, onEnvModeChange],
+  );
+  const hasActiveThread =
+    serverThread !== null || draftThread !== null || workspaceContext !== undefined;
+  const activeWorktreePath =
+    serverThread?.worktreePath ??
+    workspaceContext?.worktreePath ??
+    draftThread?.worktreePath ??
+    null;
+  const effectiveEnvMode =
+    effectiveEnvModeOverride ??
+    resolveEffectiveEnvMode({
       activeWorktreePath,
-      hasServerThread,
-      setThreadWorkspaceAction,
-      serverThread?.associatedWorktreePath,
-      serverThread?.associatedWorktreeBranch,
-      serverThread?.associatedWorktreeRef,
-      setDraftThreadContext,
-      threadId,
-      effectiveEnvMode,
-      usesFixedLocalWorkspace,
-    ],
-  );
+      hasServerThread: serverThread !== null,
+      draftThreadEnvMode: draftThread?.envMode,
+    });
+  const envModeLocked =
+    (serverThread?.temporary ?? workspaceContext?.temporary ?? draftThread?.temporary ?? false) ||
+    envLocked ||
+    (serverThread !== null && activeWorktreePath !== null);
 
-  const canHandoffToWorktree = Boolean(
-    !usesFixedLocalWorkspace &&
-    hasServerThread &&
-    envLocked &&
-    !activeWorktreePath &&
-    effectiveEnvMode === "local",
+  // "Previous worktree" hops a draft into the most recently active worktree
+  // of this project — the "keep going where I just was" follow-up flow. Only
+  // drafts can hop; started server threads have their workspace pinned.
+  const canUsePreviousWorktree = draftThread !== null && serverThread === null && !envModeLocked;
+  const projectRefsForWorktreeLookup = useMemo(
+    () => (canUsePreviousWorktree && activeProjectRef ? [activeProjectRef] : []),
+    [canUsePreviousWorktree, activeProjectRef],
   );
-  const canHandoffToLocal = Boolean(
-    !usesFixedLocalWorkspace && hasServerThread && activeWorktreePath,
+  const projectThreads = useThreadShellsForProjectRefs(projectRefsForWorktreeLookup);
+  const previousWorktreeSeed = useMemo(
+    () =>
+      canUsePreviousWorktree
+        ? resolvePreviousWorktreeSeed({
+            threads: projectThreads,
+            currentWorktreePath: activeWorktreePath,
+          })
+        : null,
+    [activeWorktreePath, canUsePreviousWorktree, projectThreads],
   );
-  const canSwitchToWorktree = Boolean(
-    !usesFixedLocalWorkspace && !envLocked && !activeWorktreePath && effectiveEnvMode === "local",
-  );
-  const canSwitchToLocal = Boolean(
-    !usesFixedLocalWorkspace && !envLocked && effectiveEnvMode === "worktree",
-  );
-  const showEnvPicker = effectiveEnvMode === "local" || canSwitchToLocal;
+  const previousWorktreeLabel = previousWorktreeSeed
+    ? resolvePreviousWorktreeLabel(previousWorktreeSeed)
+    : null;
+  const onUsePreviousWorktree = useCallback(() => {
+    if (!previousWorktreeSeed || !activeProjectRef) return;
+    // Same shape the branch selector writes when picking a branch that
+    // already lives in a worktree: point the draft at the existing tree.
+    setDraftThreadContext(draftId ?? threadRef, {
+      branch: previousWorktreeSeed.branch,
+      worktreePath: previousWorktreeSeed.worktreePath,
+      envMode: "worktree",
+      projectRef: activeProjectRef,
+    });
+  }, [activeProjectRef, draftId, previousWorktreeSeed, setDraftThreadContext, threadRef]);
 
-  const usageSummary = useProviderUsageSummary({
-    provider: activeProvider,
-    threads,
-    codexHomePath: settings.codexHomePath || null,
-    fetchOpenUsageData: false,
+  const environmentPickerInput = {
+    environmentCount: availableEnvironments?.length ?? 0,
+    canChangeEnvironment: onEnvironmentChange !== undefined,
+    canLinkEnvironment: onLinkEnvironmentRequest !== undefined,
+  };
+  const showEnvironmentPicker =
+    autoPlacement !== undefined || canOpenEnvironmentPicker(environmentPickerInput);
+  const activeEnvironmentOption =
+    availableEnvironments?.find((env) => env.environmentId === environmentId) ?? null;
+  const showEnvironmentIndicator = shouldShowEnvironmentIndicator({
+    activeEnvironment: activeEnvironmentOption,
+    canPickEnvironment: autoPlacement !== undefined || hasEnvironmentChoice(environmentPickerInput),
   });
-  const [rateLimitsOpen, setRateLimitsOpen] = useState(true);
+  const isMobile = useIsMobile();
+  const [stripElement, setStripElement] = useState<HTMLDivElement | null>(null);
+  const labelsOverflow = useLabelsOverflow(stripElement);
 
-  if (!activeThreadId || !activeProject) return null;
+  if (!hasActiveThread || !activeProject) return null;
 
-  return (
-    <div
-      className={cn(
-        isPanel
-          ? "flex w-full flex-col gap-0.5"
-          : "mx-auto flex w-full items-center justify-between px-3 pb-1.5 pt-1",
-        className,
-      )}
-    >
-      <div className={isPanel ? "flex flex-col gap-0.5" : "flex items-center gap-2"}>
-        {showEnvPicker ? (
-          <ComposerEnvironmentPicker
-            environmentPresentation={environmentPresentation}
-            onEnvModeChange={onEnvModeChange}
-            canSwitchToWorktree={canSwitchToWorktree}
-            canHandoffToLocal={canHandoffToLocal}
-            canHandoffToWorktree={canHandoffToWorktree}
-            onHandoffToLocal={onHandoffToLocal}
-            onHandoffToWorktree={onHandoffToWorktree}
-            handoffBusy={handoffBusy}
-            isPanel={isPanel}
-          >
-            {/* Rate limits are noise while drafting a new chat — no session has run yet. */}
-            {hasServerThread ? (
-              <>
-                <MenuSeparator />
+  const internalOnly =
+    activeProject.workspaceRoot === null ||
+    activeProject.workspaceRoot === activeProject.internalWorkspaceRoot;
 
-                <Collapsible open={rateLimitsOpen} onOpenChange={setRateLimitsOpen}>
-                  <MenuItem closeOnClick={false} onClick={() => setRateLimitsOpen((open) => !open)}>
-                    <CentralIcon name="clock" className="size-3.5 text-muted-foreground" />
-                    <span className="min-w-0 flex-1 truncate">Rate limits remaining</span>
-                    <DisclosureChevron
-                      open={rateLimitsOpen}
-                      className="text-[var(--color-text-foreground-secondary)]"
-                    />
-                  </MenuItem>
-                  <CollapsiblePanel>
-                    <ProviderUsagePanelContent
-                      provider={activeProvider}
-                      rateLimits={usageSummary.rateLimits}
-                      usageLines={usageSummary.usageLines}
-                      notice={usageSummary.usageNotice}
-                      isLoading={usageSummary.isLoading}
-                      resetCredits={usageSummary.resetCredits}
-                      resetCreditsSurface="popover"
-                      learnMoreHref={usageSummary.learnMoreHref}
-                      showTitle={false}
-                      showLearnMore={true}
-                      className="px-2 pb-1 pt-1"
-                    />
-                  </CollapsiblePanel>
-                </Collapsible>
-              </>
-            ) : null}
-          </ComposerEnvironmentPicker>
-        ) : isPanel ? (
-          <div className={cn(ENVIRONMENT_ROW_CLASS_NAME, "cursor-default hover:bg-transparent")}>
-            <EnvironmentRowBody
-              icon={<WorktreeGlyph className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
-              label={environmentPresentation.shortLabel}
-            />
-          </div>
-        ) : (
-          <span className="inline-flex items-center gap-2 px-1.5 text-ui-sm font-normal text-[var(--color-text-foreground-secondary)]">
-            <WorktreeGlyph className="size-3.5" />
-            {environmentPresentation.shortLabel}
-          </span>
-        )}
-
-        {showBranchSelector ? (
-          /* ChatView stays mounted while the route switches threads. Reset the selector's
-             optimistic checkout state at that boundary so a previous thread cannot paint its
-             branch while the new thread's workspace query is resolving. */
-          <BranchToolbarBranchSelector
-            key={threadId}
-            activeProjectCwd={branchProjectCwd ?? activeProject.cwd}
-            activeThreadBranch={activeThreadBranch}
-            activeWorktreePath={activeWorktreePath}
-            branchCwd={branchCwd}
+  if (layout === "panel") {
+    return (
+      <div className="flex w-full flex-col" data-thread-panel-run-context>
+        {panelSection !== "branch" && !internalOnly ? (
+          <BranchToolbarEnvModeSelector
+            repositoryReady={repositoryReady}
+            onInitializeGit={repositoryMissing ? initializeGit : undefined}
+            initializingGit={initAction.isPending}
+            displayMode="panel"
+            envLocked={envModeLocked}
             effectiveEnvMode={effectiveEnvMode}
+            activeWorktreePath={activeWorktreePath}
+            workspaceRoot={activeProject.workspaceRoot}
+            onEnvModeChange={onEnvModeChange}
+            previousWorktreeLabel={previousWorktreeLabel}
+            onUsePreviousWorktree={onUsePreviousWorktree}
+            {...(serverThread !== null && onMoveToWorktree ? { onMoveToWorktree } : {})}
+            {...(moveToWorktreeDisabled === undefined ? {} : { moveToWorktreeDisabled })}
+            {...(moveToWorktreeTooltip === undefined ? {} : { moveToWorktreeTooltip })}
+          />
+        ) : null}
+        {panelSection !== "branch" ? (
+          <InternalProjectWorkspace project={activeProject} onOpenDirectory={onOpenDirectory} />
+        ) : null}
+        {panelSection !== "workspace" && !internalOnly ? (
+          <BranchToolbarBranchSelector
+            displayMode="panel"
+            className="w-full"
+            environmentId={environmentId}
+            threadId={threadId}
+            {...(draftId ? { draftId } : {})}
             envLocked={envLocked}
-            hasServerThread={hasServerThread}
-            isThreadSettled={serverThread?.settledAt != null || !threadDetailReady}
-            onSetThreadWorkspace={setThreadWorkspace}
-            variant={variant}
+            {...(effectiveEnvModeOverride ? { effectiveEnvModeOverride } : {})}
+            {...(activeThreadBranchOverride !== undefined ? { activeThreadBranchOverride } : {})}
+            {...(onActiveThreadBranchOverrideChange ? { onActiveThreadBranchOverrideChange } : {})}
+            startFromOrigin={startFromOrigin}
+            onStartFromOriginChange={onStartFromOriginChange}
             {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
             {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
           />
         ) : null}
       </div>
+    );
+  }
+
+  return (
+    <div
+      ref={setStripElement}
+      data-compact={labelsOverflow ? "" : undefined}
+      className="chat-composer-context-strip chat-composer-context-strip-top group/composer-context -mb-4 mx-auto flex w-[calc(100%-2.75rem-2px)] max-w-[calc(48rem-2.75rem-2px)] items-center gap-2 rounded-t-[20px] border border-b-0 border-border/60 px-2 pt-1 pb-5"
+    >
+      {isMobile && showGitControls && !internalOnly ? (
+        <MobileRunContextSelector
+          repositoryReady={repositoryReady}
+          onInitializeGit={repositoryMissing ? initializeGit : undefined}
+          initializingGit={initAction.isPending}
+          envLocked={envLocked}
+          envModeLocked={envModeLocked}
+          environmentId={environmentId}
+          availableEnvironments={availableEnvironments}
+          showEnvironmentPicker={showEnvironmentPicker}
+          showEnvironmentIndicator={showEnvironmentIndicator}
+          autoPlacement={autoPlacement}
+          environmentLocked={environmentLocked}
+          onEnvironmentChange={onEnvironmentChange}
+          onLinkEnvironmentRequest={onLinkEnvironmentRequest}
+          effectiveEnvMode={effectiveEnvMode}
+          activeWorktreePath={activeWorktreePath}
+          onEnvModeChange={handleEnvModeChange}
+          previousWorktreeLabel={previousWorktreeLabel}
+          onUsePreviousWorktree={onUsePreviousWorktree}
+        />
+      ) : (
+        <div className="flex min-w-0 flex-1 items-center gap-1">
+          {showEnvironmentIndicator && availableEnvironments && (
+            <>
+              <BranchToolbarEnvironmentSelector
+                autoPlacement={autoPlacement}
+                envLocked={environmentLocked ?? envLocked}
+                environmentId={environmentId}
+                availableEnvironments={availableEnvironments}
+                {...(showEnvironmentPicker && onEnvironmentChange ? { onEnvironmentChange } : {})}
+                {...(showEnvironmentPicker && onLinkEnvironmentRequest
+                  ? { onLinkEnvironmentRequest }
+                  : {})}
+              />
+              {showGitControls && !internalOnly ? (
+                <Separator
+                  orientation="vertical"
+                  className="mx-0.5 h-3.5!"
+                  data-composer-context-control
+                />
+              ) : null}
+            </>
+          )}
+          {showGitControls && !internalOnly ? (
+            <BranchToolbarEnvModeSelector
+              repositoryReady={repositoryReady}
+              onInitializeGit={repositoryMissing ? initializeGit : undefined}
+              initializingGit={initAction.isPending}
+              envLocked={envModeLocked}
+              effectiveEnvMode={effectiveEnvMode}
+              activeWorktreePath={activeWorktreePath}
+              onEnvModeChange={handleEnvModeChange}
+              previousWorktreeLabel={previousWorktreeLabel}
+              onUsePreviousWorktree={onUsePreviousWorktree}
+            />
+          ) : null}
+        </div>
+      )}
+
+      {showGitControls && !internalOnly ? (
+        <BranchToolbarBranchSelector
+          className="min-w-0 flex-1 justify-end md:ml-auto md:flex-none"
+          environmentId={environmentId}
+          threadId={threadId}
+          {...(draftId ? { draftId } : {})}
+          envLocked={envLocked}
+          {...(effectiveEnvModeOverride ? { effectiveEnvModeOverride } : {})}
+          {...(activeThreadBranchOverride !== undefined ? { activeThreadBranchOverride } : {})}
+          {...(onActiveThreadBranchOverrideChange ? { onActiveThreadBranchOverrideChange } : {})}
+          startFromOrigin={startFromOrigin}
+          onStartFromOriginChange={onStartFromOriginChange}
+          {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
+          {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
+        />
+      ) : null}
     </div>
   );
-}
+});

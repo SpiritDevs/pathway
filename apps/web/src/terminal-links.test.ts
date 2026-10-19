@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import {
   collectWrappedTerminalLinkLine,
   extractTerminalLinks,
   isTerminalLinkActivation,
+  isTerminalUrl,
   resolvePathLinkTarget,
   resolveWrappedTerminalLinkRange,
   wrappedTerminalLinkRangeIntersectsBufferLine,
@@ -37,6 +38,24 @@ describe("extractTerminalLinks", () => {
     ]);
   });
 
+  it("classifies uppercase schemes as URLs at activation time too", () => {
+    expect(isTerminalUrl("HTTPS://example.com/docs")).toBe(true);
+    expect(isTerminalUrl("Http://example.com")).toBe(true);
+    expect(isTerminalUrl("src/components/main.ts")).toBe(false);
+    expect(isTerminalUrl("httpsdocs/readme.md")).toBe(false);
+  });
+
+  it("finds URLs regardless of scheme casing", () => {
+    expect(extractTerminalLinks("open HTTPS://example.com/docs")).toEqual([
+      {
+        kind: "url",
+        text: "HTTPS://example.com/docs",
+        start: 5,
+        end: 29,
+      },
+    ]);
+  });
+
   it("trims trailing punctuation from links", () => {
     const line = "(https://example.com/docs), ./src/main.ts:12.";
     expect(extractTerminalLinks(line)).toEqual([
@@ -54,22 +73,31 @@ describe("extractTerminalLinks", () => {
       },
     ]);
   });
-});
 
-describe("resolvePathLinkTarget", () => {
-  it("resolves relative paths against cwd", () => {
-    expect(
-      resolvePathLinkTarget(
-        "src/components/ThreadTerminalDrawer.tsx:42:7",
-        "/Users/julius/project",
-      ),
-    ).toBe("/Users/julius/project/src/components/ThreadTerminalDrawer.tsx:42:7");
+  it("finds Windows absolute paths with forward slashes", () => {
+    const line = "see C:/Users/someone/project/src/file.ts:42 for details";
+    const path = "C:/Users/someone/project/src/file.ts:42";
+    const start = line.indexOf(path);
+    expect(extractTerminalLinks(line)).toEqual([
+      {
+        kind: "path",
+        text: path,
+        start,
+        end: start + path.length,
+      },
+    ]);
   });
 
-  it("keeps absolute paths unchanged", () => {
-    expect(
-      resolvePathLinkTarget("/Users/julius/project/src/main.ts:12", "/Users/julius/project"),
-    ).toBe("/Users/julius/project/src/main.ts:12");
+  it("trims trailing punctuation from Windows forward-slash paths", () => {
+    const line = "(C:/tmp/x.ts).";
+    expect(extractTerminalLinks(line)).toEqual([
+      {
+        kind: "path",
+        text: "C:/tmp/x.ts",
+        start: 1,
+        end: 12,
+      },
+    ]);
   });
 });
 
@@ -163,6 +191,29 @@ describe("resolveWrappedTerminalLinkRange", () => {
     expect(wrappedTerminalLinkRangeIntersectsBufferLine(range, 2)).toBe(true);
     expect(wrappedTerminalLinkRangeIntersectsBufferLine(range, 3)).toBe(true);
     expect(wrappedTerminalLinkRangeIntersectsBufferLine(range, 4)).toBe(false);
+  });
+});
+
+describe("resolvePathLinkTarget", () => {
+  it("resolves relative paths against cwd", () => {
+    expect(
+      resolvePathLinkTarget(
+        "src/components/ThreadTerminalDrawer.tsx:42:7",
+        "/Users/julius/project",
+      ),
+    ).toBe("/Users/julius/project/src/components/ThreadTerminalDrawer.tsx:42:7");
+  });
+
+  it("keeps absolute paths unchanged", () => {
+    expect(
+      resolvePathLinkTarget("/Users/julius/project/src/main.ts:12", "/Users/julius/project"),
+    ).toBe("/Users/julius/project/src/main.ts:12");
+  });
+
+  it("keeps Windows absolute paths with forward slashes unchanged", () => {
+    expect(
+      resolvePathLinkTarget("C:/Users/julius/project/src/main.ts:12", "C:\\Users\\julius\\project"),
+    ).toBe("C:/Users/julius/project/src/main.ts:12");
   });
 });
 

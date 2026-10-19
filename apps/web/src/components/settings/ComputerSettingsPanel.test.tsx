@@ -1,32 +1,56 @@
-// FILE: ComputerSettingsPanel.test.tsx
-// Purpose: Guards what the Computer settings panel tells the user about the
-//          desktop backend — the one attention row, the calm ready state, and
-//          the chrome it must not grow back (a manual re-arm, spec-sheet rows,
-//          duplicate permission surfaces).
-// Layer: Component rendering tests
-// Depends on: ComputerSettingsPanel and React server rendering.
-//
-// Rendered to static markup with the status query primed, which is enough for
-// every question worth asking of this panel: it is a read-out, and what it
-// reads out is decided at render time. Interaction (pressing Set up) belongs to
-// `useProvisionComputer.test.tsx`, which owns that mutation.
-
-import type { ComputerStatusResult } from "@synara/contracts";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+// What the Computer settings surface tells the user about the desktop backend:
+// the one attention row, the calm ready state, and the chrome it must not grow
+// back. Rendered to static markup, which is enough: it is a read-out decided at
+// render time. Pressing Set up belongs to the provision hook.
 
 import {
-  AppSettingsSchema,
-  applyLocalAppSettingsPatch,
+  ClientSettingsSchema,
+  ComputerId,
+  DEFAULT_CLIENT_SETTINGS,
   resolveAgentCursorColors,
-  type AppSettings,
-  type AppSettingsBinding,
-} from "~/appSettings";
-import { serverQueryKeys } from "~/lib/serverReactQuery";
-import { ComputerSettingsPanel } from "./ComputerSettingsPanel";
+  type ComputerStatusResult,
+} from "@spiritdevs/contracts";
+import * as Schema from "effect/Schema";
+import type { ComponentProps, ReactNode } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it, vi } from "vite-plus/test";
 
-vi.mock("~/components/ui/toast", () => ({ toastManager: { add: vi.fn() } }));
+vi.mock("../ui/toast", () => ({ toastManager: { add: vi.fn() } }));
+
+// The panel's own change callbacks, keyed by the control's accessible label, so
+// a test can act the way a user editing the control would.
+const controls = vi.hoisted(() => new Map<string, (value: unknown) => void>());
+vi.mock("../ui/input", async (importOriginal) => {
+  const { Input } = await importOriginal<typeof import("../ui/input")>();
+  return {
+    Input: (props: ComponentProps<typeof Input>) => {
+      const onChange = props.onChange;
+      if (props["aria-label"] && onChange) {
+        controls.set(props["aria-label"], (value) =>
+          onChange({ target: { value } } as Parameters<typeof onChange>[0]),
+        );
+      }
+      return <Input {...props} />;
+    },
+  };
+});
+vi.mock("../ui/toggle-group", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../ui/toggle-group")>();
+  return {
+    ...real,
+    ToggleGroup: (props: ComponentProps<typeof real.ToggleGroup>) => {
+      const onValueChange = props.onValueChange;
+      if (props["aria-label"] && onValueChange) {
+        controls.set(props["aria-label"], (value) => onValueChange([value] as never, {} as never));
+      }
+      return <real.ToggleGroup {...props} />;
+    },
+  };
+});
+
+import { ComputerHostPermissionNote } from "./ComputerPermissionSection";
+import { ComputerSettingsView, type ComputerSettingsViewSettings } from "./ComputerSettingsPanel";
+import { resolveComputerSettingsAttention } from "./ComputerSettingsPanel.logic";
 
 function capabilities(overrides: Partial<ComputerStatusResult["capabilities"]> = {}) {
   return {
@@ -46,7 +70,7 @@ function capabilities(overrides: Partial<ComputerStatusResult["capabilities"]> =
 
 function status(overrides: Partial<ComputerStatusResult> = {}): ComputerStatusResult {
   return {
-    computerId: "desktop",
+    computerId: ComputerId.make("desktop"),
     availability: { kind: "available", backend: "mac" },
     capabilities: capabilities(),
     health: { status: "connected", consecutiveFailures: 0, reconnects: 0, captureAvailable: true },
@@ -54,45 +78,43 @@ function status(overrides: Partial<ComputerStatusResult> = {}): ComputerStatusRe
   };
 }
 
-function binding(overrides: Partial<AppSettings> = {}): AppSettingsBinding {
-  return {
-    settings: { autoOpenComputerPane: true, computerControlEnabled: true, ...overrides },
-    defaults: { autoOpenComputerPane: true, computerControlEnabled: false },
-    updateSettings: vi.fn(),
-  } as unknown as AppSettingsBinding;
-}
-
-function render(input: {
-  readonly status?: ComputerStatusResult;
-  readonly active?: boolean;
-  readonly settings?: Partial<AppSettings>;
-}) {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  if (input.status) queryClient.setQueryData(serverQueryKeys.computerStatus(), input.status);
+function render(
+  input: {
+    readonly status?: ComputerStatusResult;
+    readonly statusError?: string;
+    readonly settings?: Partial<ComputerSettingsViewSettings>;
+    readonly setup?: { readonly isPending: boolean; readonly note: string | undefined };
+    readonly permissions?: ReactNode;
+  } = {},
+) {
+  const attention = resolveComputerSettingsAttention({
+    status: input.status,
+    statusError: input.statusError ?? null,
+    nativeState: null,
+    hasNativeBridge: false,
+  });
   return renderToStaticMarkup(
-    <QueryClientProvider client={queryClient}>
-      <ComputerSettingsPanel {...binding(input.settings)} active={input.active ?? true} />
-    </QueryClientProvider>,
+    <ComputerSettingsView
+      settings={{ ...DEFAULT_CLIENT_SETTINGS, computerControlEnabled: true, ...input.settings }}
+      updateSettings={() => undefined}
+      status={input.status}
+      attention={attention}
+      setup={{ provision: () => undefined, isPending: false, note: undefined, ...input.setup }}
+      retry={{ isChecking: false, onRetry: () => undefined }}
+      permissions={input.permissions ?? null}
+    />,
   );
 }
 
-describe("ComputerSettingsPanel", () => {
-  it("renders nothing while the panel is not the active one", () => {
-    // The status query is gated on the same flag; a panel nobody is looking at
-    // must not poll a backend awake.
-    expect(render({ status: status(), active: false })).toBe("");
-  });
-
+describe("ComputerSettingsView", () => {
   it("opens as one Computer control surface with the toggle in the header", () => {
     const markup = render({ status: status() });
-    // Exactly one occurrence: the section title owns the words, and no row
-    // repeats them.
     expect(markup.match(/Computer control/g) ?? []).toHaveLength(1);
     expect(markup).toContain("Enable Computer by default in any chat.");
     expect(markup).toContain("use /computer-use for one request");
     expect(markup).toContain('aria-label="Let the agent use the desktop in any chat"');
     // The section is the search/deep-link target for the toggle it carries.
-    expect(markup).toContain('id="setting-computer-control"');
+    expect(markup).toContain('id="computer-control"');
   });
 
   it("keeps the surface calm while the desktop is ready", () => {
@@ -101,13 +123,10 @@ describe("ComputerSettingsPanel", () => {
     expect(markup).not.toContain("Set up");
     expect(markup).not.toContain("Refresh");
     expect(markup).not.toContain("Desktop backend");
-    expect(markup).not.toContain("Background typing is limited");
     expect(markup).not.toContain("Capabilities");
   });
 
   it("asks to check access while nothing has confirmed the grants", () => {
-    // After a restart the backend is idle, and without the OS's own grant
-    // answer an idle backend is not evidence that anything works.
     const markup = render({
       status: status({
         health: {
@@ -136,8 +155,6 @@ describe("ComputerSettingsPanel", () => {
     expect(markup).toContain("Computer control needs Accessibility and Screen Recording");
     expect(markup).toContain("macOS is asking for Accessibility.");
     expect(markup).toContain("Set up");
-    // The one attention row names the grants; the old second row ("… are not
-    // allowed yet") is gone.
     expect(markup.match(/Computer control needs/g) ?? []).toHaveLength(1);
     expect(markup).not.toContain("not allowed yet");
   });
@@ -159,6 +176,10 @@ describe("ComputerSettingsPanel", () => {
     expect(markup).toContain("Set up");
     // A blind desktop never gets an abilities read-out that claims capture.
     expect(markup).not.toContain("screen capture");
+    // Names the grant without claiming a live system dialog.
+    expect(markup).not.toContain("macOS is asking");
+    expect(markup).not.toContain("live dialog");
+    expect(markup).not.toContain("dialog is open");
   });
 
   it("reports a reconnect in flight without offering a manual re-arm", () => {
@@ -174,11 +195,11 @@ describe("ComputerSettingsPanel", () => {
     });
     expect(markup).toContain("Reconnecting to the desktop");
     expect(markup).toContain("Reconnected once since startup.");
+    // The checking tone is a static dot, never a repainting pulse.
+    expect(markup).not.toContain("animate-pulse");
   });
 
   it("never renders the retired Escape-stop chrome", () => {
-    // A physical Escape is self-healing now: no latch row, no re-arm button,
-    // wherever the status says the stop happened.
     for (const input of [{ status: status({ inputStopped: true }) }, { status: status() }]) {
       const markup = render(input);
       expect(markup).not.toContain("Input stopped");
@@ -195,7 +216,6 @@ describe("ComputerSettingsPanel", () => {
       'aria-label="Show the computer preview automatically when an agent drives the desktop"',
     );
     expect(markup).toContain('aria-label="In-chat computer preview size"');
-    // The old section title and its separate size row are gone.
     expect(markup).not.toContain("Computer preview");
     expect(markup).not.toContain("Preview size");
   });
@@ -211,7 +231,7 @@ describe("ComputerSettingsPanel", () => {
     expect(markup).toContain("Compact");
   });
 
-  it("describes observation-only Cua without promising Mac input or treating idle readiness as input authorization", () => {
+  it("describes observation-only Cua without promising Mac input", () => {
     const markup = render({
       status: status({
         availability: { kind: "available", backend: "cua" },
@@ -223,7 +243,7 @@ describe("ComputerSettingsPanel", () => {
         }),
       }),
     });
-    expect(markup).toContain("Cua 0.28.2");
+    expect(markup).toContain("Cua");
     expect(markup).toContain("native desktop input is unavailable");
     expect(markup).toContain("verified browser runtime");
     expect(markup).not.toContain("shares your Mac");
@@ -234,9 +254,40 @@ describe("ComputerSettingsPanel", () => {
     const markup = render({ status: status() });
     expect(markup).toContain("Advanced");
     expect(markup).toContain('aria-expanded="false"');
-    // The disclosure content is mounted for its animation but inert and hidden.
+    // Mounted but hidden, so an open permission guide keeps its state.
+    expect(markup).toContain('<div hidden=""');
     expect(markup).toContain("Desktop abilities");
     expect(markup).toContain("macOS desktop");
+  });
+
+  it("offers Check again when the status could not be read", () => {
+    const markup = render({ statusError: "Socket closed." });
+    expect(markup).toContain("Computer status is unavailable");
+    expect(markup).toContain("Socket closed.");
+    expect(markup).toContain("Check again");
+    expect(markup).not.toContain("Set up");
+  });
+
+  it("keeps the provision account inline while Set up runs", () => {
+    const markup = render({
+      status: status({
+        availability: {
+          kind: "permission-required",
+          missing: ["accessibility"],
+          message: "Allow Accessibility.",
+          buildSignature: "adhoc",
+        },
+      }),
+      setup: { isPending: true, note: "Checking Accessibility." },
+    });
+    expect(markup).toContain("Setting up…");
+    expect(markup).toContain("Checking Accessibility.");
+  });
+
+  it("says where grants are set up when this client cannot grant them", () => {
+    const markup = render({ status: status(), permissions: <ComputerHostPermissionNote /> });
+    expect(markup).toContain("Set up on the host");
+    expect(markup).toContain("belong to the machine running this environment");
   });
 
   describe("agent cursor colors", () => {
@@ -245,8 +296,6 @@ describe("ComputerSettingsPanel", () => {
       expect(markup).toContain("Cursor colors");
       expect(markup).toContain("Stock");
       expect(markup).toContain("Custom");
-      // Stock is the zero-override default: no fill/rim editor renders and no
-      // stored color is read out.
       expect(markup).not.toContain("Fill color");
       expect(markup).not.toContain("Rim color");
       expect(markup).not.toContain("data-swatch");
@@ -269,32 +318,56 @@ describe("ComputerSettingsPanel", () => {
       expect(markup).toContain("background-color:#112233");
     });
 
-    it("round-trips custom colors through the settings store", () => {
-      const defaults = AppSettingsSchema.makeUnsafe({});
-      // The default is stock with no overrides stored.
-      expect(defaults.agentCursorColorMode).toBe("stock");
-      expect(defaults.agentCursorFillColor).toBe("");
-      expect(defaults.agentCursorRimColor).toBe("");
-      expect(resolveAgentCursorColors(defaults)).toBeNull();
+    it("round-trips custom colors through the controls and the stored client settings", () => {
+      const decode = Schema.decodeUnknownSync(ClientSettingsSchema);
+      let stored = decode({});
+      // Each edit goes through the panel's callback and back through storage.
+      const renderStored = () =>
+        renderToStaticMarkup(
+          <ComputerSettingsView
+            settings={{ ...stored, computerControlEnabled: true }}
+            updateSettings={(patch) => {
+              stored = decode(Schema.encodeSync(ClientSettingsSchema)({ ...stored, ...patch }));
+            }}
+            status={status()}
+            attention={resolveComputerSettingsAttention({
+              status: status(),
+              statusError: null,
+              nativeState: null,
+              hasNativeBridge: false,
+            })}
+            setup={{ provision: () => undefined, isPending: false, note: undefined }}
+            retry={{ isChecking: false, onRetry: () => undefined }}
+            permissions={null}
+          />,
+        );
+      const edit = (label: string, value: string) => {
+        controls.clear();
+        renderStored();
+        const onChange = controls.get(label);
+        expect(onChange, label).toBeDefined();
+        onChange?.(value);
+      };
 
-      const stored = applyLocalAppSettingsPatch(defaults, {
-        agentCursorColorMode: "custom",
-        agentCursorFillColor: "#AABBCC",
-        agentCursorRimColor: "not-a-color",
-      });
+      // The default is stock with no overrides stored.
+      expect(resolveAgentCursorColors(stored)).toBeNull();
+
+      edit("Agent cursor colors", "custom");
       expect(stored.agentCursorColorMode).toBe("custom");
+      // The color field commits only a complete hex color, lowercased.
+      edit("Fill color", "#AABBCC");
+      edit("Rim color", "#112233");
+      edit("Rim color", "not-a-color");
       expect(stored.agentCursorFillColor).toBe("#aabbcc");
-      // A value that is not a complete hex color never becomes a preference.
-      expect(stored.agentCursorRimColor).toBe("");
-      expect(resolveAgentCursorColors(stored)).toEqual({ fill: "#aabbcc" });
+      expect(stored.agentCursorRimColor).toBe("#112233");
+      expect(resolveAgentCursorColors(stored)).toEqual({ fill: "#aabbcc", rim: "#112233" });
+      expect(renderStored()).toContain("background-color:#aabbcc");
 
       // Stock means zero overrides even when colors are still remembered for
       // a later switch back to custom.
-      const backToStock = applyLocalAppSettingsPatch(stored, {
-        agentCursorColorMode: "stock",
-      });
-      expect(backToStock.agentCursorFillColor).toBe("#aabbcc");
-      expect(resolveAgentCursorColors(backToStock)).toBeNull();
+      edit("Agent cursor colors", "stock");
+      expect(stored.agentCursorFillColor).toBe("#aabbcc");
+      expect(resolveAgentCursorColors(stored)).toBeNull();
     });
   });
 });

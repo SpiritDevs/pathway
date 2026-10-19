@@ -9,32 +9,401 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as UsageRouteImport } from './routes/usage'
+import { Route as TimeTrackerRouteImport } from './routes/time-tracker'
+import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as RegisterRouteImport } from './routes/register'
+import { Route as ProjectsRouteImport } from './routes/projects'
+import { Route as PairRouteImport } from './routes/pair'
+import { Route as OrchestratorRouteImport } from './routes/orchestrator'
+import { Route as OnboardingRouteImport } from './routes/onboarding'
+import { Route as LoginRouteImport } from './routes/login'
+import { Route as IssuesRouteImport } from './routes/issues'
+import { Route as EmailRouteImport } from './routes/email'
+import { Route as DashboardRouteImport } from './routes/dashboard'
+import { Route as ContactsRouteImport } from './routes/contacts'
+import { Route as ConnectRouteImport } from './routes/connect'
+import { Route as CalendarRouteImport } from './routes/calendar'
 import { Route as ChatRouteImport } from './routes/_chat'
-import { Route as ChatIndexRouteImport } from './routes/_chat.index'
-import { Route as ChatSettingsRouteImport } from './routes/_chat.settings'
+import { Route as IndexRouteImport } from './routes/index'
+import { Route as ProjectsIndexRouteImport } from './routes/projects.index'
+import { Route as SettingsUsageRouteImport } from './routes/settings.usage'
+import { Route as SettingsTimeTrackerRouteImport } from './routes/settings.time-tracker'
+import { Route as SettingsSyncRouteImport } from './routes/settings.sync'
+import { Route as SettingsSourceControlRouteImport } from './routes/settings.source-control'
+import { Route as SettingsSnapShotRouteImport } from './routes/settings.snap-shot'
+import { Route as SettingsScheduledTasksRouteImport } from './routes/settings.scheduled-tasks'
+import { Route as SettingsProvidersRouteImport } from './routes/settings.providers'
+import { Route as SettingsProjectsRouteImport } from './routes/settings.projects'
+import { Route as SettingsOrchestratorsWorkLimitsRouteImport } from './routes/settings.orchestrators-work-limits'
+import { Route as SettingsOrchestratorsResponsibilitiesRouteImport } from './routes/settings.orchestrators-responsibilities'
+import { Route as SettingsOrchestratorsPermissionsRouteImport } from './routes/settings.orchestrators-permissions'
+import { Route as SettingsOrchestratorsOverviewRouteImport } from './routes/settings.orchestrators-overview'
+import { Route as SettingsOrchestratorsNotificationsRouteImport } from './routes/settings.orchestrators-notifications'
+import { Route as SettingsOrchestratorsModelsRouteImport } from './routes/settings.orchestrators-models'
+import { Route as SettingsOrchestratorsMemoryRouteImport } from './routes/settings.orchestrators-memory'
+import { Route as SettingsOrchestratorsInstructionsRouteImport } from './routes/settings.orchestrators-instructions'
+import { Route as SettingsOrchestratorsEnvironmentsRouteImport } from './routes/settings.orchestrators-environments'
+import { Route as SettingsNotificationsRouteImport } from './routes/settings.notifications'
+import { Route as SettingsMembersTeamsRouteImport } from './routes/settings.members-teams'
+import { Route as SettingsKeybindingsRouteImport } from './routes/settings.keybindings'
+import { Route as SettingsIssuesStatusesRouteImport } from './routes/settings.issues-statuses'
+import { Route as SettingsIssuesMilestonesRouteImport } from './routes/settings.issues-milestones'
+import { Route as SettingsIssuesLabelsRouteImport } from './routes/settings.issues-labels'
+import { Route as SettingsIssuesIntakeRouteImport } from './routes/settings.issues-intake'
+import { Route as SettingsIssuesImportRouteImport } from './routes/settings.issues-import'
+import { Route as SettingsIssuesEnrichmentRouteImport } from './routes/settings.issues-enrichment'
+import { Route as SettingsIntegrationsRouteImport } from './routes/settings.integrations'
+import { Route as SettingsGeneralRouteImport } from './routes/settings.general'
+import { Route as SettingsEnvironmentsRouteImport } from './routes/settings.environments'
+import { Route as SettingsEmailRouteImport } from './routes/settings.email'
+import { Route as SettingsDictationRouteImport } from './routes/settings.dictation'
+import { Route as SettingsDiagnosticsRouteImport } from './routes/settings.diagnostics'
+import { Route as SettingsConnectionsRouteImport } from './routes/settings.connections'
+import { Route as SettingsComputerRouteImport } from './routes/settings.computer'
+import { Route as SettingsCompanyTeamsRouteImport } from './routes/settings.company-teams'
+import { Route as SettingsCompanyRolesRouteImport } from './routes/settings.company-roles'
+import { Route as SettingsCompanyMembersRouteImport } from './routes/settings.company-members'
+import { Route as SettingsCalendarsRouteImport } from './routes/settings.calendars'
+import { Route as SettingsArchivedRouteImport } from './routes/settings.archived'
+import { Route as SettingsAppearanceRouteImport } from './routes/settings.appearance'
+import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
+import { Route as IssuesMilestonesRouteImport } from './routes/issues_.milestones'
+import { Route as ConnectCallbackRouteImport } from './routes/connect_.callback'
+import { Route as ChatThreadsRouteImport } from './routes/_chat.threads'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
-import { Route as ChatPluginsRouteImport } from './routes/_chat.plugins'
-import { Route as ChatAutomationsRouteImport } from './routes/_chat.automations'
-import { Route as ChatThreadIdRouteImport } from './routes/_chat.$threadId'
-import { Route as ChatStudioIndexRouteImport } from './routes/_chat.studio.index'
-import { Route as ChatPullRequestsIndexRouteImport } from './routes/_chat.pull-requests.index'
-import { Route as ChatKanbanIndexRouteImport } from './routes/_chat.kanban.index'
-import { Route as ChatAutomationsIndexRouteImport } from './routes/_chat.automations.index'
-import { Route as ChatKanbanProjectIdRouteImport } from './routes/_chat.kanban.$projectId'
-import { Route as ChatAutomationsAutomationIdRouteImport } from './routes/_chat.automations.$automationId'
+import { Route as SettingsProjectsProjectKeyRouteImport } from './routes/settings.projects_.$projectKey'
+import { Route as SettingsEmailEnvironmentIdRouteImport } from './routes/settings.email_.$environmentId'
+import { Route as SettingsDictationSettingsRouteImport } from './routes/settings.dictation_.settings'
+import { Route as SettingsDictationPreviewRouteImport } from './routes/settings.dictation_.preview'
+import { Route as SettingsDictationModelsRouteImport } from './routes/settings.dictation_.models'
+import { Route as SettingsDictationHistoryRouteImport } from './routes/settings.dictation_.history'
+import { Route as SettingsDictationDictionaryRouteImport } from './routes/settings.dictation_.dictionary'
+import { Route as SettingsAppearanceActionPaletteRouteImport } from './routes/settings.appearance_.action-palette'
+import { Route as IssuesMilestonesMilestoneIdRouteImport } from './routes/issues_.milestones_.$milestoneId'
+import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
+import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
+import { Route as ChatThreadsDraftDraftIdRouteImport } from './routes/_chat.threads_.draft.$draftId'
+import { Route as ChatThreadsEnvironmentIdThreadIdRouteImport } from './routes/_chat.threads_.$environmentId.$threadId'
 
+const UsageRoute = UsageRouteImport.update({
+  id: '/usage',
+  path: '/usage',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TimeTrackerRoute = TimeTrackerRouteImport.update({
+  id: '/time-tracker',
+  path: '/time-tracker',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RegisterRoute = RegisterRouteImport.update({
+  id: '/register',
+  path: '/register',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProjectsRoute = ProjectsRouteImport.update({
+  id: '/projects',
+  path: '/projects',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PairRoute = PairRouteImport.update({
+  id: '/pair',
+  path: '/pair',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OrchestratorRoute = OrchestratorRouteImport.update({
+  id: '/orchestrator',
+  path: '/orchestrator',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OnboardingRoute = OnboardingRouteImport.update({
+  id: '/onboarding',
+  path: '/onboarding',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const IssuesRoute = IssuesRouteImport.update({
+  id: '/issues',
+  path: '/issues',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const EmailRoute = EmailRouteImport.update({
+  id: '/email',
+  path: '/email',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DashboardRoute = DashboardRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ContactsRoute = ContactsRouteImport.update({
+  id: '/contacts',
+  path: '/contacts',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ConnectRoute = ConnectRouteImport.update({
+  id: '/connect',
+  path: '/connect',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CalendarRoute = CalendarRouteImport.update({
+  id: '/calendar',
+  path: '/calendar',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ChatRoute = ChatRouteImport.update({
   id: '/_chat',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ChatIndexRoute = ChatIndexRouteImport.update({
+const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => ChatRoute,
+  getParentRoute: () => rootRouteImport,
 } as any)
-const ChatSettingsRoute = ChatSettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
+const ProjectsIndexRoute = ProjectsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => ProjectsRoute,
+} as any)
+const SettingsUsageRoute = SettingsUsageRouteImport.update({
+  id: '/usage',
+  path: '/usage',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsTimeTrackerRoute = SettingsTimeTrackerRouteImport.update({
+  id: '/time-tracker',
+  path: '/time-tracker',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsSyncRoute = SettingsSyncRouteImport.update({
+  id: '/sync',
+  path: '/sync',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsSourceControlRoute = SettingsSourceControlRouteImport.update({
+  id: '/source-control',
+  path: '/source-control',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsSnapShotRoute = SettingsSnapShotRouteImport.update({
+  id: '/snap-shot',
+  path: '/snap-shot',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsScheduledTasksRoute = SettingsScheduledTasksRouteImport.update({
+  id: '/scheduled-tasks',
+  path: '/scheduled-tasks',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsProvidersRoute = SettingsProvidersRouteImport.update({
+  id: '/providers',
+  path: '/providers',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsProjectsRoute = SettingsProjectsRouteImport.update({
+  id: '/projects',
+  path: '/projects',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsOrchestratorsWorkLimitsRoute =
+  SettingsOrchestratorsWorkLimitsRouteImport.update({
+    id: '/orchestrators-work-limits',
+    path: '/orchestrators-work-limits',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsOrchestratorsResponsibilitiesRoute =
+  SettingsOrchestratorsResponsibilitiesRouteImport.update({
+    id: '/orchestrators-responsibilities',
+    path: '/orchestrators-responsibilities',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsOrchestratorsPermissionsRoute =
+  SettingsOrchestratorsPermissionsRouteImport.update({
+    id: '/orchestrators-permissions',
+    path: '/orchestrators-permissions',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsOrchestratorsOverviewRoute =
+  SettingsOrchestratorsOverviewRouteImport.update({
+    id: '/orchestrators-overview',
+    path: '/orchestrators-overview',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsOrchestratorsNotificationsRoute =
+  SettingsOrchestratorsNotificationsRouteImport.update({
+    id: '/orchestrators-notifications',
+    path: '/orchestrators-notifications',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsOrchestratorsModelsRoute =
+  SettingsOrchestratorsModelsRouteImport.update({
+    id: '/orchestrators-models',
+    path: '/orchestrators-models',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsOrchestratorsMemoryRoute =
+  SettingsOrchestratorsMemoryRouteImport.update({
+    id: '/orchestrators-memory',
+    path: '/orchestrators-memory',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsOrchestratorsInstructionsRoute =
+  SettingsOrchestratorsInstructionsRouteImport.update({
+    id: '/orchestrators-instructions',
+    path: '/orchestrators-instructions',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsOrchestratorsEnvironmentsRoute =
+  SettingsOrchestratorsEnvironmentsRouteImport.update({
+    id: '/orchestrators-environments',
+    path: '/orchestrators-environments',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsNotificationsRoute = SettingsNotificationsRouteImport.update({
+  id: '/notifications',
+  path: '/notifications',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsMembersTeamsRoute = SettingsMembersTeamsRouteImport.update({
+  id: '/members-teams',
+  path: '/members-teams',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsKeybindingsRoute = SettingsKeybindingsRouteImport.update({
+  id: '/keybindings',
+  path: '/keybindings',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsIssuesStatusesRoute = SettingsIssuesStatusesRouteImport.update({
+  id: '/issues-statuses',
+  path: '/issues-statuses',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsIssuesMilestonesRoute =
+  SettingsIssuesMilestonesRouteImport.update({
+    id: '/issues-milestones',
+    path: '/issues-milestones',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsIssuesLabelsRoute = SettingsIssuesLabelsRouteImport.update({
+  id: '/issues-labels',
+  path: '/issues-labels',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsIssuesIntakeRoute = SettingsIssuesIntakeRouteImport.update({
+  id: '/issues-intake',
+  path: '/issues-intake',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsIssuesImportRoute = SettingsIssuesImportRouteImport.update({
+  id: '/issues-import',
+  path: '/issues-import',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsIssuesEnrichmentRoute =
+  SettingsIssuesEnrichmentRouteImport.update({
+    id: '/issues-enrichment',
+    path: '/issues-enrichment',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsIntegrationsRoute = SettingsIntegrationsRouteImport.update({
+  id: '/integrations',
+  path: '/integrations',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsGeneralRoute = SettingsGeneralRouteImport.update({
+  id: '/general',
+  path: '/general',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsEnvironmentsRoute = SettingsEnvironmentsRouteImport.update({
+  id: '/environments',
+  path: '/environments',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsEmailRoute = SettingsEmailRouteImport.update({
+  id: '/email',
+  path: '/email',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsDictationRoute = SettingsDictationRouteImport.update({
+  id: '/dictation',
+  path: '/dictation',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsDiagnosticsRoute = SettingsDiagnosticsRouteImport.update({
+  id: '/diagnostics',
+  path: '/diagnostics',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsConnectionsRoute = SettingsConnectionsRouteImport.update({
+  id: '/connections',
+  path: '/connections',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsComputerRoute = SettingsComputerRouteImport.update({
+  id: '/computer',
+  path: '/computer',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsCompanyTeamsRoute = SettingsCompanyTeamsRouteImport.update({
+  id: '/company-teams',
+  path: '/company-teams',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsCompanyRolesRoute = SettingsCompanyRolesRouteImport.update({
+  id: '/company-roles',
+  path: '/company-roles',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsCompanyMembersRoute = SettingsCompanyMembersRouteImport.update({
+  id: '/company-members',
+  path: '/company-members',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsCalendarsRoute = SettingsCalendarsRouteImport.update({
+  id: '/calendars',
+  path: '/calendars',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsArchivedRoute = SettingsArchivedRouteImport.update({
+  id: '/archived',
+  path: '/archived',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsAppearanceRoute = SettingsAppearanceRouteImport.update({
+  id: '/appearance',
+  path: '/appearance',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const ProjectsProjectKeyRoute = ProjectsProjectKeyRouteImport.update({
+  id: '/$projectKey',
+  path: '/$projectKey',
+  getParentRoute: () => ProjectsRoute,
+} as any)
+const IssuesMilestonesRoute = IssuesMilestonesRouteImport.update({
+  id: '/issues_/milestones',
+  path: '/issues/milestones',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ConnectCallbackRoute = ConnectCallbackRouteImport.update({
+  id: '/connect_/callback',
+  path: '/connect/callback',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ChatThreadsRoute = ChatThreadsRouteImport.update({
+  id: '/threads',
+  path: '/threads',
   getParentRoute: () => ChatRoute,
 } as any)
 const ChatPullRequestsRoute = ChatPullRequestsRouteImport.update({
@@ -42,145 +411,678 @@ const ChatPullRequestsRoute = ChatPullRequestsRouteImport.update({
   path: '/pull-requests',
   getParentRoute: () => ChatRoute,
 } as any)
-const ChatPluginsRoute = ChatPluginsRouteImport.update({
-  id: '/plugins',
-  path: '/plugins',
+const SettingsProjectsProjectKeyRoute =
+  SettingsProjectsProjectKeyRouteImport.update({
+    id: '/projects_/$projectKey',
+    path: '/projects/$projectKey',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsEmailEnvironmentIdRoute =
+  SettingsEmailEnvironmentIdRouteImport.update({
+    id: '/email_/$environmentId',
+    path: '/email/$environmentId',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsDictationSettingsRoute =
+  SettingsDictationSettingsRouteImport.update({
+    id: '/dictation_/settings',
+    path: '/dictation/settings',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsDictationPreviewRoute =
+  SettingsDictationPreviewRouteImport.update({
+    id: '/dictation_/preview',
+    path: '/dictation/preview',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsDictationModelsRoute = SettingsDictationModelsRouteImport.update({
+  id: '/dictation_/models',
+  path: '/dictation/models',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsDictationHistoryRoute =
+  SettingsDictationHistoryRouteImport.update({
+    id: '/dictation_/history',
+    path: '/dictation/history',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsDictationDictionaryRoute =
+  SettingsDictationDictionaryRouteImport.update({
+    id: '/dictation_/dictionary',
+    path: '/dictation/dictionary',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsAppearanceActionPaletteRoute =
+  SettingsAppearanceActionPaletteRouteImport.update({
+    id: '/appearance_/action-palette',
+    path: '/appearance/action-palette',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const IssuesMilestonesMilestoneIdRoute =
+  IssuesMilestonesMilestoneIdRouteImport.update({
+    id: '/issues_/milestones_/$milestoneId',
+    path: '/issues/milestones/$milestoneId',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ChatDraftDraftIdRoute = ChatDraftDraftIdRouteImport.update({
+  id: '/draft/$draftId',
+  path: '/draft/$draftId',
   getParentRoute: () => ChatRoute,
 } as any)
-const ChatAutomationsRoute = ChatAutomationsRouteImport.update({
-  id: '/automations',
-  path: '/automations',
+const ChatEnvironmentIdThreadIdRoute =
+  ChatEnvironmentIdThreadIdRouteImport.update({
+    id: '/$environmentId/$threadId',
+    path: '/$environmentId/$threadId',
+    getParentRoute: () => ChatRoute,
+  } as any)
+const ChatThreadsDraftDraftIdRoute = ChatThreadsDraftDraftIdRouteImport.update({
+  id: '/threads_/draft/$draftId',
+  path: '/threads/draft/$draftId',
   getParentRoute: () => ChatRoute,
 } as any)
-const ChatThreadIdRoute = ChatThreadIdRouteImport.update({
-  id: '/$threadId',
-  path: '/$threadId',
-  getParentRoute: () => ChatRoute,
-} as any)
-const ChatStudioIndexRoute = ChatStudioIndexRouteImport.update({
-  id: '/studio/',
-  path: '/studio/',
-  getParentRoute: () => ChatRoute,
-} as any)
-const ChatPullRequestsIndexRoute = ChatPullRequestsIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => ChatPullRequestsRoute,
-} as any)
-const ChatKanbanIndexRoute = ChatKanbanIndexRouteImport.update({
-  id: '/kanban/',
-  path: '/kanban/',
-  getParentRoute: () => ChatRoute,
-} as any)
-const ChatAutomationsIndexRoute = ChatAutomationsIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => ChatAutomationsRoute,
-} as any)
-const ChatKanbanProjectIdRoute = ChatKanbanProjectIdRouteImport.update({
-  id: '/kanban/$projectId',
-  path: '/kanban/$projectId',
-  getParentRoute: () => ChatRoute,
-} as any)
-const ChatAutomationsAutomationIdRoute =
-  ChatAutomationsAutomationIdRouteImport.update({
-    id: '/$automationId',
-    path: '/$automationId',
-    getParentRoute: () => ChatAutomationsRoute,
+const ChatThreadsEnvironmentIdThreadIdRoute =
+  ChatThreadsEnvironmentIdThreadIdRouteImport.update({
+    id: '/threads_/$environmentId/$threadId',
+    path: '/threads/$environmentId/$threadId',
+    getParentRoute: () => ChatRoute,
   } as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof ChatIndexRoute
-  '/$threadId': typeof ChatThreadIdRoute
-  '/automations': typeof ChatAutomationsRouteWithChildren
-  '/plugins': typeof ChatPluginsRoute
-  '/pull-requests': typeof ChatPullRequestsRouteWithChildren
-  '/settings': typeof ChatSettingsRoute
-  '/automations/$automationId': typeof ChatAutomationsAutomationIdRoute
-  '/kanban/$projectId': typeof ChatKanbanProjectIdRoute
-  '/automations/': typeof ChatAutomationsIndexRoute
-  '/kanban/': typeof ChatKanbanIndexRoute
-  '/pull-requests/': typeof ChatPullRequestsIndexRoute
-  '/studio/': typeof ChatStudioIndexRoute
+  '/': typeof IndexRoute
+  '/calendar': typeof CalendarRoute
+  '/connect': typeof ConnectRoute
+  '/contacts': typeof ContactsRoute
+  '/dashboard': typeof DashboardRoute
+  '/email': typeof EmailRoute
+  '/issues': typeof IssuesRoute
+  '/login': typeof LoginRoute
+  '/onboarding': typeof OnboardingRoute
+  '/orchestrator': typeof OrchestratorRoute
+  '/pair': typeof PairRoute
+  '/projects': typeof ProjectsRouteWithChildren
+  '/register': typeof RegisterRoute
+  '/settings': typeof SettingsRouteWithChildren
+  '/time-tracker': typeof TimeTrackerRoute
+  '/usage': typeof UsageRoute
+  '/pull-requests': typeof ChatPullRequestsRoute
+  '/threads': typeof ChatThreadsRoute
+  '/connect/callback': typeof ConnectCallbackRoute
+  '/issues/milestones': typeof IssuesMilestonesRoute
+  '/projects/$projectKey': typeof ProjectsProjectKeyRoute
+  '/settings/appearance': typeof SettingsAppearanceRoute
+  '/settings/archived': typeof SettingsArchivedRoute
+  '/settings/calendars': typeof SettingsCalendarsRoute
+  '/settings/company-members': typeof SettingsCompanyMembersRoute
+  '/settings/company-roles': typeof SettingsCompanyRolesRoute
+  '/settings/company-teams': typeof SettingsCompanyTeamsRoute
+  '/settings/computer': typeof SettingsComputerRoute
+  '/settings/connections': typeof SettingsConnectionsRoute
+  '/settings/diagnostics': typeof SettingsDiagnosticsRoute
+  '/settings/dictation': typeof SettingsDictationRoute
+  '/settings/email': typeof SettingsEmailRoute
+  '/settings/environments': typeof SettingsEnvironmentsRoute
+  '/settings/general': typeof SettingsGeneralRoute
+  '/settings/integrations': typeof SettingsIntegrationsRoute
+  '/settings/issues-enrichment': typeof SettingsIssuesEnrichmentRoute
+  '/settings/issues-import': typeof SettingsIssuesImportRoute
+  '/settings/issues-intake': typeof SettingsIssuesIntakeRoute
+  '/settings/issues-labels': typeof SettingsIssuesLabelsRoute
+  '/settings/issues-milestones': typeof SettingsIssuesMilestonesRoute
+  '/settings/issues-statuses': typeof SettingsIssuesStatusesRoute
+  '/settings/keybindings': typeof SettingsKeybindingsRoute
+  '/settings/members-teams': typeof SettingsMembersTeamsRoute
+  '/settings/notifications': typeof SettingsNotificationsRoute
+  '/settings/orchestrators-environments': typeof SettingsOrchestratorsEnvironmentsRoute
+  '/settings/orchestrators-instructions': typeof SettingsOrchestratorsInstructionsRoute
+  '/settings/orchestrators-memory': typeof SettingsOrchestratorsMemoryRoute
+  '/settings/orchestrators-models': typeof SettingsOrchestratorsModelsRoute
+  '/settings/orchestrators-notifications': typeof SettingsOrchestratorsNotificationsRoute
+  '/settings/orchestrators-overview': typeof SettingsOrchestratorsOverviewRoute
+  '/settings/orchestrators-permissions': typeof SettingsOrchestratorsPermissionsRoute
+  '/settings/orchestrators-responsibilities': typeof SettingsOrchestratorsResponsibilitiesRoute
+  '/settings/orchestrators-work-limits': typeof SettingsOrchestratorsWorkLimitsRoute
+  '/settings/projects': typeof SettingsProjectsRoute
+  '/settings/providers': typeof SettingsProvidersRoute
+  '/settings/scheduled-tasks': typeof SettingsScheduledTasksRoute
+  '/settings/snap-shot': typeof SettingsSnapShotRoute
+  '/settings/source-control': typeof SettingsSourceControlRoute
+  '/settings/sync': typeof SettingsSyncRoute
+  '/settings/time-tracker': typeof SettingsTimeTrackerRoute
+  '/settings/usage': typeof SettingsUsageRoute
+  '/projects/': typeof ProjectsIndexRoute
+  '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
+  '/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/issues/milestones/$milestoneId': typeof IssuesMilestonesMilestoneIdRoute
+  '/settings/appearance/action-palette': typeof SettingsAppearanceActionPaletteRoute
+  '/settings/dictation/dictionary': typeof SettingsDictationDictionaryRoute
+  '/settings/dictation/history': typeof SettingsDictationHistoryRoute
+  '/settings/dictation/models': typeof SettingsDictationModelsRoute
+  '/settings/dictation/preview': typeof SettingsDictationPreviewRoute
+  '/settings/dictation/settings': typeof SettingsDictationSettingsRoute
+  '/settings/email/$environmentId': typeof SettingsEmailEnvironmentIdRoute
+  '/settings/projects/$projectKey': typeof SettingsProjectsProjectKeyRoute
+  '/threads/$environmentId/$threadId': typeof ChatThreadsEnvironmentIdThreadIdRoute
+  '/threads/draft/$draftId': typeof ChatThreadsDraftDraftIdRoute
 }
 export interface FileRoutesByTo {
-  '/$threadId': typeof ChatThreadIdRoute
-  '/plugins': typeof ChatPluginsRoute
-  '/settings': typeof ChatSettingsRoute
-  '/': typeof ChatIndexRoute
-  '/automations/$automationId': typeof ChatAutomationsAutomationIdRoute
-  '/kanban/$projectId': typeof ChatKanbanProjectIdRoute
-  '/automations': typeof ChatAutomationsIndexRoute
-  '/kanban': typeof ChatKanbanIndexRoute
-  '/pull-requests': typeof ChatPullRequestsIndexRoute
-  '/studio': typeof ChatStudioIndexRoute
+  '/': typeof IndexRoute
+  '/calendar': typeof CalendarRoute
+  '/connect': typeof ConnectRoute
+  '/contacts': typeof ContactsRoute
+  '/dashboard': typeof DashboardRoute
+  '/email': typeof EmailRoute
+  '/issues': typeof IssuesRoute
+  '/login': typeof LoginRoute
+  '/onboarding': typeof OnboardingRoute
+  '/orchestrator': typeof OrchestratorRoute
+  '/pair': typeof PairRoute
+  '/register': typeof RegisterRoute
+  '/settings': typeof SettingsRouteWithChildren
+  '/time-tracker': typeof TimeTrackerRoute
+  '/usage': typeof UsageRoute
+  '/pull-requests': typeof ChatPullRequestsRoute
+  '/threads': typeof ChatThreadsRoute
+  '/connect/callback': typeof ConnectCallbackRoute
+  '/issues/milestones': typeof IssuesMilestonesRoute
+  '/projects/$projectKey': typeof ProjectsProjectKeyRoute
+  '/settings/appearance': typeof SettingsAppearanceRoute
+  '/settings/archived': typeof SettingsArchivedRoute
+  '/settings/calendars': typeof SettingsCalendarsRoute
+  '/settings/company-members': typeof SettingsCompanyMembersRoute
+  '/settings/company-roles': typeof SettingsCompanyRolesRoute
+  '/settings/company-teams': typeof SettingsCompanyTeamsRoute
+  '/settings/computer': typeof SettingsComputerRoute
+  '/settings/connections': typeof SettingsConnectionsRoute
+  '/settings/diagnostics': typeof SettingsDiagnosticsRoute
+  '/settings/dictation': typeof SettingsDictationRoute
+  '/settings/email': typeof SettingsEmailRoute
+  '/settings/environments': typeof SettingsEnvironmentsRoute
+  '/settings/general': typeof SettingsGeneralRoute
+  '/settings/integrations': typeof SettingsIntegrationsRoute
+  '/settings/issues-enrichment': typeof SettingsIssuesEnrichmentRoute
+  '/settings/issues-import': typeof SettingsIssuesImportRoute
+  '/settings/issues-intake': typeof SettingsIssuesIntakeRoute
+  '/settings/issues-labels': typeof SettingsIssuesLabelsRoute
+  '/settings/issues-milestones': typeof SettingsIssuesMilestonesRoute
+  '/settings/issues-statuses': typeof SettingsIssuesStatusesRoute
+  '/settings/keybindings': typeof SettingsKeybindingsRoute
+  '/settings/members-teams': typeof SettingsMembersTeamsRoute
+  '/settings/notifications': typeof SettingsNotificationsRoute
+  '/settings/orchestrators-environments': typeof SettingsOrchestratorsEnvironmentsRoute
+  '/settings/orchestrators-instructions': typeof SettingsOrchestratorsInstructionsRoute
+  '/settings/orchestrators-memory': typeof SettingsOrchestratorsMemoryRoute
+  '/settings/orchestrators-models': typeof SettingsOrchestratorsModelsRoute
+  '/settings/orchestrators-notifications': typeof SettingsOrchestratorsNotificationsRoute
+  '/settings/orchestrators-overview': typeof SettingsOrchestratorsOverviewRoute
+  '/settings/orchestrators-permissions': typeof SettingsOrchestratorsPermissionsRoute
+  '/settings/orchestrators-responsibilities': typeof SettingsOrchestratorsResponsibilitiesRoute
+  '/settings/orchestrators-work-limits': typeof SettingsOrchestratorsWorkLimitsRoute
+  '/settings/projects': typeof SettingsProjectsRoute
+  '/settings/providers': typeof SettingsProvidersRoute
+  '/settings/scheduled-tasks': typeof SettingsScheduledTasksRoute
+  '/settings/snap-shot': typeof SettingsSnapShotRoute
+  '/settings/source-control': typeof SettingsSourceControlRoute
+  '/settings/sync': typeof SettingsSyncRoute
+  '/settings/time-tracker': typeof SettingsTimeTrackerRoute
+  '/settings/usage': typeof SettingsUsageRoute
+  '/projects': typeof ProjectsIndexRoute
+  '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
+  '/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/issues/milestones/$milestoneId': typeof IssuesMilestonesMilestoneIdRoute
+  '/settings/appearance/action-palette': typeof SettingsAppearanceActionPaletteRoute
+  '/settings/dictation/dictionary': typeof SettingsDictationDictionaryRoute
+  '/settings/dictation/history': typeof SettingsDictationHistoryRoute
+  '/settings/dictation/models': typeof SettingsDictationModelsRoute
+  '/settings/dictation/preview': typeof SettingsDictationPreviewRoute
+  '/settings/dictation/settings': typeof SettingsDictationSettingsRoute
+  '/settings/email/$environmentId': typeof SettingsEmailEnvironmentIdRoute
+  '/settings/projects/$projectKey': typeof SettingsProjectsProjectKeyRoute
+  '/threads/$environmentId/$threadId': typeof ChatThreadsEnvironmentIdThreadIdRoute
+  '/threads/draft/$draftId': typeof ChatThreadsDraftDraftIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
+  '/': typeof IndexRoute
   '/_chat': typeof ChatRouteWithChildren
-  '/_chat/$threadId': typeof ChatThreadIdRoute
-  '/_chat/automations': typeof ChatAutomationsRouteWithChildren
-  '/_chat/plugins': typeof ChatPluginsRoute
-  '/_chat/pull-requests': typeof ChatPullRequestsRouteWithChildren
-  '/_chat/settings': typeof ChatSettingsRoute
-  '/_chat/': typeof ChatIndexRoute
-  '/_chat/automations/$automationId': typeof ChatAutomationsAutomationIdRoute
-  '/_chat/kanban/$projectId': typeof ChatKanbanProjectIdRoute
-  '/_chat/automations/': typeof ChatAutomationsIndexRoute
-  '/_chat/kanban/': typeof ChatKanbanIndexRoute
-  '/_chat/pull-requests/': typeof ChatPullRequestsIndexRoute
-  '/_chat/studio/': typeof ChatStudioIndexRoute
+  '/calendar': typeof CalendarRoute
+  '/connect': typeof ConnectRoute
+  '/contacts': typeof ContactsRoute
+  '/dashboard': typeof DashboardRoute
+  '/email': typeof EmailRoute
+  '/issues': typeof IssuesRoute
+  '/login': typeof LoginRoute
+  '/onboarding': typeof OnboardingRoute
+  '/orchestrator': typeof OrchestratorRoute
+  '/pair': typeof PairRoute
+  '/projects': typeof ProjectsRouteWithChildren
+  '/register': typeof RegisterRoute
+  '/settings': typeof SettingsRouteWithChildren
+  '/time-tracker': typeof TimeTrackerRoute
+  '/usage': typeof UsageRoute
+  '/_chat/pull-requests': typeof ChatPullRequestsRoute
+  '/_chat/threads': typeof ChatThreadsRoute
+  '/connect_/callback': typeof ConnectCallbackRoute
+  '/issues_/milestones': typeof IssuesMilestonesRoute
+  '/projects/$projectKey': typeof ProjectsProjectKeyRoute
+  '/settings/appearance': typeof SettingsAppearanceRoute
+  '/settings/archived': typeof SettingsArchivedRoute
+  '/settings/calendars': typeof SettingsCalendarsRoute
+  '/settings/company-members': typeof SettingsCompanyMembersRoute
+  '/settings/company-roles': typeof SettingsCompanyRolesRoute
+  '/settings/company-teams': typeof SettingsCompanyTeamsRoute
+  '/settings/computer': typeof SettingsComputerRoute
+  '/settings/connections': typeof SettingsConnectionsRoute
+  '/settings/diagnostics': typeof SettingsDiagnosticsRoute
+  '/settings/dictation': typeof SettingsDictationRoute
+  '/settings/email': typeof SettingsEmailRoute
+  '/settings/environments': typeof SettingsEnvironmentsRoute
+  '/settings/general': typeof SettingsGeneralRoute
+  '/settings/integrations': typeof SettingsIntegrationsRoute
+  '/settings/issues-enrichment': typeof SettingsIssuesEnrichmentRoute
+  '/settings/issues-import': typeof SettingsIssuesImportRoute
+  '/settings/issues-intake': typeof SettingsIssuesIntakeRoute
+  '/settings/issues-labels': typeof SettingsIssuesLabelsRoute
+  '/settings/issues-milestones': typeof SettingsIssuesMilestonesRoute
+  '/settings/issues-statuses': typeof SettingsIssuesStatusesRoute
+  '/settings/keybindings': typeof SettingsKeybindingsRoute
+  '/settings/members-teams': typeof SettingsMembersTeamsRoute
+  '/settings/notifications': typeof SettingsNotificationsRoute
+  '/settings/orchestrators-environments': typeof SettingsOrchestratorsEnvironmentsRoute
+  '/settings/orchestrators-instructions': typeof SettingsOrchestratorsInstructionsRoute
+  '/settings/orchestrators-memory': typeof SettingsOrchestratorsMemoryRoute
+  '/settings/orchestrators-models': typeof SettingsOrchestratorsModelsRoute
+  '/settings/orchestrators-notifications': typeof SettingsOrchestratorsNotificationsRoute
+  '/settings/orchestrators-overview': typeof SettingsOrchestratorsOverviewRoute
+  '/settings/orchestrators-permissions': typeof SettingsOrchestratorsPermissionsRoute
+  '/settings/orchestrators-responsibilities': typeof SettingsOrchestratorsResponsibilitiesRoute
+  '/settings/orchestrators-work-limits': typeof SettingsOrchestratorsWorkLimitsRoute
+  '/settings/projects': typeof SettingsProjectsRoute
+  '/settings/providers': typeof SettingsProvidersRoute
+  '/settings/scheduled-tasks': typeof SettingsScheduledTasksRoute
+  '/settings/snap-shot': typeof SettingsSnapShotRoute
+  '/settings/source-control': typeof SettingsSourceControlRoute
+  '/settings/sync': typeof SettingsSyncRoute
+  '/settings/time-tracker': typeof SettingsTimeTrackerRoute
+  '/settings/usage': typeof SettingsUsageRoute
+  '/projects/': typeof ProjectsIndexRoute
+  '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
+  '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/issues_/milestones_/$milestoneId': typeof IssuesMilestonesMilestoneIdRoute
+  '/settings/appearance_/action-palette': typeof SettingsAppearanceActionPaletteRoute
+  '/settings/dictation_/dictionary': typeof SettingsDictationDictionaryRoute
+  '/settings/dictation_/history': typeof SettingsDictationHistoryRoute
+  '/settings/dictation_/models': typeof SettingsDictationModelsRoute
+  '/settings/dictation_/preview': typeof SettingsDictationPreviewRoute
+  '/settings/dictation_/settings': typeof SettingsDictationSettingsRoute
+  '/settings/email_/$environmentId': typeof SettingsEmailEnvironmentIdRoute
+  '/settings/projects_/$projectKey': typeof SettingsProjectsProjectKeyRoute
+  '/_chat/threads_/$environmentId/$threadId': typeof ChatThreadsEnvironmentIdThreadIdRoute
+  '/_chat/threads_/draft/$draftId': typeof ChatThreadsDraftDraftIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
-    | '/$threadId'
-    | '/automations'
-    | '/plugins'
-    | '/pull-requests'
+    | '/calendar'
+    | '/connect'
+    | '/contacts'
+    | '/dashboard'
+    | '/email'
+    | '/issues'
+    | '/login'
+    | '/onboarding'
+    | '/orchestrator'
+    | '/pair'
+    | '/projects'
+    | '/register'
     | '/settings'
-    | '/automations/$automationId'
-    | '/kanban/$projectId'
-    | '/automations/'
-    | '/kanban/'
-    | '/pull-requests/'
-    | '/studio/'
+    | '/time-tracker'
+    | '/usage'
+    | '/pull-requests'
+    | '/threads'
+    | '/connect/callback'
+    | '/issues/milestones'
+    | '/projects/$projectKey'
+    | '/settings/appearance'
+    | '/settings/archived'
+    | '/settings/calendars'
+    | '/settings/company-members'
+    | '/settings/company-roles'
+    | '/settings/company-teams'
+    | '/settings/computer'
+    | '/settings/connections'
+    | '/settings/diagnostics'
+    | '/settings/dictation'
+    | '/settings/email'
+    | '/settings/environments'
+    | '/settings/general'
+    | '/settings/integrations'
+    | '/settings/issues-enrichment'
+    | '/settings/issues-import'
+    | '/settings/issues-intake'
+    | '/settings/issues-labels'
+    | '/settings/issues-milestones'
+    | '/settings/issues-statuses'
+    | '/settings/keybindings'
+    | '/settings/members-teams'
+    | '/settings/notifications'
+    | '/settings/orchestrators-environments'
+    | '/settings/orchestrators-instructions'
+    | '/settings/orchestrators-memory'
+    | '/settings/orchestrators-models'
+    | '/settings/orchestrators-notifications'
+    | '/settings/orchestrators-overview'
+    | '/settings/orchestrators-permissions'
+    | '/settings/orchestrators-responsibilities'
+    | '/settings/orchestrators-work-limits'
+    | '/settings/projects'
+    | '/settings/providers'
+    | '/settings/scheduled-tasks'
+    | '/settings/snap-shot'
+    | '/settings/source-control'
+    | '/settings/sync'
+    | '/settings/time-tracker'
+    | '/settings/usage'
+    | '/projects/'
+    | '/$environmentId/$threadId'
+    | '/draft/$draftId'
+    | '/issues/milestones/$milestoneId'
+    | '/settings/appearance/action-palette'
+    | '/settings/dictation/dictionary'
+    | '/settings/dictation/history'
+    | '/settings/dictation/models'
+    | '/settings/dictation/preview'
+    | '/settings/dictation/settings'
+    | '/settings/email/$environmentId'
+    | '/settings/projects/$projectKey'
+    | '/threads/$environmentId/$threadId'
+    | '/threads/draft/$draftId'
   fileRoutesByTo: FileRoutesByTo
   to:
-    | '/$threadId'
-    | '/plugins'
-    | '/settings'
     | '/'
-    | '/automations/$automationId'
-    | '/kanban/$projectId'
-    | '/automations'
-    | '/kanban'
+    | '/calendar'
+    | '/connect'
+    | '/contacts'
+    | '/dashboard'
+    | '/email'
+    | '/issues'
+    | '/login'
+    | '/onboarding'
+    | '/orchestrator'
+    | '/pair'
+    | '/register'
+    | '/settings'
+    | '/time-tracker'
+    | '/usage'
     | '/pull-requests'
-    | '/studio'
+    | '/threads'
+    | '/connect/callback'
+    | '/issues/milestones'
+    | '/projects/$projectKey'
+    | '/settings/appearance'
+    | '/settings/archived'
+    | '/settings/calendars'
+    | '/settings/company-members'
+    | '/settings/company-roles'
+    | '/settings/company-teams'
+    | '/settings/computer'
+    | '/settings/connections'
+    | '/settings/diagnostics'
+    | '/settings/dictation'
+    | '/settings/email'
+    | '/settings/environments'
+    | '/settings/general'
+    | '/settings/integrations'
+    | '/settings/issues-enrichment'
+    | '/settings/issues-import'
+    | '/settings/issues-intake'
+    | '/settings/issues-labels'
+    | '/settings/issues-milestones'
+    | '/settings/issues-statuses'
+    | '/settings/keybindings'
+    | '/settings/members-teams'
+    | '/settings/notifications'
+    | '/settings/orchestrators-environments'
+    | '/settings/orchestrators-instructions'
+    | '/settings/orchestrators-memory'
+    | '/settings/orchestrators-models'
+    | '/settings/orchestrators-notifications'
+    | '/settings/orchestrators-overview'
+    | '/settings/orchestrators-permissions'
+    | '/settings/orchestrators-responsibilities'
+    | '/settings/orchestrators-work-limits'
+    | '/settings/projects'
+    | '/settings/providers'
+    | '/settings/scheduled-tasks'
+    | '/settings/snap-shot'
+    | '/settings/source-control'
+    | '/settings/sync'
+    | '/settings/time-tracker'
+    | '/settings/usage'
+    | '/projects'
+    | '/$environmentId/$threadId'
+    | '/draft/$draftId'
+    | '/issues/milestones/$milestoneId'
+    | '/settings/appearance/action-palette'
+    | '/settings/dictation/dictionary'
+    | '/settings/dictation/history'
+    | '/settings/dictation/models'
+    | '/settings/dictation/preview'
+    | '/settings/dictation/settings'
+    | '/settings/email/$environmentId'
+    | '/settings/projects/$projectKey'
+    | '/threads/$environmentId/$threadId'
+    | '/threads/draft/$draftId'
   id:
     | '__root__'
+    | '/'
     | '/_chat'
-    | '/_chat/$threadId'
-    | '/_chat/automations'
-    | '/_chat/plugins'
+    | '/calendar'
+    | '/connect'
+    | '/contacts'
+    | '/dashboard'
+    | '/email'
+    | '/issues'
+    | '/login'
+    | '/onboarding'
+    | '/orchestrator'
+    | '/pair'
+    | '/projects'
+    | '/register'
+    | '/settings'
+    | '/time-tracker'
+    | '/usage'
     | '/_chat/pull-requests'
-    | '/_chat/settings'
-    | '/_chat/'
-    | '/_chat/automations/$automationId'
-    | '/_chat/kanban/$projectId'
-    | '/_chat/automations/'
-    | '/_chat/kanban/'
-    | '/_chat/pull-requests/'
-    | '/_chat/studio/'
+    | '/_chat/threads'
+    | '/connect_/callback'
+    | '/issues_/milestones'
+    | '/projects/$projectKey'
+    | '/settings/appearance'
+    | '/settings/archived'
+    | '/settings/calendars'
+    | '/settings/company-members'
+    | '/settings/company-roles'
+    | '/settings/company-teams'
+    | '/settings/computer'
+    | '/settings/connections'
+    | '/settings/diagnostics'
+    | '/settings/dictation'
+    | '/settings/email'
+    | '/settings/environments'
+    | '/settings/general'
+    | '/settings/integrations'
+    | '/settings/issues-enrichment'
+    | '/settings/issues-import'
+    | '/settings/issues-intake'
+    | '/settings/issues-labels'
+    | '/settings/issues-milestones'
+    | '/settings/issues-statuses'
+    | '/settings/keybindings'
+    | '/settings/members-teams'
+    | '/settings/notifications'
+    | '/settings/orchestrators-environments'
+    | '/settings/orchestrators-instructions'
+    | '/settings/orchestrators-memory'
+    | '/settings/orchestrators-models'
+    | '/settings/orchestrators-notifications'
+    | '/settings/orchestrators-overview'
+    | '/settings/orchestrators-permissions'
+    | '/settings/orchestrators-responsibilities'
+    | '/settings/orchestrators-work-limits'
+    | '/settings/projects'
+    | '/settings/providers'
+    | '/settings/scheduled-tasks'
+    | '/settings/snap-shot'
+    | '/settings/source-control'
+    | '/settings/sync'
+    | '/settings/time-tracker'
+    | '/settings/usage'
+    | '/projects/'
+    | '/_chat/$environmentId/$threadId'
+    | '/_chat/draft/$draftId'
+    | '/issues_/milestones_/$milestoneId'
+    | '/settings/appearance_/action-palette'
+    | '/settings/dictation_/dictionary'
+    | '/settings/dictation_/history'
+    | '/settings/dictation_/models'
+    | '/settings/dictation_/preview'
+    | '/settings/dictation_/settings'
+    | '/settings/email_/$environmentId'
+    | '/settings/projects_/$projectKey'
+    | '/_chat/threads_/$environmentId/$threadId'
+    | '/_chat/threads_/draft/$draftId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
+  IndexRoute: typeof IndexRoute
   ChatRoute: typeof ChatRouteWithChildren
+  CalendarRoute: typeof CalendarRoute
+  ConnectRoute: typeof ConnectRoute
+  ContactsRoute: typeof ContactsRoute
+  DashboardRoute: typeof DashboardRoute
+  EmailRoute: typeof EmailRoute
+  IssuesRoute: typeof IssuesRoute
+  LoginRoute: typeof LoginRoute
+  OnboardingRoute: typeof OnboardingRoute
+  OrchestratorRoute: typeof OrchestratorRoute
+  PairRoute: typeof PairRoute
+  ProjectsRoute: typeof ProjectsRouteWithChildren
+  RegisterRoute: typeof RegisterRoute
+  SettingsRoute: typeof SettingsRouteWithChildren
+  TimeTrackerRoute: typeof TimeTrackerRoute
+  UsageRoute: typeof UsageRoute
+  ConnectCallbackRoute: typeof ConnectCallbackRoute
+  IssuesMilestonesRoute: typeof IssuesMilestonesRoute
+  IssuesMilestonesMilestoneIdRoute: typeof IssuesMilestonesMilestoneIdRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/usage': {
+      id: '/usage'
+      path: '/usage'
+      fullPath: '/usage'
+      preLoaderRoute: typeof UsageRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/time-tracker': {
+      id: '/time-tracker'
+      path: '/time-tracker'
+      fullPath: '/time-tracker'
+      preLoaderRoute: typeof TimeTrackerRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/register': {
+      id: '/register'
+      path: '/register'
+      fullPath: '/register'
+      preLoaderRoute: typeof RegisterRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects': {
+      id: '/projects'
+      path: '/projects'
+      fullPath: '/projects'
+      preLoaderRoute: typeof ProjectsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/pair': {
+      id: '/pair'
+      path: '/pair'
+      fullPath: '/pair'
+      preLoaderRoute: typeof PairRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/orchestrator': {
+      id: '/orchestrator'
+      path: '/orchestrator'
+      fullPath: '/orchestrator'
+      preLoaderRoute: typeof OrchestratorRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/onboarding': {
+      id: '/onboarding'
+      path: '/onboarding'
+      fullPath: '/onboarding'
+      preLoaderRoute: typeof OnboardingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/issues': {
+      id: '/issues'
+      path: '/issues'
+      fullPath: '/issues'
+      preLoaderRoute: typeof IssuesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/email': {
+      id: '/email'
+      path: '/email'
+      fullPath: '/email'
+      preLoaderRoute: typeof EmailRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/dashboard': {
+      id: '/dashboard'
+      path: '/dashboard'
+      fullPath: '/dashboard'
+      preLoaderRoute: typeof DashboardRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/contacts': {
+      id: '/contacts'
+      path: '/contacts'
+      fullPath: '/contacts'
+      preLoaderRoute: typeof ContactsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/connect': {
+      id: '/connect'
+      path: '/connect'
+      fullPath: '/connect'
+      preLoaderRoute: typeof ConnectRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/calendar': {
+      id: '/calendar'
+      path: '/calendar'
+      fullPath: '/calendar'
+      preLoaderRoute: typeof CalendarRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_chat': {
       id: '/_chat'
       path: ''
@@ -188,18 +1090,326 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_chat/': {
-      id: '/_chat/'
+    '/': {
+      id: '/'
       path: '/'
       fullPath: '/'
-      preLoaderRoute: typeof ChatIndexRouteImport
-      parentRoute: typeof ChatRoute
+      preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/_chat/settings': {
-      id: '/_chat/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof ChatSettingsRouteImport
+    '/projects/': {
+      id: '/projects/'
+      path: '/'
+      fullPath: '/projects/'
+      preLoaderRoute: typeof ProjectsIndexRouteImport
+      parentRoute: typeof ProjectsRoute
+    }
+    '/settings/usage': {
+      id: '/settings/usage'
+      path: '/usage'
+      fullPath: '/settings/usage'
+      preLoaderRoute: typeof SettingsUsageRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/time-tracker': {
+      id: '/settings/time-tracker'
+      path: '/time-tracker'
+      fullPath: '/settings/time-tracker'
+      preLoaderRoute: typeof SettingsTimeTrackerRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/sync': {
+      id: '/settings/sync'
+      path: '/sync'
+      fullPath: '/settings/sync'
+      preLoaderRoute: typeof SettingsSyncRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/source-control': {
+      id: '/settings/source-control'
+      path: '/source-control'
+      fullPath: '/settings/source-control'
+      preLoaderRoute: typeof SettingsSourceControlRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/snap-shot': {
+      id: '/settings/snap-shot'
+      path: '/snap-shot'
+      fullPath: '/settings/snap-shot'
+      preLoaderRoute: typeof SettingsSnapShotRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/scheduled-tasks': {
+      id: '/settings/scheduled-tasks'
+      path: '/scheduled-tasks'
+      fullPath: '/settings/scheduled-tasks'
+      preLoaderRoute: typeof SettingsScheduledTasksRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/providers': {
+      id: '/settings/providers'
+      path: '/providers'
+      fullPath: '/settings/providers'
+      preLoaderRoute: typeof SettingsProvidersRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/projects': {
+      id: '/settings/projects'
+      path: '/projects'
+      fullPath: '/settings/projects'
+      preLoaderRoute: typeof SettingsProjectsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/orchestrators-work-limits': {
+      id: '/settings/orchestrators-work-limits'
+      path: '/orchestrators-work-limits'
+      fullPath: '/settings/orchestrators-work-limits'
+      preLoaderRoute: typeof SettingsOrchestratorsWorkLimitsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/orchestrators-responsibilities': {
+      id: '/settings/orchestrators-responsibilities'
+      path: '/orchestrators-responsibilities'
+      fullPath: '/settings/orchestrators-responsibilities'
+      preLoaderRoute: typeof SettingsOrchestratorsResponsibilitiesRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/orchestrators-permissions': {
+      id: '/settings/orchestrators-permissions'
+      path: '/orchestrators-permissions'
+      fullPath: '/settings/orchestrators-permissions'
+      preLoaderRoute: typeof SettingsOrchestratorsPermissionsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/orchestrators-overview': {
+      id: '/settings/orchestrators-overview'
+      path: '/orchestrators-overview'
+      fullPath: '/settings/orchestrators-overview'
+      preLoaderRoute: typeof SettingsOrchestratorsOverviewRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/orchestrators-notifications': {
+      id: '/settings/orchestrators-notifications'
+      path: '/orchestrators-notifications'
+      fullPath: '/settings/orchestrators-notifications'
+      preLoaderRoute: typeof SettingsOrchestratorsNotificationsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/orchestrators-models': {
+      id: '/settings/orchestrators-models'
+      path: '/orchestrators-models'
+      fullPath: '/settings/orchestrators-models'
+      preLoaderRoute: typeof SettingsOrchestratorsModelsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/orchestrators-memory': {
+      id: '/settings/orchestrators-memory'
+      path: '/orchestrators-memory'
+      fullPath: '/settings/orchestrators-memory'
+      preLoaderRoute: typeof SettingsOrchestratorsMemoryRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/orchestrators-instructions': {
+      id: '/settings/orchestrators-instructions'
+      path: '/orchestrators-instructions'
+      fullPath: '/settings/orchestrators-instructions'
+      preLoaderRoute: typeof SettingsOrchestratorsInstructionsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/orchestrators-environments': {
+      id: '/settings/orchestrators-environments'
+      path: '/orchestrators-environments'
+      fullPath: '/settings/orchestrators-environments'
+      preLoaderRoute: typeof SettingsOrchestratorsEnvironmentsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/notifications': {
+      id: '/settings/notifications'
+      path: '/notifications'
+      fullPath: '/settings/notifications'
+      preLoaderRoute: typeof SettingsNotificationsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/members-teams': {
+      id: '/settings/members-teams'
+      path: '/members-teams'
+      fullPath: '/settings/members-teams'
+      preLoaderRoute: typeof SettingsMembersTeamsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/keybindings': {
+      id: '/settings/keybindings'
+      path: '/keybindings'
+      fullPath: '/settings/keybindings'
+      preLoaderRoute: typeof SettingsKeybindingsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/issues-statuses': {
+      id: '/settings/issues-statuses'
+      path: '/issues-statuses'
+      fullPath: '/settings/issues-statuses'
+      preLoaderRoute: typeof SettingsIssuesStatusesRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/issues-milestones': {
+      id: '/settings/issues-milestones'
+      path: '/issues-milestones'
+      fullPath: '/settings/issues-milestones'
+      preLoaderRoute: typeof SettingsIssuesMilestonesRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/issues-labels': {
+      id: '/settings/issues-labels'
+      path: '/issues-labels'
+      fullPath: '/settings/issues-labels'
+      preLoaderRoute: typeof SettingsIssuesLabelsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/issues-intake': {
+      id: '/settings/issues-intake'
+      path: '/issues-intake'
+      fullPath: '/settings/issues-intake'
+      preLoaderRoute: typeof SettingsIssuesIntakeRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/issues-import': {
+      id: '/settings/issues-import'
+      path: '/issues-import'
+      fullPath: '/settings/issues-import'
+      preLoaderRoute: typeof SettingsIssuesImportRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/issues-enrichment': {
+      id: '/settings/issues-enrichment'
+      path: '/issues-enrichment'
+      fullPath: '/settings/issues-enrichment'
+      preLoaderRoute: typeof SettingsIssuesEnrichmentRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/integrations': {
+      id: '/settings/integrations'
+      path: '/integrations'
+      fullPath: '/settings/integrations'
+      preLoaderRoute: typeof SettingsIntegrationsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/general': {
+      id: '/settings/general'
+      path: '/general'
+      fullPath: '/settings/general'
+      preLoaderRoute: typeof SettingsGeneralRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/environments': {
+      id: '/settings/environments'
+      path: '/environments'
+      fullPath: '/settings/environments'
+      preLoaderRoute: typeof SettingsEnvironmentsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/email': {
+      id: '/settings/email'
+      path: '/email'
+      fullPath: '/settings/email'
+      preLoaderRoute: typeof SettingsEmailRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/dictation': {
+      id: '/settings/dictation'
+      path: '/dictation'
+      fullPath: '/settings/dictation'
+      preLoaderRoute: typeof SettingsDictationRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/diagnostics': {
+      id: '/settings/diagnostics'
+      path: '/diagnostics'
+      fullPath: '/settings/diagnostics'
+      preLoaderRoute: typeof SettingsDiagnosticsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/connections': {
+      id: '/settings/connections'
+      path: '/connections'
+      fullPath: '/settings/connections'
+      preLoaderRoute: typeof SettingsConnectionsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/computer': {
+      id: '/settings/computer'
+      path: '/computer'
+      fullPath: '/settings/computer'
+      preLoaderRoute: typeof SettingsComputerRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/company-teams': {
+      id: '/settings/company-teams'
+      path: '/company-teams'
+      fullPath: '/settings/company-teams'
+      preLoaderRoute: typeof SettingsCompanyTeamsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/company-roles': {
+      id: '/settings/company-roles'
+      path: '/company-roles'
+      fullPath: '/settings/company-roles'
+      preLoaderRoute: typeof SettingsCompanyRolesRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/company-members': {
+      id: '/settings/company-members'
+      path: '/company-members'
+      fullPath: '/settings/company-members'
+      preLoaderRoute: typeof SettingsCompanyMembersRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/calendars': {
+      id: '/settings/calendars'
+      path: '/calendars'
+      fullPath: '/settings/calendars'
+      preLoaderRoute: typeof SettingsCalendarsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/archived': {
+      id: '/settings/archived'
+      path: '/archived'
+      fullPath: '/settings/archived'
+      preLoaderRoute: typeof SettingsArchivedRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/appearance': {
+      id: '/settings/appearance'
+      path: '/appearance'
+      fullPath: '/settings/appearance'
+      preLoaderRoute: typeof SettingsAppearanceRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/projects/$projectKey': {
+      id: '/projects/$projectKey'
+      path: '/$projectKey'
+      fullPath: '/projects/$projectKey'
+      preLoaderRoute: typeof ProjectsProjectKeyRouteImport
+      parentRoute: typeof ProjectsRoute
+    }
+    '/issues_/milestones': {
+      id: '/issues_/milestones'
+      path: '/issues/milestones'
+      fullPath: '/issues/milestones'
+      preLoaderRoute: typeof IssuesMilestonesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/connect_/callback': {
+      id: '/connect_/callback'
+      path: '/connect/callback'
+      fullPath: '/connect/callback'
+      preLoaderRoute: typeof ConnectCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/_chat/threads': {
+      id: '/_chat/threads'
+      path: '/threads'
+      fullPath: '/threads'
+      preLoaderRoute: typeof ChatThreadsRouteImport
       parentRoute: typeof ChatRoute
     }
     '/_chat/pull-requests': {
@@ -209,125 +1419,265 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatPullRequestsRouteImport
       parentRoute: typeof ChatRoute
     }
-    '/_chat/plugins': {
-      id: '/_chat/plugins'
-      path: '/plugins'
-      fullPath: '/plugins'
-      preLoaderRoute: typeof ChatPluginsRouteImport
+    '/settings/projects_/$projectKey': {
+      id: '/settings/projects_/$projectKey'
+      path: '/projects/$projectKey'
+      fullPath: '/settings/projects/$projectKey'
+      preLoaderRoute: typeof SettingsProjectsProjectKeyRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/email_/$environmentId': {
+      id: '/settings/email_/$environmentId'
+      path: '/email/$environmentId'
+      fullPath: '/settings/email/$environmentId'
+      preLoaderRoute: typeof SettingsEmailEnvironmentIdRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/dictation_/settings': {
+      id: '/settings/dictation_/settings'
+      path: '/dictation/settings'
+      fullPath: '/settings/dictation/settings'
+      preLoaderRoute: typeof SettingsDictationSettingsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/dictation_/preview': {
+      id: '/settings/dictation_/preview'
+      path: '/dictation/preview'
+      fullPath: '/settings/dictation/preview'
+      preLoaderRoute: typeof SettingsDictationPreviewRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/dictation_/models': {
+      id: '/settings/dictation_/models'
+      path: '/dictation/models'
+      fullPath: '/settings/dictation/models'
+      preLoaderRoute: typeof SettingsDictationModelsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/dictation_/history': {
+      id: '/settings/dictation_/history'
+      path: '/dictation/history'
+      fullPath: '/settings/dictation/history'
+      preLoaderRoute: typeof SettingsDictationHistoryRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/dictation_/dictionary': {
+      id: '/settings/dictation_/dictionary'
+      path: '/dictation/dictionary'
+      fullPath: '/settings/dictation/dictionary'
+      preLoaderRoute: typeof SettingsDictationDictionaryRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/appearance_/action-palette': {
+      id: '/settings/appearance_/action-palette'
+      path: '/appearance/action-palette'
+      fullPath: '/settings/appearance/action-palette'
+      preLoaderRoute: typeof SettingsAppearanceActionPaletteRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/issues_/milestones_/$milestoneId': {
+      id: '/issues_/milestones_/$milestoneId'
+      path: '/issues/milestones/$milestoneId'
+      fullPath: '/issues/milestones/$milestoneId'
+      preLoaderRoute: typeof IssuesMilestonesMilestoneIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/_chat/draft/$draftId': {
+      id: '/_chat/draft/$draftId'
+      path: '/draft/$draftId'
+      fullPath: '/draft/$draftId'
+      preLoaderRoute: typeof ChatDraftDraftIdRouteImport
       parentRoute: typeof ChatRoute
     }
-    '/_chat/automations': {
-      id: '/_chat/automations'
-      path: '/automations'
-      fullPath: '/automations'
-      preLoaderRoute: typeof ChatAutomationsRouteImport
+    '/_chat/$environmentId/$threadId': {
+      id: '/_chat/$environmentId/$threadId'
+      path: '/$environmentId/$threadId'
+      fullPath: '/$environmentId/$threadId'
+      preLoaderRoute: typeof ChatEnvironmentIdThreadIdRouteImport
       parentRoute: typeof ChatRoute
     }
-    '/_chat/$threadId': {
-      id: '/_chat/$threadId'
-      path: '/$threadId'
-      fullPath: '/$threadId'
-      preLoaderRoute: typeof ChatThreadIdRouteImport
+    '/_chat/threads_/draft/$draftId': {
+      id: '/_chat/threads_/draft/$draftId'
+      path: '/threads/draft/$draftId'
+      fullPath: '/threads/draft/$draftId'
+      preLoaderRoute: typeof ChatThreadsDraftDraftIdRouteImport
       parentRoute: typeof ChatRoute
     }
-    '/_chat/studio/': {
-      id: '/_chat/studio/'
-      path: '/studio'
-      fullPath: '/studio/'
-      preLoaderRoute: typeof ChatStudioIndexRouteImport
+    '/_chat/threads_/$environmentId/$threadId': {
+      id: '/_chat/threads_/$environmentId/$threadId'
+      path: '/threads/$environmentId/$threadId'
+      fullPath: '/threads/$environmentId/$threadId'
+      preLoaderRoute: typeof ChatThreadsEnvironmentIdThreadIdRouteImport
       parentRoute: typeof ChatRoute
-    }
-    '/_chat/pull-requests/': {
-      id: '/_chat/pull-requests/'
-      path: '/'
-      fullPath: '/pull-requests/'
-      preLoaderRoute: typeof ChatPullRequestsIndexRouteImport
-      parentRoute: typeof ChatPullRequestsRoute
-    }
-    '/_chat/kanban/': {
-      id: '/_chat/kanban/'
-      path: '/kanban'
-      fullPath: '/kanban/'
-      preLoaderRoute: typeof ChatKanbanIndexRouteImport
-      parentRoute: typeof ChatRoute
-    }
-    '/_chat/automations/': {
-      id: '/_chat/automations/'
-      path: '/'
-      fullPath: '/automations/'
-      preLoaderRoute: typeof ChatAutomationsIndexRouteImport
-      parentRoute: typeof ChatAutomationsRoute
-    }
-    '/_chat/kanban/$projectId': {
-      id: '/_chat/kanban/$projectId'
-      path: '/kanban/$projectId'
-      fullPath: '/kanban/$projectId'
-      preLoaderRoute: typeof ChatKanbanProjectIdRouteImport
-      parentRoute: typeof ChatRoute
-    }
-    '/_chat/automations/$automationId': {
-      id: '/_chat/automations/$automationId'
-      path: '/$automationId'
-      fullPath: '/automations/$automationId'
-      preLoaderRoute: typeof ChatAutomationsAutomationIdRouteImport
-      parentRoute: typeof ChatAutomationsRoute
     }
   }
 }
 
-interface ChatAutomationsRouteChildren {
-  ChatAutomationsAutomationIdRoute: typeof ChatAutomationsAutomationIdRoute
-  ChatAutomationsIndexRoute: typeof ChatAutomationsIndexRoute
-}
-
-const ChatAutomationsRouteChildren: ChatAutomationsRouteChildren = {
-  ChatAutomationsAutomationIdRoute: ChatAutomationsAutomationIdRoute,
-  ChatAutomationsIndexRoute: ChatAutomationsIndexRoute,
-}
-
-const ChatAutomationsRouteWithChildren = ChatAutomationsRoute._addFileChildren(
-  ChatAutomationsRouteChildren,
-)
-
-interface ChatPullRequestsRouteChildren {
-  ChatPullRequestsIndexRoute: typeof ChatPullRequestsIndexRoute
-}
-
-const ChatPullRequestsRouteChildren: ChatPullRequestsRouteChildren = {
-  ChatPullRequestsIndexRoute: ChatPullRequestsIndexRoute,
-}
-
-const ChatPullRequestsRouteWithChildren =
-  ChatPullRequestsRoute._addFileChildren(ChatPullRequestsRouteChildren)
-
 interface ChatRouteChildren {
-  ChatThreadIdRoute: typeof ChatThreadIdRoute
-  ChatAutomationsRoute: typeof ChatAutomationsRouteWithChildren
-  ChatPluginsRoute: typeof ChatPluginsRoute
-  ChatPullRequestsRoute: typeof ChatPullRequestsRouteWithChildren
-  ChatSettingsRoute: typeof ChatSettingsRoute
-  ChatIndexRoute: typeof ChatIndexRoute
-  ChatKanbanProjectIdRoute: typeof ChatKanbanProjectIdRoute
-  ChatKanbanIndexRoute: typeof ChatKanbanIndexRoute
-  ChatStudioIndexRoute: typeof ChatStudioIndexRoute
+  ChatPullRequestsRoute: typeof ChatPullRequestsRoute
+  ChatThreadsRoute: typeof ChatThreadsRoute
+  ChatEnvironmentIdThreadIdRoute: typeof ChatEnvironmentIdThreadIdRoute
+  ChatDraftDraftIdRoute: typeof ChatDraftDraftIdRoute
+  ChatThreadsEnvironmentIdThreadIdRoute: typeof ChatThreadsEnvironmentIdThreadIdRoute
+  ChatThreadsDraftDraftIdRoute: typeof ChatThreadsDraftDraftIdRoute
 }
 
 const ChatRouteChildren: ChatRouteChildren = {
-  ChatThreadIdRoute: ChatThreadIdRoute,
-  ChatAutomationsRoute: ChatAutomationsRouteWithChildren,
-  ChatPluginsRoute: ChatPluginsRoute,
-  ChatPullRequestsRoute: ChatPullRequestsRouteWithChildren,
-  ChatSettingsRoute: ChatSettingsRoute,
-  ChatIndexRoute: ChatIndexRoute,
-  ChatKanbanProjectIdRoute: ChatKanbanProjectIdRoute,
-  ChatKanbanIndexRoute: ChatKanbanIndexRoute,
-  ChatStudioIndexRoute: ChatStudioIndexRoute,
+  ChatPullRequestsRoute: ChatPullRequestsRoute,
+  ChatThreadsRoute: ChatThreadsRoute,
+  ChatEnvironmentIdThreadIdRoute: ChatEnvironmentIdThreadIdRoute,
+  ChatDraftDraftIdRoute: ChatDraftDraftIdRoute,
+  ChatThreadsEnvironmentIdThreadIdRoute: ChatThreadsEnvironmentIdThreadIdRoute,
+  ChatThreadsDraftDraftIdRoute: ChatThreadsDraftDraftIdRoute,
 }
 
 const ChatRouteWithChildren = ChatRoute._addFileChildren(ChatRouteChildren)
 
+interface ProjectsRouteChildren {
+  ProjectsProjectKeyRoute: typeof ProjectsProjectKeyRoute
+  ProjectsIndexRoute: typeof ProjectsIndexRoute
+}
+
+const ProjectsRouteChildren: ProjectsRouteChildren = {
+  ProjectsProjectKeyRoute: ProjectsProjectKeyRoute,
+  ProjectsIndexRoute: ProjectsIndexRoute,
+}
+
+const ProjectsRouteWithChildren = ProjectsRoute._addFileChildren(
+  ProjectsRouteChildren,
+)
+
+interface SettingsRouteChildren {
+  SettingsAppearanceRoute: typeof SettingsAppearanceRoute
+  SettingsArchivedRoute: typeof SettingsArchivedRoute
+  SettingsCalendarsRoute: typeof SettingsCalendarsRoute
+  SettingsCompanyMembersRoute: typeof SettingsCompanyMembersRoute
+  SettingsCompanyRolesRoute: typeof SettingsCompanyRolesRoute
+  SettingsCompanyTeamsRoute: typeof SettingsCompanyTeamsRoute
+  SettingsComputerRoute: typeof SettingsComputerRoute
+  SettingsConnectionsRoute: typeof SettingsConnectionsRoute
+  SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute
+  SettingsDictationRoute: typeof SettingsDictationRoute
+  SettingsEmailRoute: typeof SettingsEmailRoute
+  SettingsEnvironmentsRoute: typeof SettingsEnvironmentsRoute
+  SettingsGeneralRoute: typeof SettingsGeneralRoute
+  SettingsIntegrationsRoute: typeof SettingsIntegrationsRoute
+  SettingsIssuesEnrichmentRoute: typeof SettingsIssuesEnrichmentRoute
+  SettingsIssuesImportRoute: typeof SettingsIssuesImportRoute
+  SettingsIssuesIntakeRoute: typeof SettingsIssuesIntakeRoute
+  SettingsIssuesLabelsRoute: typeof SettingsIssuesLabelsRoute
+  SettingsIssuesMilestonesRoute: typeof SettingsIssuesMilestonesRoute
+  SettingsIssuesStatusesRoute: typeof SettingsIssuesStatusesRoute
+  SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute
+  SettingsMembersTeamsRoute: typeof SettingsMembersTeamsRoute
+  SettingsNotificationsRoute: typeof SettingsNotificationsRoute
+  SettingsOrchestratorsEnvironmentsRoute: typeof SettingsOrchestratorsEnvironmentsRoute
+  SettingsOrchestratorsInstructionsRoute: typeof SettingsOrchestratorsInstructionsRoute
+  SettingsOrchestratorsMemoryRoute: typeof SettingsOrchestratorsMemoryRoute
+  SettingsOrchestratorsModelsRoute: typeof SettingsOrchestratorsModelsRoute
+  SettingsOrchestratorsNotificationsRoute: typeof SettingsOrchestratorsNotificationsRoute
+  SettingsOrchestratorsOverviewRoute: typeof SettingsOrchestratorsOverviewRoute
+  SettingsOrchestratorsPermissionsRoute: typeof SettingsOrchestratorsPermissionsRoute
+  SettingsOrchestratorsResponsibilitiesRoute: typeof SettingsOrchestratorsResponsibilitiesRoute
+  SettingsOrchestratorsWorkLimitsRoute: typeof SettingsOrchestratorsWorkLimitsRoute
+  SettingsProjectsRoute: typeof SettingsProjectsRoute
+  SettingsProvidersRoute: typeof SettingsProvidersRoute
+  SettingsScheduledTasksRoute: typeof SettingsScheduledTasksRoute
+  SettingsSnapShotRoute: typeof SettingsSnapShotRoute
+  SettingsSourceControlRoute: typeof SettingsSourceControlRoute
+  SettingsSyncRoute: typeof SettingsSyncRoute
+  SettingsTimeTrackerRoute: typeof SettingsTimeTrackerRoute
+  SettingsUsageRoute: typeof SettingsUsageRoute
+  SettingsAppearanceActionPaletteRoute: typeof SettingsAppearanceActionPaletteRoute
+  SettingsDictationDictionaryRoute: typeof SettingsDictationDictionaryRoute
+  SettingsDictationHistoryRoute: typeof SettingsDictationHistoryRoute
+  SettingsDictationModelsRoute: typeof SettingsDictationModelsRoute
+  SettingsDictationPreviewRoute: typeof SettingsDictationPreviewRoute
+  SettingsDictationSettingsRoute: typeof SettingsDictationSettingsRoute
+  SettingsEmailEnvironmentIdRoute: typeof SettingsEmailEnvironmentIdRoute
+  SettingsProjectsProjectKeyRoute: typeof SettingsProjectsProjectKeyRoute
+}
+
+const SettingsRouteChildren: SettingsRouteChildren = {
+  SettingsAppearanceRoute: SettingsAppearanceRoute,
+  SettingsArchivedRoute: SettingsArchivedRoute,
+  SettingsCalendarsRoute: SettingsCalendarsRoute,
+  SettingsCompanyMembersRoute: SettingsCompanyMembersRoute,
+  SettingsCompanyRolesRoute: SettingsCompanyRolesRoute,
+  SettingsCompanyTeamsRoute: SettingsCompanyTeamsRoute,
+  SettingsComputerRoute: SettingsComputerRoute,
+  SettingsConnectionsRoute: SettingsConnectionsRoute,
+  SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,
+  SettingsDictationRoute: SettingsDictationRoute,
+  SettingsEmailRoute: SettingsEmailRoute,
+  SettingsEnvironmentsRoute: SettingsEnvironmentsRoute,
+  SettingsGeneralRoute: SettingsGeneralRoute,
+  SettingsIntegrationsRoute: SettingsIntegrationsRoute,
+  SettingsIssuesEnrichmentRoute: SettingsIssuesEnrichmentRoute,
+  SettingsIssuesImportRoute: SettingsIssuesImportRoute,
+  SettingsIssuesIntakeRoute: SettingsIssuesIntakeRoute,
+  SettingsIssuesLabelsRoute: SettingsIssuesLabelsRoute,
+  SettingsIssuesMilestonesRoute: SettingsIssuesMilestonesRoute,
+  SettingsIssuesStatusesRoute: SettingsIssuesStatusesRoute,
+  SettingsKeybindingsRoute: SettingsKeybindingsRoute,
+  SettingsMembersTeamsRoute: SettingsMembersTeamsRoute,
+  SettingsNotificationsRoute: SettingsNotificationsRoute,
+  SettingsOrchestratorsEnvironmentsRoute:
+    SettingsOrchestratorsEnvironmentsRoute,
+  SettingsOrchestratorsInstructionsRoute:
+    SettingsOrchestratorsInstructionsRoute,
+  SettingsOrchestratorsMemoryRoute: SettingsOrchestratorsMemoryRoute,
+  SettingsOrchestratorsModelsRoute: SettingsOrchestratorsModelsRoute,
+  SettingsOrchestratorsNotificationsRoute:
+    SettingsOrchestratorsNotificationsRoute,
+  SettingsOrchestratorsOverviewRoute: SettingsOrchestratorsOverviewRoute,
+  SettingsOrchestratorsPermissionsRoute: SettingsOrchestratorsPermissionsRoute,
+  SettingsOrchestratorsResponsibilitiesRoute:
+    SettingsOrchestratorsResponsibilitiesRoute,
+  SettingsOrchestratorsWorkLimitsRoute: SettingsOrchestratorsWorkLimitsRoute,
+  SettingsProjectsRoute: SettingsProjectsRoute,
+  SettingsProvidersRoute: SettingsProvidersRoute,
+  SettingsScheduledTasksRoute: SettingsScheduledTasksRoute,
+  SettingsSnapShotRoute: SettingsSnapShotRoute,
+  SettingsSourceControlRoute: SettingsSourceControlRoute,
+  SettingsSyncRoute: SettingsSyncRoute,
+  SettingsTimeTrackerRoute: SettingsTimeTrackerRoute,
+  SettingsUsageRoute: SettingsUsageRoute,
+  SettingsAppearanceActionPaletteRoute: SettingsAppearanceActionPaletteRoute,
+  SettingsDictationDictionaryRoute: SettingsDictationDictionaryRoute,
+  SettingsDictationHistoryRoute: SettingsDictationHistoryRoute,
+  SettingsDictationModelsRoute: SettingsDictationModelsRoute,
+  SettingsDictationPreviewRoute: SettingsDictationPreviewRoute,
+  SettingsDictationSettingsRoute: SettingsDictationSettingsRoute,
+  SettingsEmailEnvironmentIdRoute: SettingsEmailEnvironmentIdRoute,
+  SettingsProjectsProjectKeyRoute: SettingsProjectsProjectKeyRoute,
+}
+
+const SettingsRouteWithChildren = SettingsRoute._addFileChildren(
+  SettingsRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
+  IndexRoute: IndexRoute,
   ChatRoute: ChatRouteWithChildren,
+  CalendarRoute: CalendarRoute,
+  ConnectRoute: ConnectRoute,
+  ContactsRoute: ContactsRoute,
+  DashboardRoute: DashboardRoute,
+  EmailRoute: EmailRoute,
+  IssuesRoute: IssuesRoute,
+  LoginRoute: LoginRoute,
+  OnboardingRoute: OnboardingRoute,
+  OrchestratorRoute: OrchestratorRoute,
+  PairRoute: PairRoute,
+  ProjectsRoute: ProjectsRouteWithChildren,
+  RegisterRoute: RegisterRoute,
+  SettingsRoute: SettingsRouteWithChildren,
+  TimeTrackerRoute: TimeTrackerRoute,
+  UsageRoute: UsageRoute,
+  ConnectCallbackRoute: ConnectCallbackRoute,
+  IssuesMilestonesRoute: IssuesMilestonesRoute,
+  IssuesMilestonesMilestoneIdRoute: IssuesMilestonesMilestoneIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

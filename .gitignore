@@ -5,6 +5,7 @@ node_modules
 *.log
 *.tsbuildinfo
 apps/*/dist
+infra/*/dist
 .astro
 packages/*/dist
 .env
@@ -12,39 +13,30 @@ packages/*/dist
 build/
 .logs/
 release/
-.synara
-/.synara/electron-dev
-/.synara/backups
-/.synara-*/
-/apps/server/.synara-*/
-/.synara/
-/.synara-*/
+release-mock/
+.pathway
+.pathway-backups/
 .idea/
 apps/web/.playwright
 apps/web/playwright-report
-apps/web/test-results
-.playwright-cli/
-output/playwright/
 apps/web/src/components/__screenshots__
 .vitest-*
 __screenshots__/
 .tanstack
-/.pi/
-/.tmp/
-/~/
-/bootstrap.js
-/preload.js
-/browser-sidebar-comment-preload.js
-/main-*.js
-/main-*.js.map
-/browser-sidebar-comment-preload.js.map
-/preload.js.map
-/bootstrap.js.map
-
-# Generated ASAR smoke fixture (bundled from scripts/betterwright-smoke.ts)
-.smoke/
-
-# Unlazy pipeline state (machine-local ledgers, dispatch, approvals log)
-.unlazy/
-# Claude Code worktrees are local scratch checkouts, not part of the repo.
+squashfs-root/
+.vercel
+.gstack/
 .claude/worktrees/
+dist-electron/
+.electron-runtime/
+.showcase/
+artifacts/app-store/screenshots/
+native/**/target/
+node_modules/
+.alchemy/
+*.log
+.env*
+!.env.example
+
+# Locally compiled dictation hosts, model engines, and downloaded test weights.
+native/dictation/build/

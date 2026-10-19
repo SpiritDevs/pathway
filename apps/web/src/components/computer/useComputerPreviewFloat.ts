@@ -9,7 +9,7 @@
 // window can never strand it), the pointer-drag that updates it, and the
 // pop-out handoff that seeds the float from the card's docked rect.
 
-import type { ThreadId } from "@synara/contracts";
+import type { ScopedThreadRef } from "@spiritdevs/contracts";
 import { type PointerEvent, type RefObject, useMemo, useRef } from "react";
 
 import {
@@ -32,14 +32,14 @@ export interface ComputerPreviewFloat {
 }
 
 export function useComputerPreviewFloat(input: {
-  readonly threadId: ThreadId;
+  readonly threadRef: ScopedThreadRef;
   readonly cardRef: RefObject<HTMLDivElement | null>;
   /** Rendered card width/height, used for viewport clamping. */
   readonly cardWidthPx: number;
   readonly cardHeightPx: number;
 }): ComputerPreviewFloat {
-  const { threadId, cardRef } = input;
-  const floating = useComputerPreviewStore(selectThreadComputerPreviewFloating(threadId));
+  const { threadRef, cardRef } = input;
+  const floating = useComputerPreviewStore(selectThreadComputerPreviewFloating(threadRef));
   const setPreviewFloating = useComputerPreviewStore((store) => store.setPreviewFloating);
   const movePreviewFloating = useComputerPreviewStore((store) => store.movePreviewFloating);
   const dragRef = useRef<{ pointerId: number; offsetX: number; offsetY: number } | null>(null);
@@ -65,7 +65,7 @@ export function useComputerPreviewFloat(input: {
     const rect = cardRef.current?.getBoundingClientRect();
     if (!rect) return;
     setPreviewFloating(
-      threadId,
+      threadRef,
       clampComputerPreviewFloat({
         x: rect.left,
         y: rect.top,
@@ -77,7 +77,7 @@ export function useComputerPreviewFloat(input: {
     );
   };
 
-  const dock = () => setPreviewFloating(threadId, null);
+  const dock = () => setPreviewFloating(threadRef, null);
 
   const onFloatPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (floating === undefined || event.button !== 0) return;
@@ -98,7 +98,7 @@ export function useComputerPreviewFloat(input: {
     if (floating === undefined || !drag || drag.pointerId !== event.pointerId) return;
     const rect = cardRef.current?.getBoundingClientRect();
     movePreviewFloating(
-      threadId,
+      threadRef,
       clampComputerPreviewFloat({
         x: event.clientX - drag.offsetX,
         y: event.clientY - drag.offsetY,

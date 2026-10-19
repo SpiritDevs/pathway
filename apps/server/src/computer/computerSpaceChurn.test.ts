@@ -1,8 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { expect, it } from "@effect/vitest";
+import { HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
+import * as Effect from "effect/Effect";
 
-import { CuaComputerBackend } from "./CuaComputerBackend.ts";
+import { makeCuaComputerBackend } from "./CuaComputerBackend.ts";
 import { withDesktopDeliveryMode } from "./DesktopOperationQueue.ts";
-import type { cuaRequest } from "@synara/shared/cuaDriverProtocol";
+import { fakeCuaRequest } from "./testing/FakeCuaRequest.ts";
 
 const PNG_400x200 = (() => {
   const header = Buffer.alloc(24);
@@ -15,16 +18,12 @@ const PNG_400x200 = (() => {
 const BOUNDS = { x: 0, y: 0, width: 200, height: 100 };
 
 /** Scripted Cua stub: no Fake — Fake enforces no Space or grounding. */
-function spaceFixture(): {
-  backend: CuaComputerBackend;
-  calls: Array<{ name?: string }>;
-  moveOffSpace: () => void;
-} {
+const spaceFixture = Effect.fn(function* () {
   const calls: Array<{ name?: string }> = [];
   let onSpace = true;
   const respond = (req: Record<string, unknown>) => {
-    calls.push({ ...(typeof req.name === "string" ? { name: req.name } : {}) });
-    const method = req.method as string | undefined;
+    calls.push(typeof req.name === "string" ? { name: req.name } : {});
+    const method = req.method;
     if (method === "probe" || method === "stop") return { ok: true };
     if (req.name === "check_permissions")
       return {
@@ -73,11 +72,15 @@ function spaceFixture(): {
   };
   // Captures may begin with permission/window reads, without a separate probe.
   // Identify the macOS native host on every reply, just like the real transport.
-  const request = vi.fn(async (_endpoint: string, req: Record<string, unknown>) => ({
-    ...respond(req),
+  const request = async (_endpoint: string, req: unknown) => ({
+    ...respond(req as Record<string, unknown>),
     hostPlatform: "darwin",
-  })) as unknown as typeof cuaRequest;
-  const backend = new CuaComputerBackend({ endpoint: "/space-churn", request });
+  });
+  // Exercise a Linux backend connected to this fixture's macOS native host.
+  const backend = yield* makeCuaComputerBackend({
+    endpoint: "/space-churn",
+    request: fakeCuaRequest(request),
+  }).pipe(Effect.provideService(HostProcessPlatform, "linux"));
   return {
     backend,
     calls,
@@ -85,61 +88,58 @@ function spaceFixture(): {
       onSpace = false;
     },
   };
-}
+});
 
-describe("computer Space churn", () => {
-  const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
-  beforeEach(() => {
-    // Exercise a Linux backend connected to this fixture's macOS native host.
-    Object.defineProperty(process, "platform", { ...platformDescriptor, value: "linux" });
-  });
-  afterEach(() => {
-    Object.defineProperty(process, "platform", platformDescriptor);
-  });
+it.layer(NodeServices.layer)("computer Space churn", (it) => {
+  it.effect(
+    "a Space change between prepare and dispatch refuses once, sends no drag, stays observable",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { backend, calls, moveOffSpace } = yield* spaceFixture();
+          // Prepared on its Space: the observation grounds the drag.
+          yield* backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+          // The window leaves the Space before dispatch.
+          moveOffSpace();
+          // A single refusal naming the pause — never a dispatch, never a retry.
+          const refused = yield* Effect.flip(
+            withDesktopDeliveryMode(
+              "foreground",
+              backend.drag({ x: 50, y: 50 }, { x: 100, y: 60 }, 500, "cua:10:20"),
+            ),
+          );
+          expect(refused).toMatchObject({
+            effect: "not-dispatched",
+            code: "target_not_on_active_space",
+            inputPause: { windowId: "cua:10:20" },
+          });
+          expect(calls.filter((call) => call.name === "drag")).toHaveLength(0);
+          // Read-only observation stays available on the next call.
+          expect(yield* backend.getState({ windowId: "cua:10:20" })).toMatchObject({
+            computerId: "desktop",
+          });
+          expect(calls.filter((call) => call.name === "drag")).toHaveLength(0);
+        }),
+      ),
+  );
 
-  it("a Space change between prepare and dispatch refuses once, sends no drag, stays observable", async () => {
-    const { backend, calls, moveOffSpace } = spaceFixture();
-    try {
-      // Prepared on its Space: the observation grounds the drag.
-      await backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
-      // The window leaves the Space before dispatch.
-      moveOffSpace();
-      // A single refusal naming the pause — never a dispatch, never a retry.
-      const refused = await withDesktopDeliveryMode("foreground", () =>
-        backend.drag({ x: 50, y: 50 }, { x: 100, y: 60 }, 500, "cua:10:20"),
-      ).catch((error) => error);
-      expect(refused).toMatchObject({
-        effect: "not-dispatched",
-        code: "target_not_on_active_space",
-        inputPause: { windowId: "cua:10:20" },
-      });
-      expect(calls.filter((call) => call.name === "drag")).toHaveLength(0);
-      // Read-only observation stays available on the next call.
-      await expect(backend.getState({ windowId: "cua:10:20" })).resolves.toMatchObject({
-        computerId: "desktop",
-      });
-      expect(calls.filter((call) => call.name === "drag")).toHaveLength(0);
-    } finally {
-      await backend.dispose();
-    }
-  });
-  it("refuses a background drag the same way when the window leaves the Space", async () => {
-    const { backend, calls, moveOffSpace } = spaceFixture();
-    try {
-      await backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
-      moveOffSpace();
-      // Default delivery mode is background: no explicit mode wrapper needed.
-      const refused = await backend
-        .drag({ x: 50, y: 50 }, { x: 100, y: 60 }, 500, "cua:10:20")
-        .catch((error) => error);
-      expect(refused).toMatchObject({
-        effect: "not-dispatched",
-        code: "target_not_on_active_space",
-        inputPause: { windowId: "cua:10:20" },
-      });
-      expect(calls.filter((call) => call.name === "drag")).toHaveLength(0);
-    } finally {
-      await backend.dispose();
-    }
-  });
+  it.effect("refuses a background drag the same way when the window leaves the Space", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { backend, calls, moveOffSpace } = yield* spaceFixture();
+        yield* backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+        moveOffSpace();
+        // Default delivery mode is background: no explicit mode wrapper needed.
+        const refused = yield* Effect.flip(
+          backend.drag({ x: 50, y: 50 }, { x: 100, y: 60 }, 500, "cua:10:20"),
+        );
+        expect(refused).toMatchObject({
+          effect: "not-dispatched",
+          code: "target_not_on_active_space",
+          inputPause: { windowId: "cua:10:20" },
+        });
+        expect(calls.filter((call) => call.name === "drag")).toHaveLength(0);
+      }),
+    ),
+  );
 });

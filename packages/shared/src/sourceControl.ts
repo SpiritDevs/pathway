@@ -1,0 +1,334 @@
+import type {
+  OrchestrationV2TurnItem,
+  SourceControlProviderInfo,
+  SourceControlProviderKind,
+} from "@spiritdevs/contracts";
+
+export function getChangeRequestTerminologyFromUrl(url: string): ChangeRequestTerminology {
+  try {
+    return new URL(url).pathname.includes("/-/merge_requests/")
+      ? { shortLabel: "MR", singular: "merge request" }
+      : { shortLabel: "PR", singular: "pull request" };
+  } catch {
+    return { shortLabel: "PR", singular: "pull request" };
+  }
+}
+
+export function sourceControlMarkerLabel(
+  item: Extract<OrchestrationV2TurnItem, { readonly type: "source_control" }>,
+): string {
+  const changeRequestLabel =
+    item.pullRequest === null
+      ? "PR"
+      : getChangeRequestTerminologyFromUrl(item.pullRequest.url).shortLabel;
+  if (item.pullRequestAction === "detected") return `${changeRequestLabel} linked`;
+  if (item.pullRequestAction === "attached") return `${changeRequestLabel} attached`;
+  if (item.pullRequestAction === "detached") return `${changeRequestLabel} detached`;
+  if (item.pullRequest !== null) {
+    return item.committed ? "Committed, pushed, and PR created" : "Pushed and PR created";
+  }
+  if (item.committed && item.pushed === false) return "Committed";
+  return item.committed ? "Committed and pushed" : "Pushed";
+}
+
+export interface ActivePullRequestAttachment {
+  readonly itemId: string;
+  readonly pullRequest: { readonly number: number; readonly url: string };
+}
+
+/** Replays PR markers in order, retaining every link until that PR is detached. */
+export function resolveActivePullRequestAttachments(
+  items: ReadonlyArray<OrchestrationV2TurnItem>,
+): ReadonlyArray<ActivePullRequestAttachment> {
+  const active = new Map<string, ActivePullRequestAttachment>();
+  const detached = new Set<string>();
+  for (const item of items) {
+    if (item.type !== "source_control" || item.pullRequest === null) continue;
+    const key = item.pullRequest.url;
+    if (item.pullRequestAction === "detached") {
+      active.delete(key);
+      detached.add(key);
+    } else {
+      if (item.pullRequestAction === "detected" && detached.has(key)) continue;
+      detached.delete(key);
+      active.set(key, { itemId: item.id, pullRequest: item.pullRequest });
+    }
+  }
+  return [...active.values()];
+}
+
+export function resolveDetachedPullRequestUrls(
+  items: ReadonlyArray<OrchestrationV2TurnItem>,
+): string[] {
+  const detached = new Set<string>();
+  for (const item of items) {
+    if (item.type !== "source_control" || item.pullRequest === null) continue;
+    if (item.pullRequestAction === "detached") detached.add(item.pullRequest.url);
+    else if (item.pullRequestAction !== "detected") detached.delete(item.pullRequest.url);
+  }
+  return [...detached];
+}
+
+/** Compatibility summary for clients that can display only one attachment. */
+export function resolveActivePullRequestAttachment(
+  items: ReadonlyArray<OrchestrationV2TurnItem>,
+): ActivePullRequestAttachment | null {
+  return resolveActivePullRequestAttachments(items).at(-1) ?? null;
+}
+
+export function threadPullRequestAttachments(thread: {
+  readonly attachedPullRequests?:
+    | ReadonlyArray<{ readonly number: number; readonly url: string }>
+    | undefined;
+  readonly attachedPullRequest?:
+    | { readonly number: number; readonly url: string }
+    | null
+    | undefined;
+}) {
+  return (
+    thread.attachedPullRequests ?? (thread.attachedPullRequest ? [thread.attachedPullRequest] : [])
+  );
+}
+
+export interface ChangeRequestPresentation {
+  readonly icon: "github" | "gitlab" | "azure-devops" | "bitbucket" | "change-request";
+  readonly providerName: string;
+  readonly shortName: string;
+  readonly longName: string;
+  readonly pluralLongName: string;
+  readonly providerLongName: string;
+  readonly checkoutCommandExample?: string;
+  readonly urlExample: string;
+}
+
+export interface ChangeRequestTerminology {
+  readonly shortLabel: string;
+  readonly singular: string;
+}
+
+export const DEFAULT_CHANGE_REQUEST_TERMINOLOGY: ChangeRequestTerminology = {
+  shortLabel: "PR",
+  singular: "pull request",
+};
+
+const GITHUB_CHANGE_REQUEST_PRESENTATION: ChangeRequestPresentation = {
+  icon: "github",
+  providerName: "GitHub",
+  shortName: "PR",
+  longName: "pull request",
+  pluralLongName: "pull requests",
+  providerLongName: "GitHub pull request",
+  checkoutCommandExample: "gh pr checkout 123",
+  urlExample: "https://github.com/owner/repo/pull/42",
+};
+
+const GITLAB_CHANGE_REQUEST_PRESENTATION: ChangeRequestPresentation = {
+  icon: "gitlab",
+  providerName: "GitLab",
+  shortName: "MR",
+  longName: "merge request",
+  pluralLongName: "merge requests",
+  providerLongName: "GitLab merge request",
+  checkoutCommandExample: "glab mr checkout 123",
+  urlExample: "https://gitlab.com/group/project/-/merge_requests/42",
+};
+
+const AZURE_DEVOPS_CHANGE_REQUEST_PRESENTATION: ChangeRequestPresentation = {
+  icon: "azure-devops",
+  providerName: "Azure DevOps",
+  shortName: "PR",
+  longName: "pull request",
+  pluralLongName: "pull requests",
+  providerLongName: "Azure DevOps pull request",
+  checkoutCommandExample: "az repos pr checkout --id 123",
+  urlExample: "https://dev.azure.com/org/project/_git/repo/pullrequest/42",
+};
+
+const BITBUCKET_CHANGE_REQUEST_PRESENTATION: ChangeRequestPresentation = {
+  icon: "bitbucket",
+  providerName: "Bitbucket",
+  shortName: "PR",
+  longName: "pull request",
+  pluralLongName: "pull requests",
+  providerLongName: "Bitbucket pull request",
+  urlExample: "https://bitbucket.org/workspace/repo/pull-requests/42",
+};
+
+const GENERIC_CHANGE_REQUEST_PRESENTATION: ChangeRequestPresentation = {
+  icon: "change-request",
+  providerName: "source control",
+  shortName: "change request",
+  longName: "change request",
+  pluralLongName: "change requests",
+  providerLongName: "change request",
+  urlExample: "#42",
+};
+
+export function resolveChangeRequestPresentation(
+  provider: SourceControlProviderInfo | null | undefined,
+): ChangeRequestPresentation {
+  switch (provider?.kind) {
+    case "github":
+    case undefined:
+      return GITHUB_CHANGE_REQUEST_PRESENTATION;
+    case "gitlab":
+      return GITLAB_CHANGE_REQUEST_PRESENTATION;
+    case "azure-devops":
+      return AZURE_DEVOPS_CHANGE_REQUEST_PRESENTATION;
+    case "bitbucket":
+      return BITBUCKET_CHANGE_REQUEST_PRESENTATION;
+    case "unknown":
+      return GENERIC_CHANGE_REQUEST_PRESENTATION;
+  }
+}
+
+export function resolveChangeRequestPresentationForKind(
+  kind: SourceControlProviderKind,
+): ChangeRequestPresentation {
+  return resolveChangeRequestPresentation({ kind, name: "", baseUrl: "" });
+}
+
+export function formatChangeRequestAction(
+  verb: "View" | "Create",
+  presentation: ChangeRequestPresentation,
+): string {
+  return `${verb} ${presentation.shortName}`;
+}
+
+export function formatCreateChangeRequestPhrase(presentation: ChangeRequestPresentation): string {
+  return `create ${presentation.shortName}`;
+}
+
+export function getChangeRequestTerminology(
+  provider: SourceControlProviderInfo | null | undefined,
+): ChangeRequestTerminology {
+  if (!provider) {
+    return DEFAULT_CHANGE_REQUEST_TERMINOLOGY;
+  }
+
+  const presentation = resolveChangeRequestPresentation(provider);
+  return {
+    shortLabel: presentation.shortName,
+    singular: presentation.longName,
+  };
+}
+
+export function getChangeRequestTerminologyForKind(
+  kind: SourceControlProviderKind,
+): ChangeRequestTerminology {
+  const presentation = resolveChangeRequestPresentationForKind(kind);
+  return {
+    shortLabel: presentation.shortName,
+    singular: presentation.longName,
+  };
+}
+
+function parseRemoteHost(remoteUrl: string): string | null {
+  const trimmed = remoteUrl.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+
+  if (trimmed.startsWith("git@")) {
+    const hostWithPath = trimmed.slice("git@".length);
+    const separatorIndex = hostWithPath.search(/[:/]/);
+    if (separatorIndex <= 0) {
+      return null;
+    }
+    return hostWithPath.slice(0, separatorIndex).toLowerCase();
+  }
+
+  try {
+    return new URL(trimmed).host.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function parseHostName(host: string): string {
+  try {
+    return new URL(`https://${host}`).hostname.toLowerCase();
+  } catch {
+    return host.replace(/:\d+$/u, "").toLowerCase();
+  }
+}
+
+function toBaseUrl(host: string): string {
+  return `https://${host}`;
+}
+
+function hasDnsLabel(host: string, label: string): boolean {
+  return host.split(".").includes(label);
+}
+
+function isGitHubHost(host: string): boolean {
+  return host === "github.com" || hasDnsLabel(host, "github");
+}
+
+function isGitLabHost(host: string): boolean {
+  return host === "gitlab.com" || hasDnsLabel(host, "gitlab");
+}
+
+function isAzureDevOpsHost(host: string): boolean {
+  // `ssh.dev.azure.com` is the default Azure DevOps SSH clone host
+  // (git@ssh.dev.azure.com:v3/org/project/repo), so match any `*.dev.azure.com`
+  // subdomain, not just the bare `dev.azure.com`. Legacy hosts stay under
+  // `.visualstudio.com` (including `vs-ssh.visualstudio.com`).
+  return (
+    host === "dev.azure.com" ||
+    host.endsWith(".dev.azure.com") ||
+    host.endsWith(".visualstudio.com")
+  );
+}
+
+function isBitbucketHost(host: string): boolean {
+  return host === "bitbucket.org" || hasDnsLabel(host, "bitbucket");
+}
+
+export function detectSourceControlProviderFromRemoteUrl(
+  remoteUrl: string,
+): SourceControlProviderInfo | null {
+  const host = parseRemoteHost(remoteUrl);
+  if (!host) {
+    return null;
+  }
+  const hostname = parseHostName(host);
+
+  if (isGitHubHost(hostname)) {
+    return {
+      kind: "github",
+      name: hostname === "github.com" ? "GitHub" : "GitHub Self-Hosted",
+      baseUrl: toBaseUrl(host),
+    };
+  }
+
+  if (isGitLabHost(hostname)) {
+    return {
+      kind: "gitlab",
+      name: hostname === "gitlab.com" ? "GitLab" : "GitLab Self-Hosted",
+      baseUrl: toBaseUrl(host),
+    };
+  }
+
+  if (isAzureDevOpsHost(hostname)) {
+    return {
+      kind: "azure-devops",
+      name: "Azure DevOps",
+      baseUrl: toBaseUrl(host),
+    };
+  }
+
+  if (isBitbucketHost(hostname)) {
+    return {
+      kind: "bitbucket",
+      name: hostname === "bitbucket.org" ? "Bitbucket" : "Bitbucket Self-Hosted",
+      baseUrl: toBaseUrl(host),
+    };
+  }
+
+  return {
+    kind: "unknown",
+    name: host,
+    baseUrl: toBaseUrl(host),
+  };
+}

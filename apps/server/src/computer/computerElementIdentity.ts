@@ -1,4 +1,4 @@
-import type { ComputerTarget, ComputerUiNode } from "@synara/contracts";
+import type { ComputerTarget, ComputerUiNode } from "@spiritdevs/contracts";
 
 // Native handles stay inside the server. Neither the provider-facing ref nor
 // the public ComputerTarget schema exposes an actuator token.

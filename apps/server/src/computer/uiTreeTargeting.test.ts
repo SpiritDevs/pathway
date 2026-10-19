@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
-
-import type { ComputerUiNode, ComputerWindowId } from "@synara/contracts";
+import type { ComputerUiNode, ComputerWindowId } from "@spiritdevs/contracts";
+import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
 
 import {
   ComputerTargetError,
@@ -11,6 +11,7 @@ import {
   resolveComputerPoint,
   resolveComputerSemanticTarget,
   resolveComputerUniqueTextTarget,
+  resolveComputerWindowTarget,
   type ComputerActionableElement,
 } from "./uiTreeTargeting.ts";
 
@@ -58,42 +59,36 @@ const DESKTOP = node({
   ],
 });
 
-function thrown(run: () => unknown): ComputerTargetError {
-  try {
-    run();
-  } catch (cause) {
-    return cause as ComputerTargetError;
-  }
-  throw new Error("expected a ComputerTargetError");
-}
-
 describe("resolving a coordinate target", () => {
   const screen = { width: 1_920, height: 1_080, scale: 1 };
 
-  it("takes a point that is on the screen", () => {
-    expect(resolveComputerPoint({ x: 10, y: 20 }, screen)).toEqual({
-      x: 10,
-      y: 20,
-    });
-  });
+  it.effect("takes a point that is on the screen", () =>
+    Effect.gen(function* () {
+      expect(yield* resolveComputerPoint({ x: 10, y: 20 }, screen)).toEqual({ x: 10, y: 20 });
+    }),
+  );
 
-  it("refuses half a coordinate and a coordinate past the edge", () => {
-    const half = thrown(() => resolveComputerPoint({ x: 10 }, screen));
-    expect(half.code).toBe("computer_target_invalid");
-    const past = thrown(() => resolveComputerPoint({ x: 1_920, y: 10 }, screen));
-    expect(past.code).toBe("computer_target_offscreen");
-  });
+  it.effect("refuses half a coordinate and a coordinate past the edge", () =>
+    Effect.gen(function* () {
+      const half = yield* Effect.flip(resolveComputerPoint({ x: 10 }, screen));
+      expect(half.code).toBe("computer_target_invalid");
+      const past = yield* Effect.flip(resolveComputerPoint({ x: 1_920, y: 10 }, screen));
+      expect(past.code).toBe("computer_target_offscreen");
+    }),
+  );
 });
 
 describe("resolving a labelled desktop target", () => {
-  it("returns the control's own activation point when it has one", () => {
-    const match = resolveComputerSemanticTarget(DESKTOP, {
-      label: "Save",
-      role: "push button",
-    });
-    expect(match.point).toEqual({ x: 140, y: 215 });
-    expect(match.node.windowId).toBe("editor");
-  });
+  it.effect("returns the control's own activation point when it has one", () =>
+    Effect.gen(function* () {
+      const match = yield* resolveComputerSemanticTarget(DESKTOP, {
+        label: "Save",
+        role: "push button",
+      });
+      expect(match.point).toEqual({ x: 140, y: 215 });
+      expect(match.node.windowId).toBe("editor");
+    }),
+  );
 
   it("falls back to the frame centre for a control with no activation point", () => {
     const plain = node({
@@ -103,190 +98,250 @@ describe("resolving a labelled desktop target", () => {
     expect(activationPointForNode(plain)).toEqual({ x: 60, y: 40 });
   });
 
-  it("prefers an exact label over a longer one that contains it", () => {
-    const target = { label: "Save", windowId: windowId("editor") };
-    expect(resolveComputerSemanticTarget(DESKTOP, target).node.frame.x).toBe(100);
-  });
-
-  it("scopes matching to the named window", () => {
-    const target = { label: "Save", windowId: windowId("browser") };
-    expect(resolveComputerSemanticTarget(DESKTOP, target).node.role).toBe("menu item");
-  });
-
-  it("falls back to substring when no label matches exactly", () => {
-    expect(resolveComputerSemanticTarget(DESKTOP, { label: "ave As" }).node.label).toBe("Save As");
-  });
-
-  it("compares a role verbatim rather than loosely", () => {
-    // AT-SPI role names are a fixed vocabulary, so a near miss is a wrong role
-    // and not a spelling to be forgiven.
-    const error = thrown(() => resolveComputerSemanticTarget(DESKTOP, { role: "Push Button" }));
-    expect(error.code).toBe("computer_target_not_found");
-  });
-
-  it("matches a label without trimming the query", () => {
-    // Nothing trims a label arriving over MCP, and quietly acting on a control
-    // the caller did not name is worse than a refusal they can correct.
-    const error = thrown(() => resolveComputerSemanticTarget(DESKTOP, { label: " Save " }));
-    expect(error.code).toBe("computer_target_not_found");
-  });
-
-  it.each(["\u00a0", "\u2007", "\u202f"])(
-    "matches a visible form label containing a non-breaking space (%j)",
-    (space) => {
-      const field = node({ role: "AXTextField", label: `First name${space}*` });
-      const desktop = node({
-        role: "desktop",
-        children: [field, node({ role: "AXTextField", label: "First name * (optional)" })],
-      });
-      expect(resolveComputerSemanticTarget(desktop, { label: "First name *" }).node).toBe(field);
-    },
+  it.effect("prefers an exact label over a longer one that contains it", () =>
+    Effect.gen(function* () {
+      const target = { label: "Save", windowId: windowId("editor") };
+      expect((yield* resolveComputerSemanticTarget(DESKTOP, target)).node.frame.x).toBe(100);
+    }),
   );
 
-  it("refuses ambiguity between labels differing only in non-breaking spaces", () => {
-    const desktop = node({
-      role: "desktop",
-      children: [
-        node({ role: "AXTextField", label: "First name\u00a0*" }),
-        node({ role: "AXTextField", label: "First name *" }),
-      ],
-    });
-    const error = thrown(() => resolveComputerSemanticTarget(desktop, { label: "First name *" }));
-    expect(error.code).toBe("computer_target_ambiguous");
-    expect(error.candidates).toHaveLength(2);
-  });
+  it.effect("scopes matching to the named window", () =>
+    Effect.gen(function* () {
+      const target = { label: "Save", windowId: windowId("browser") };
+      expect((yield* resolveComputerSemanticTarget(DESKTOP, target)).node.role).toBe("menu item");
+    }),
+  );
 
-  it("refuses a label that names a control in two windows", () => {
-    const error = thrown(() => resolveComputerSemanticTarget(DESKTOP, { label: "Save" }));
-    expect(error.code).toBe("computer_target_ambiguous");
-    expect(error.candidates).toHaveLength(2);
-  });
+  it.effect("falls back to substring when no label matches exactly", () =>
+    Effect.gen(function* () {
+      const match = yield* resolveComputerSemanticTarget(DESKTOP, { label: "ave As" });
+      expect(match.node.label).toBe("Save As");
+    }),
+  );
 
-  it("trusts the perception source's own on-screen flag", () => {
-    const desktop = node({
-      role: "desktop",
-      children: [
-        node({
-          role: "push button",
-          label: "Hidden",
-          onScreen: false,
-          // On screen by coordinates; the source knows better, and is believed.
-          frame: { x: 10, y: 10, width: 80, height: 30 },
-        }),
-      ],
-    });
-    const error = thrown(() => resolveComputerSemanticTarget(desktop, { label: "Hidden" }));
-    expect(error.code).toBe("computer_target_offscreen");
-    expect(error.candidates).toHaveLength(1);
-    expect(resolveComputerSemanticTarget(desktop, { label: "Hidden" }, true).node.label).toBe(
-      "Hidden",
-    );
-  });
+  it.effect("compares a role verbatim rather than loosely", () =>
+    Effect.gen(function* () {
+      // AT-SPI role names are a fixed vocabulary, so a near miss is a wrong role
+      // and not a spelling to be forgiven.
+      const error = yield* Effect.flip(
+        resolveComputerSemanticTarget(DESKTOP, { role: "Push Button" }),
+      );
+      expect(error.code).toBe("computer_target_not_found");
+    }),
+  );
+
+  it.effect("matches a label without trimming the query", () =>
+    Effect.gen(function* () {
+      // Nothing trims a label arriving over MCP, and quietly acting on a control
+      // the caller did not name is worse than a refusal they can correct.
+      const error = yield* Effect.flip(resolveComputerSemanticTarget(DESKTOP, { label: " Save " }));
+      expect(error.code).toBe("computer_target_not_found");
+    }),
+  );
+
+  it.effect.each(["\u00a0", "\u2007", "\u202f"])(
+    "matches a visible form label containing a non-breaking space (%j)",
+    (space) =>
+      Effect.gen(function* () {
+        const field = node({ role: "AXTextField", label: `First name${space}*` });
+        const desktop = node({
+          role: "desktop",
+          children: [field, node({ role: "AXTextField", label: "First name * (optional)" })],
+        });
+        const match = yield* resolveComputerSemanticTarget(desktop, { label: "First name *" });
+        expect(match.node).toBe(field);
+      }),
+  );
+
+  it.effect("refuses ambiguity between labels differing only in non-breaking spaces", () =>
+    Effect.gen(function* () {
+      const desktop = node({
+        role: "desktop",
+        children: [
+          node({ role: "AXTextField", label: "First name\u00a0*" }),
+          node({ role: "AXTextField", label: "First name *" }),
+        ],
+      });
+      const error = yield* Effect.flip(
+        resolveComputerSemanticTarget(desktop, { label: "First name *" }),
+      );
+      expect(error.code).toBe("computer_target_ambiguous");
+      expect(error.candidates).toHaveLength(2);
+    }),
+  );
+
+  it.effect("refuses a label that names a control in two windows", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(resolveComputerSemanticTarget(DESKTOP, { label: "Save" }));
+      expect(error.code).toBe("computer_target_ambiguous");
+      expect(error.candidates).toHaveLength(2);
+    }),
+  );
+
+  it.effect("trusts the perception source's own on-screen flag", () =>
+    Effect.gen(function* () {
+      const desktop = node({
+        role: "desktop",
+        children: [
+          node({
+            role: "push button",
+            label: "Hidden",
+            onScreen: false,
+            // On screen by coordinates; the source knows better, and is believed.
+            frame: { x: 10, y: 10, width: 80, height: 30 },
+          }),
+        ],
+      });
+      const error = yield* Effect.flip(resolveComputerSemanticTarget(desktop, { label: "Hidden" }));
+      expect(error.code).toBe("computer_target_offscreen");
+      expect(error.candidates).toHaveLength(1);
+      const match = yield* resolveComputerSemanticTarget(desktop, { label: "Hidden" }, true);
+      expect(match.node.label).toBe("Hidden");
+    }),
+  );
 });
 
 describe("resolving the sole writable text control in a window", () => {
-  it("selects an unlabelled native text area without guessing across windows", () => {
-    const editor = node({
-      role: "AXTextArea",
-      windowId: windowId("editor"),
-      frame: { x: 20, y: 40, width: 300, height: 200 },
-    });
-    const desktop = node({
-      role: "desktop",
-      children: [
-        editor,
-        node({ role: "AXTextArea", windowId: windowId("other") }),
-        node({ role: "AXButton", label: "Save", windowId: windowId("editor") }),
-      ],
-    });
+  it.effect("selects an unlabelled native text area without guessing across windows", () =>
+    Effect.gen(function* () {
+      const editor = node({
+        role: "AXTextArea",
+        windowId: windowId("editor"),
+        frame: { x: 20, y: 40, width: 300, height: 200 },
+      });
+      const desktop = node({
+        role: "desktop",
+        children: [
+          editor,
+          node({ role: "AXTextArea", windowId: windowId("other") }),
+          node({ role: "AXButton", label: "Save", windowId: windowId("editor") }),
+        ],
+      });
 
-    expect(resolveComputerUniqueTextTarget(desktop, "editor").node).toBe(editor);
-  });
+      expect((yield* resolveComputerUniqueTextTarget(desktop, "editor")).node).toBe(editor);
+    }),
+  );
 
-  it("refuses multiple writable controls and names each candidate", () => {
-    const desktop = node({
-      role: "desktop",
-      children: [
-        node({
-          role: "AXTextField",
-          label: "Title",
-          windowId: windowId("editor"),
-        }),
-        node({
-          role: "AXTextArea",
-          label: "Body",
-          windowId: windowId("editor"),
-        }),
-      ],
-    });
+  it.effect("refuses multiple writable controls and names each candidate", () =>
+    Effect.gen(function* () {
+      const desktop = node({
+        role: "desktop",
+        children: [
+          node({
+            role: "AXTextField",
+            label: "Title",
+            windowId: windowId("editor"),
+          }),
+          node({
+            role: "AXTextArea",
+            label: "Body",
+            windowId: windowId("editor"),
+          }),
+        ],
+      });
 
-    const error = thrown(() => resolveComputerUniqueTextTarget(desktop, "editor"));
-    expect(error.code).toBe("computer_target_ambiguous");
-    expect(error.candidates.map((candidate) => candidate.label)).toEqual(["Title", "Body"]);
-  });
+      const error = yield* Effect.flip(resolveComputerUniqueTextTarget(desktop, "editor"));
+      expect(error.code).toBe("computer_target_ambiguous");
+      expect(error.candidates.map((candidate) => candidate.label)).toEqual(["Title", "Body"]);
+    }),
+  );
 
-  it("does not select a text-shaped control explicitly marked read-only", () => {
-    const desktop = node({
-      role: "desktop",
-      children: [
-        node({
-          role: "AXTextArea",
-          label: "Transcript",
-          editable: false,
-          windowId: windowId("editor"),
-        }),
-      ],
-    });
+  it.effect("does not select a text-shaped control explicitly marked read-only", () =>
+    Effect.gen(function* () {
+      const desktop = node({
+        role: "desktop",
+        children: [
+          node({
+            role: "AXTextArea",
+            label: "Transcript",
+            editable: false,
+            windowId: windowId("editor"),
+          }),
+        ],
+      });
 
-    const error = thrown(() => resolveComputerUniqueTextTarget(desktop, "editor"));
-    expect(error.code).toBe("computer_target_not_found");
-  });
+      const error = yield* Effect.flip(resolveComputerUniqueTextTarget(desktop, "editor"));
+      expect(error.code).toBe("computer_target_not_found");
+    }),
+  );
 
-  it("can retain an exact writable control after its window leaves the active Space", () => {
-    const editor = node({
-      role: "AXTextArea",
-      label: "Body",
-      windowId: windowId("editor"),
-      onScreen: false,
-    });
-    const desktop = node({ role: "desktop", children: [editor] });
+  it.effect("can retain an exact writable control after its window leaves the active Space", () =>
+    Effect.gen(function* () {
+      const editor = node({
+        role: "AXTextArea",
+        label: "Body",
+        windowId: windowId("editor"),
+        onScreen: false,
+      });
+      const desktop = node({ role: "desktop", children: [editor] });
 
-    expect(resolveComputerUniqueTextTarget(desktop, "editor", true).node).toBe(editor);
-    expect(() => resolveComputerUniqueTextTarget(desktop, "editor")).toThrow(ComputerTargetError);
-  });
+      expect((yield* resolveComputerUniqueTextTarget(desktop, "editor", true)).node).toBe(editor);
+      expect(yield* Effect.flip(resolveComputerUniqueTextTarget(desktop, "editor"))).toBeInstanceOf(
+        ComputerTargetError,
+      );
+    }),
+  );
+});
+
+describe("resolving a window's own node", () => {
+  it.effect("returns the window root, nothing for an unknown window, and refuses off-screen", () =>
+    Effect.gen(function* () {
+      const editor = node({
+        role: "window",
+        windowId: windowId("editor"),
+        frame: { x: 0, y: 0, width: 200, height: 100 },
+        children: [node({ role: "push button", label: "Save", windowId: windowId("editor") })],
+      });
+      const hidden = node({ role: "window", windowId: windowId("hidden"), onScreen: false });
+      const desktop = node({ role: "desktop", children: [editor, hidden] });
+
+      const match = yield* resolveComputerWindowTarget(desktop, "editor");
+      expect(match?.node).toBe(editor);
+      expect(match?.point).toEqual({ x: 100, y: 50 });
+      expect(yield* resolveComputerWindowTarget(desktop, "missing")).toBeUndefined();
+      const error = yield* Effect.flip(resolveComputerWindowTarget(desktop, "hidden"));
+      expect(error.code).toBe("computer_target_offscreen");
+    }),
+  );
 });
 
 describe("naming the candidates", () => {
-  it("puts the candidates in the message, not only in the structured field", () => {
-    // Every transport between here and the model — MCP tool errors, WsRpcError —
-    // is only guaranteed to carry the message, and a "no such label" with no
-    // list of the real ones is a dead end.
-    const error = thrown(() => resolveComputerSemanticTarget(DESKTOP, { label: "Print" }));
-    expect(error.code).toBe("computer_target_not_found");
-    expect(error.candidates.length).toBeGreaterThan(0);
-    expect(error.message).toContain("Save As");
-    expect(error.message).toContain("push button");
-    expect(error.message).toContain('in window "editor"');
-  });
+  it.effect("puts the candidates in the message, not only in the structured field", () =>
+    Effect.gen(function* () {
+      // Every transport between here and the model — MCP tool errors, WsRpcError —
+      // is only guaranteed to carry the message, and a "no such label" with no
+      // list of the real ones is a dead end.
+      const error = yield* Effect.flip(resolveComputerSemanticTarget(DESKTOP, { label: "Print" }));
+      expect(error.code).toBe("computer_target_not_found");
+      expect(error.candidates.length).toBeGreaterThan(0);
+      expect(error.message).toContain("Save As");
+      expect(error.message).toContain("push button");
+      expect(error.message).toContain('in window "editor"');
+    }),
+  );
 
-  it("leaves a message alone when there are no candidates to name", () => {
-    const screen = { width: 100, height: 100 };
-    const error = thrown(() => resolveComputerPoint({ x: 5_000, y: 10 }, screen));
-    expect(error.message).toBe("Computer target (5000, 10) is outside the 100x100 screen.");
-  });
+  it.effect("leaves a message alone when there are no candidates to name", () =>
+    Effect.gen(function* () {
+      const screen = { width: 100, height: 100 };
+      const error = yield* Effect.flip(resolveComputerPoint({ x: 5_000, y: 10 }, screen));
+      expect(error.message).toBe("Computer target (5000, 10) is outside the 100x100 screen.");
+    }),
+  );
 
-  it("caps a candidate list at sixteen entries", () => {
-    const desktop = node({
-      role: "desktop",
-      children: Array.from({ length: 40 }, (_unused, index) =>
-        node({ role: "push button", label: `Button ${index}` }),
-      ),
-    });
-    // The root counts too: the cap is on the flattened list, not on the children.
-    expect(computerTargetCandidates(desktop)).toHaveLength(16);
-    const error = thrown(() => resolveComputerSemanticTarget(desktop, { label: "Nope" }));
-    expect(error.candidates).toHaveLength(16);
-  });
+  it.effect("caps a candidate list at sixteen entries", () =>
+    Effect.gen(function* () {
+      const desktop = node({
+        role: "desktop",
+        children: Array.from({ length: 40 }, (_unused, index) =>
+          node({ role: "push button", label: `Button ${index}` }),
+        ),
+      });
+      // The root counts too: the cap is on the flattened list, not on the children.
+      expect(computerTargetCandidates(desktop)).toHaveLength(16);
+      const error = yield* Effect.flip(resolveComputerSemanticTarget(desktop, { label: "Nope" }));
+      expect(error.candidates).toHaveLength(16);
+    }),
+  );
 });
 
 /**
@@ -626,59 +681,58 @@ describe("resolving a duplicate by ordinal", () => {
     ],
   });
 
-  it("picks the ordinal-th control sharing the exact identity", () => {
-    const match = resolveComputerSemanticTarget(twoSaves, {
-      label: "Save",
-      refOrdinal: 1,
-    });
-    expect(match.point).toEqual({ x: 20, y: 20 });
-  });
-
-  it.each([false, true])(
-    "refuses a disappeared ordinal instead of targeting the sole survivor (allowOffscreen=%s)",
-    (allowOffscreen) => {
-      const oneSave = node({
-        role: "desktop",
-        children: [
-          node({
-            role: "push button",
-            label: "Save",
-            windowId: windowId("editor"),
-            activationPoint: { x: 10, y: 10 },
-          }),
-        ],
+  it.effect("picks the ordinal-th control sharing the exact identity", () =>
+    Effect.gen(function* () {
+      const match = yield* resolveComputerSemanticTarget(twoSaves, {
+        label: "Save",
+        refOrdinal: 1,
       });
-      const error = thrown(() =>
-        resolveComputerSemanticTarget(oneSave, { label: "Save", refOrdinal: 1 }, allowOffscreen),
-      );
-      expect(error.code).toBe("computer_target_not_found");
-      expect(error.notFound).toBe(true);
-      expect(error.message).toContain("Observe again with computer_get_state");
-    },
+      expect(match.point).toEqual({ x: 20, y: 20 });
+    }),
   );
 
-  it("refuses a disappeared ordinal even when multiple controls survive", () => {
-    const error = thrown(() =>
-      resolveComputerSemanticTarget(twoSaves, { label: "Save", refOrdinal: 2 }),
-    );
-    expect(error.code).toBe("computer_target_not_found");
-    expect(error.candidates).toHaveLength(2);
-  });
-
-  it("reports the pool's near-misses when nothing matches", () => {
-    const thrown = (() => {
-      try {
-        resolveComputerSemanticTarget(twoSaves, {
-          label: "Missing",
-          refOrdinal: 0,
+  it.effect.each([false, true])(
+    "refuses a disappeared ordinal instead of targeting the sole survivor (allowOffscreen=%s)",
+    (allowOffscreen) =>
+      Effect.gen(function* () {
+        const oneSave = node({
+          role: "desktop",
+          children: [
+            node({
+              role: "push button",
+              label: "Save",
+              windowId: windowId("editor"),
+              activationPoint: { x: 10, y: 10 },
+            }),
+          ],
         });
-      } catch (cause) {
-        return cause as ComputerTargetError;
-      }
-      throw new Error("expected a refusal");
-    })();
-    expect(thrown.code).toBe("computer_target_not_found");
-  });
+        const error = yield* Effect.flip(
+          resolveComputerSemanticTarget(oneSave, { label: "Save", refOrdinal: 1 }, allowOffscreen),
+        );
+        expect(error.code).toBe("computer_target_not_found");
+        expect(error.notFound).toBe(true);
+        expect(error.message).toContain("Observe again with computer_get_state");
+      }),
+  );
+
+  it.effect("refuses a disappeared ordinal even when multiple controls survive", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        resolveComputerSemanticTarget(twoSaves, { label: "Save", refOrdinal: 2 }),
+      );
+      expect(error.code).toBe("computer_target_not_found");
+      expect(error.candidates).toHaveLength(2);
+    }),
+  );
+
+  it.effect("reports the pool's near-misses when nothing matches", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        resolveComputerSemanticTarget(twoSaves, { label: "Missing", refOrdinal: 0 }),
+      );
+      expect(error.code).toBe("computer_target_not_found");
+    }),
+  );
 });
 
 describe("actionableElements ref data", () => {

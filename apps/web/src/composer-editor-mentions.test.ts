@@ -1,134 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import {
-  matchComposerLinkToken,
-  matchComposerSlashCommandChipToken,
+  selectionTouchesMentionBoundary,
   splitPromptIntoComposerSegments,
-  splitPromptIntoDisplaySegments,
 } from "./composer-editor-mentions";
 import { INLINE_TERMINAL_CONTEXT_PLACEHOLDER } from "./lib/terminalContext";
 
-describe("matchComposerLinkToken", () => {
-  it("matches a URL only once a delimiter follows it while typing", () => {
-    expect(
-      matchComposerLinkToken("https://github.com/openai/codex", {
-        includeTrailingTokenAtEnd: false,
-      }),
-    ).toBeNull();
-    expect(
-      matchComposerLinkToken("https://github.com/openai/codex ", {
-        includeTrailingTokenAtEnd: false,
-      }),
-    ).toEqual({ url: "https://github.com/openai/codex", start: 0, end: 31 });
-  });
-
-  it("matches a trailing URL at end-of-text in display mode", () => {
-    expect(
-      matchComposerLinkToken("see https://github.com/openai/codex", {
-        includeTrailingTokenAtEnd: true,
-      }),
-    ).toEqual({ url: "https://github.com/openai/codex", start: 4, end: 35 });
-  });
-
-  it("excludes trailing sentence punctuation from the matched URL", () => {
-    expect(
-      matchComposerLinkToken("https://example.com. ", {
-        includeTrailingTokenAtEnd: false,
-      }),
-    ).toEqual({ url: "https://example.com", start: 0, end: 19 });
-  });
-
-  it("normalizes a bare domain once a delimiter follows it while typing", () => {
-    expect(
-      matchComposerLinkToken("linear.app/team/issue/ENG-12 ", {
-        includeTrailingTokenAtEnd: false,
-      }),
-    ).toEqual({ url: "https://linear.app/team/issue/ENG-12", start: 0, end: 28 });
-  });
-
-  it("does not treat local filenames as bare domain links", () => {
-    expect(
-      matchComposerLinkToken("AGENTS.md ", {
-        includeTrailingTokenAtEnd: false,
-      }),
-    ).toBeNull();
-  });
-});
-
-describe("matchComposerSlashCommandChipToken", () => {
-  it("matches /automation only after a delimiter while typing", () => {
-    expect(matchComposerSlashCommandChipToken("/automation")).toBeNull();
-    expect(matchComposerSlashCommandChipToken("/automation ")).toEqual({
-      command: "automation",
-      start: 0,
-      end: "/automation".length,
-    });
-    expect(matchComposerSlashCommandChipToken("/Automation ")).toEqual({
-      command: "automation",
-      start: 0,
-      end: "/automation".length,
-    });
-    expect(matchComposerSlashCommandChipToken("please /automation now")).toEqual({
-      command: "automation",
-      start: "please ".length,
-      end: "please /automation".length,
-    });
-  });
-
-  it("matches /computer-use as a chip, hyphen included", () => {
-    expect(matchComposerSlashCommandChipToken("/computer-use")).toBeNull();
-    expect(matchComposerSlashCommandChipToken("/computer-use open Calculator")).toEqual({
-      command: "computer-use",
-      start: 0,
-      end: "/computer-use".length,
-    });
-  });
-
-  it("does not match other built-in slash commands as composer chips", () => {
-    expect(matchComposerSlashCommandChipToken("/plan ")).toBeNull();
-    expect(matchComposerSlashCommandChipToken("/model spark")).toBeNull();
-  });
-});
-
 describe("splitPromptIntoComposerSegments", () => {
-  it("marks structured thread mentions as thread chips", () => {
-    expect(
-      splitPromptIntoComposerSegments(
-        'Compare @"Release planning" please',
-        [],
-        [{ name: "Release planning", path: "thread://thread-123" }],
-      ),
-    ).toEqual([
-      { type: "text", text: "Compare " },
-      {
-        type: "mention",
-        path: "Release planning",
-        kind: "thread",
-        threadId: "thread-123",
-        tokenLength: '@"Release planning"'.length,
-      },
-      { type: "text", text: " please" },
-    ]);
-  });
-
   it("splits mention tokens followed by whitespace into mention segments", () => {
     expect(splitPromptIntoComposerSegments("Inspect @AGENTS.md please")).toEqual([
       { type: "text", text: "Inspect " },
-      { type: "mention", path: "AGENTS.md", tokenLength: "@AGENTS.md".length },
-      { type: "text", text: " please" },
-    ]);
-  });
-
-  it("marks selected provider mention references as plugin mentions", () => {
-    expect(
-      splitPromptIntoComposerSegments(
-        "Use @Gmail please",
-        [],
-        [{ name: "gmail", path: "plugin://gmail@openai-curated" }],
-      ),
-    ).toEqual([
-      { type: "text", text: "Use " },
-      { type: "mention", path: "Gmail", kind: "plugin", tokenLength: "@Gmail".length },
+      { type: "mention", path: "AGENTS.md", source: "@AGENTS.md" },
       { type: "text", text: " please" },
     ]);
   });
@@ -139,81 +21,108 @@ describe("splitPromptIntoComposerSegments", () => {
     ]);
   });
 
-  it("does not convert an incomplete trailing dollar skill token", () => {
-    expect(splitPromptIntoComposerSegments("Use $check-code")).toEqual([
-      { type: "text", text: "Use $check-code" },
-    ]);
-  });
-
-  it("does not convert an incomplete trailing slash skill token", () => {
-    expect(splitPromptIntoComposerSegments("Use /check-code")).toEqual([
-      { type: "text", text: "Use /check-code" },
-    ]);
-  });
-
-  it("converts completed dollar skill tokens once a trailing delimiter exists", () => {
-    expect(splitPromptIntoComposerSegments("Use $check-code please")).toEqual([
-      { type: "text", text: "Use " },
-      { type: "skill", name: "check-code", prefix: "$" },
-      { type: "text", text: " please" },
-    ]);
-  });
-
-  it("converts completed slash skill tokens once a trailing delimiter exists", () => {
-    expect(splitPromptIntoComposerSegments("Use /check-code please")).toEqual([
-      { type: "text", text: "Use " },
-      { type: "skill", name: "check-code", prefix: "/" },
-      { type: "text", text: " please" },
-    ]);
-  });
-
-  it("keeps built-in slash commands as plain text", () => {
-    expect(splitPromptIntoComposerSegments("/plan ")).toEqual([{ type: "text", text: "/plan " }]);
-    expect(splitPromptIntoComposerSegments("/model spark")).toEqual([
-      { type: "text", text: "/model spark" },
-    ]);
-  });
-
-  it("converts completed /automation into an app slash-command segment", () => {
-    expect(splitPromptIntoComposerSegments("/automation fra 15 secondi scrivi qui")).toEqual([
-      { type: "slash-command", command: "automation" },
-      { type: "text", text: " fra 15 secondi scrivi qui" },
-    ]);
-  });
-
-  it("keeps a typed agent alias as plain text until parentheses are added", () => {
-    expect(splitPromptIntoComposerSegments("Ask @spark")).toEqual([
-      { type: "text", text: "Ask @spark" },
-    ]);
-  });
-
-  it("converts an agent alias into a chip once the task parentheses begin", () => {
-    expect(splitPromptIntoComposerSegments("Ask @spark()")).toEqual([
-      { type: "text", text: "Ask " },
-      { type: "agent-mention", alias: "spark", color: "cyan" },
-      { type: "text", text: "()" },
-    ]);
-  });
-
   it("keeps newlines around mention tokens", () => {
-    expect(splitPromptIntoComposerSegments("one\n@src/index.ts \ntwo")).toEqual([
+    expect(splitPromptIntoComposerSegments("one\n@AGENTS.md \ntwo")).toEqual([
       { type: "text", text: "one\n" },
-      { type: "mention", path: "src/index.ts", tokenLength: "@src/index.ts".length },
+      { type: "mention", path: "AGENTS.md", source: "@AGENTS.md" },
       { type: "text", text: " \ntwo" },
     ]);
   });
 
-  it("supports quoted mention tokens so folder paths can include spaces", () => {
+  it("splits quoted mention tokens containing whitespace", () => {
+    expect(splitPromptIntoComposerSegments('Inspect @"My File.md" please')).toEqual([
+      { type: "text", text: "Inspect " },
+      { type: "mention", path: "My File.md", source: '@"My File.md"' },
+      { type: "text", text: " please" },
+    ]);
+  });
+
+  it("unescapes quoted mention token content", () => {
+    expect(splitPromptIntoComposerSegments('Inspect @"docs/My \\"File\\".md" please')).toEqual([
+      { type: "text", text: "Inspect " },
+      {
+        type: "mention",
+        path: 'docs/My "File".md',
+        source: '@"docs/My \\"File\\".md"',
+      },
+      { type: "text", text: " please" },
+    ]);
+  });
+
+  it("splits generated markdown file links into mention segments", () => {
     expect(
-      splitPromptIntoComposerSegments('Inspect @"/Users/test/Application Support" please'),
+      splitPromptIntoComposerSegments(
+        "Inspect [package.json](path/to/package.json) before continuing",
+      ),
     ).toEqual([
       { type: "text", text: "Inspect " },
       {
         type: "mention",
-        path: "/Users/test/Application Support",
-        tokenLength: '@"/Users/test/Application Support"'.length,
+        path: "path/to/package.json",
+        source: "[package.json](path/to/package.json)",
       },
+      { type: "text", text: " before continuing" },
+    ]);
+  });
+
+  it("does not turn normal web links into file mention segments", () => {
+    expect(
+      splitPromptIntoComposerSegments("Read [the docs](https://example.com/docs) first"),
+    ).toEqual([{ type: "text", text: "Read [the docs](https://example.com/docs) first" }]);
+  });
+
+  it.each(["@expo/ui", "@jane/foo.js", "@scope/pkg/sub/path"])(
+    "does not turn scoped package reference %s into file mention segments",
+    (reference) => {
+      const prompt = `Install ${reference} next`;
+      expect(splitPromptIntoComposerSegments(prompt)).toEqual([{ type: "text", text: prompt }]);
+    },
+  );
+
+  it("keeps IME-composed text containing a scoped package reference as text", () => {
+    const prompt = "入力 @expo/ui　を追加";
+    expect(splitPromptIntoComposerSegments(prompt)).toEqual([{ type: "text", text: prompt }]);
+  });
+
+  it("turns canonical scoped folder links into file mention segments", () => {
+    expect(splitPromptIntoComposerSegments("Inspect [sub](@scope/pkg/sub) next")).toEqual([
+      { type: "text", text: "Inspect " },
+      {
+        type: "mention",
+        path: "@scope/pkg/sub",
+        source: "[sub](@scope/pkg/sub)",
+      },
+      { type: "text", text: " next" },
+    ]);
+  });
+
+  it("decodes reserved path characters from generated links", () => {
+    expect(
+      splitPromptIntoComposerSegments(
+        "Inspect [config#draft?.json](config%23draft%3F.json) before continuing",
+      ),
+    ).toEqual([
+      { type: "text", text: "Inspect " },
+      {
+        type: "mention",
+        path: "config#draft?.json",
+        source: "[config#draft?.json](config%23draft%3F.json)",
+      },
+      { type: "text", text: " before continuing" },
+    ]);
+  });
+
+  it("splits skill tokens followed by whitespace into skill segments", () => {
+    expect(splitPromptIntoComposerSegments("Use $review-follow-up please")).toEqual([
+      { type: "text", text: "Use " },
+      { type: "skill", name: "review-follow-up" },
       { type: "text", text: " please" },
+    ]);
+  });
+
+  it("does not convert an incomplete trailing skill token", () => {
+    expect(splitPromptIntoComposerSegments("Use $review-follow-up")).toEqual([
+      { type: "text", text: "Use $review-follow-up" },
     ]);
   });
 
@@ -225,126 +134,99 @@ describe("splitPromptIntoComposerSegments", () => {
     ).toEqual([
       { type: "text", text: "Inspect " },
       { type: "terminal-context", context: null },
-      { type: "mention", path: "AGENTS.md", tokenLength: "@AGENTS.md".length },
+      { type: "mention", path: "AGENTS.md", source: "@AGENTS.md" },
       { type: "text", text: " please" },
     ]);
   });
 
-  it("converts a URL into a link segment once a delimiter follows it", () => {
+  it("preserves consecutive terminal context placeholders without dropping positions", () => {
     expect(
-      splitPromptIntoComposerSegments("see https://github.com/openai/codex/pull/1 thanks"),
+      splitPromptIntoComposerSegments(
+        `${INLINE_TERMINAL_CONTEXT_PLACEHOLDER}${INLINE_TERMINAL_CONTEXT_PLACEHOLDER}tail`,
+      ),
     ).toEqual([
-      { type: "text", text: "see " },
-      { type: "link", url: "https://github.com/openai/codex/pull/1" },
-      { type: "text", text: " thanks" },
+      { type: "terminal-context", context: null },
+      { type: "terminal-context", context: null },
+      { type: "text", text: "tail" },
     ]);
   });
 
-  it("converts a bare domain into a normalized link segment once a delimiter follows it", () => {
-    expect(splitPromptIntoComposerSegments("see linear.app/team/issue/ENG-12 thanks")).toEqual([
-      { type: "text", text: "see " },
-      { type: "link", url: "https://linear.app/team/issue/ENG-12" },
-      { type: "text", text: " thanks" },
-    ]);
-  });
-
-  it("does not convert an incomplete trailing URL while typing", () => {
-    expect(splitPromptIntoComposerSegments("see https://github.com/openai/codex")).toEqual([
-      { type: "text", text: "see https://github.com/openai/codex" },
-    ]);
-  });
-
-  it("does not treat an @host inside a URL as a mention", () => {
-    expect(splitPromptIntoComposerSegments("ping https://user@example.com/path here")).toEqual([
-      { type: "text", text: "ping " },
-      { type: "link", url: "https://user@example.com/path" },
-      { type: "text", text: " here" },
-    ]);
-  });
-
-  it("does not convert common local files into links", () => {
-    expect(splitPromptIntoComposerSegments("open AGENTS.md please")).toEqual([
-      { type: "text", text: "open AGENTS.md please" },
+  it("keeps skill parsing alongside mentions and terminal placeholders", () => {
+    expect(
+      splitPromptIntoComposerSegments(
+        `Inspect ${INLINE_TERMINAL_CONTEXT_PLACEHOLDER}$review-follow-up after @AGENTS.md `,
+      ),
+    ).toEqual([
+      { type: "text", text: "Inspect " },
+      { type: "terminal-context", context: null },
+      { type: "skill", name: "review-follow-up" },
+      { type: "text", text: " after " },
+      { type: "mention", path: "AGENTS.md", source: "@AGENTS.md" },
+      { type: "text", text: " " },
     ]);
   });
 });
 
-describe("splitPromptIntoDisplaySegments", () => {
-  it("converts a trailing skill token for read-only rendering", () => {
-    expect(splitPromptIntoDisplaySegments("$check-code")).toEqual([
-      { type: "skill", name: "check-code", prefix: "$" },
-    ]);
-  });
-
-  it("converts a trailing skill token at the end of surrounding text", () => {
-    expect(splitPromptIntoDisplaySegments("Use $check-code")).toEqual([
-      { type: "text", text: "Use " },
-      { type: "skill", name: "check-code", prefix: "$" },
-    ]);
-  });
-
-  it("renders trailing quoted mention tokens at the end of text", () => {
-    expect(splitPromptIntoDisplaySegments('Use @"/Users/test/Application Support"')).toEqual([
-      { type: "text", text: "Use " },
-      {
-        type: "mention",
-        path: "/Users/test/Application Support",
-        tokenLength: '@"/Users/test/Application Support"'.length,
-      },
-    ]);
-  });
-
-  it("converts a trailing URL into a link segment for read-only rendering", () => {
+describe("selectionTouchesMentionBoundary", () => {
+  it("returns true when selection includes the whitespace after a mention", () => {
     expect(
-      splitPromptIntoDisplaySegments("https://github.com/Emanuele-web04/synara/pull/155"),
-    ).toEqual([{ type: "link", url: "https://github.com/Emanuele-web04/synara/pull/155" }]);
-  });
-
-  it("converts a trailing bare domain into a normalized link segment for read-only rendering", () => {
-    expect(splitPromptIntoDisplaySegments("linear.app/team/issue/ENG-12")).toEqual([
-      { type: "link", url: "https://linear.app/team/issue/ENG-12" },
-    ]);
-  });
-
-  it("renders a URL on its own line followed by trailing prose", () => {
-    expect(
-      splitPromptIntoDisplaySegments(
-        "https://github.com/Emanuele-web04/synara/pull/155\nfix the conflicts",
+      selectionTouchesMentionBoundary(
+        "hi @package.json there",
+        "hi @package.json".length,
+        "hi @package.json there".length,
       ),
-    ).toEqual([
-      { type: "link", url: "https://github.com/Emanuele-web04/synara/pull/155" },
-      { type: "text", text: "\nfix the conflicts" },
-    ]);
+    ).toBe(true);
   });
 
-  it("trims trailing punctuation from a sentence-final URL", () => {
-    expect(splitPromptIntoDisplaySegments("open https://example.com.")).toEqual([
-      { type: "text", text: "open " },
-      { type: "link", url: "https://example.com" },
-      { type: "text", text: "." },
-    ]);
+  it("returns true when selection includes the whitespace before a mention", () => {
+    expect(
+      selectionTouchesMentionBoundary(
+        "hi there @package.json later",
+        "hi there".length,
+        "hi there ".length,
+      ),
+    ).toBe(true);
   });
 
-  it("uses explicit mention references instead of inferring plugins from plain @text", () => {
-    expect(splitPromptIntoDisplaySegments("Use @linear")).toEqual([
-      { type: "text", text: "Use " },
-      { type: "mention", path: "linear", tokenLength: "@linear".length },
-    ]);
+  it("returns false when selection starts after the mention boundary whitespace", () => {
     expect(
-      splitPromptIntoDisplaySegments("Use @linear", [
-        { name: "linear", path: "plugin://linear@openai-curated" },
-      ]),
-    ).toEqual([
-      { type: "text", text: "Use " },
-      { type: "mention", path: "linear", kind: "plugin", tokenLength: "@linear".length },
-    ]);
+      selectionTouchesMentionBoundary(
+        "hi @package.json there",
+        "hi @package.json ".length,
+        "hi @package.json there".length,
+      ),
+    ).toBe(false);
+  });
+
+  it("returns true when selection includes whitespace after a mention following a terminal placeholder", () => {
+    const prompt = `${INLINE_TERMINAL_CONTEXT_PLACEHOLDER}@AGENTS.md there`;
     expect(
-      splitPromptIntoDisplaySegments("Use @linear", [
-        { name: "Linear Plugin", path: "plugin://linear@openai-curated" },
-      ]),
-    ).toEqual([
-      { type: "text", text: "Use " },
-      { type: "mention", path: "linear", kind: "plugin", tokenLength: "@linear".length },
-    ]);
+      selectionTouchesMentionBoundary(
+        prompt,
+        `${INLINE_TERMINAL_CONTEXT_PLACEHOLDER}@AGENTS.md`.length,
+        prompt.length,
+      ),
+    ).toBe(true);
+  });
+
+  it("returns true when selection includes whitespace after a quoted mention", () => {
+    expect(
+      selectionTouchesMentionBoundary(
+        'hi @"My File.md" there',
+        'hi @"My File.md"'.length,
+        'hi @"My File.md" there'.length,
+      ),
+    ).toBe(true);
+  });
+
+  it("returns true when selection includes whitespace after a markdown file link", () => {
+    const prompt = "hi [package.json](path/to/package.json) there";
+    expect(
+      selectionTouchesMentionBoundary(
+        prompt,
+        "hi [package.json](path/to/package.json)".length,
+        prompt.length,
+      ),
+    ).toBe(true);
   });
 });

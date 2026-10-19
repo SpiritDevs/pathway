@@ -1,0 +1,507 @@
+import { assert, it } from "@effect/vitest";
+import {
+  type ModelSelection,
+  MessageId,
+  CommandId,
+  RuntimeRequestId,
+  NodeId,
+  type OrchestrationV2ProviderThread,
+  type OrchestrationV2ThreadProjection,
+  ProjectId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  ProviderSessionId,
+  ProviderThreadId,
+  ProviderTurnId,
+  RunAttemptId,
+  RunId,
+  ThreadId,
+} from "@spiritdevs/contracts";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
+
+import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import { QuestionAnswerDelivery } from "./QuestionAnswerDelivery.ts";
+import { EventSinkV2 } from "./EventSink.ts";
+import { layer as idAllocatorLayer } from "./IdAllocator.ts";
+import { ProjectionStoreV2 } from "./ProjectionStore.ts";
+import type { ProviderAdapterV2SessionRuntime } from "./ProviderAdapter.ts";
+import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
+import {
+  layer as providerTurnControlLayer,
+  ProviderTurnControlServiceV2,
+} from "./ProviderTurnControlService.ts";
+
+const driver = ProviderDriverKind.make("codex");
+const providerInstanceId = ProviderInstanceId.make("codex");
+const modelSelection = {
+  instanceId: providerInstanceId,
+  model: "gpt-5.4",
+} satisfies ModelSelection;
+
+function makeProjection(input: {
+  readonly now: DateTime.Utc;
+  readonly threadId: ThreadId;
+  readonly providerThread: OrchestrationV2ProviderThread;
+  readonly providerTurnId: ProviderTurnId;
+  readonly attemptId: RunAttemptId;
+}): OrchestrationV2ThreadProjection {
+  const runId = RunId.make("run:restart-session");
+  const nodeId = NodeId.make("node:restart-session");
+  return {
+    thread: {
+      createdBy: "user",
+      creationSource: "web",
+      id: input.threadId,
+      projectId: ProjectId.make("project:restart-session"),
+      title: "Restart session",
+      providerInstanceId,
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: "/workspace",
+      activeProviderThreadId: input.providerThread.id,
+      lineage: {
+        parentThreadId: null,
+        relationshipToParent: null,
+        rootThreadId: input.threadId,
+      },
+      forkedFrom: null,
+      createdAt: input.now,
+      updatedAt: input.now,
+      archivedAt: null,
+      settledOverride: null,
+      settledAt: null,
+      lastVisitedAt: null,
+      deletedAt: null,
+    },
+    runs: [],
+    attempts: [
+      {
+        id: input.attemptId,
+        runId,
+        attemptOrdinal: 1,
+        rootNodeId: nodeId,
+        providerInstanceId,
+        providerThreadId: input.providerThread.id,
+        providerTurnId: input.providerTurnId,
+        reason: "initial",
+        status: "superseded",
+        startedAt: input.now,
+        completedAt: input.now,
+      },
+    ],
+    nodes: [],
+    subagents: [],
+    providerSessions: [],
+    providerThreads: [input.providerThread],
+    providerTurns: [
+      {
+        id: input.providerTurnId,
+        providerThreadId: input.providerThread.id,
+        nodeId,
+        runAttemptId: input.attemptId,
+        nativeTurnRef: {
+          driver,
+          nativeId: "native-turn:restart-session",
+          strength: "strong",
+        },
+        ordinal: 1,
+        status: "running",
+        startedAt: input.now,
+        completedAt: null,
+      },
+    ],
+    runtimeRequests: [],
+    messages: [],
+    plans: [],
+    turnItems: [],
+    checkpointScopes: [],
+    checkpoints: [],
+    contextHandoffs: [],
+    contextTransfers: [],
+    visibleTurnItems: [],
+    updatedAt: input.now,
+  };
+}
+
+it.effect(
+  "interrupts the historical session only for the exact committed restart replacement",
+  () =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:restart-session");
+      const oldSessionId = ProviderSessionId.make("provider-session:restart-session:old");
+      const replacementSessionId = ProviderSessionId.make(
+        "provider-session:restart-session:replacement",
+      );
+      const unrelatedSessionId = ProviderSessionId.make(
+        "provider-session:restart-session:unrelated",
+      );
+      const providerThreadId = ProviderThreadId.make("provider-thread:restart-session");
+      const providerTurnId = ProviderTurnId.make("provider-turn:restart-session");
+      const attemptId = RunAttemptId.make("run-attempt:restart-session");
+      const providerThread: OrchestrationV2ProviderThread = {
+        id: providerThreadId,
+        driver,
+        providerInstanceId,
+        // The restart command has already projected this replacement binding
+        // before the process-bound restart effect executes.
+        providerSessionId: replacementSessionId,
+        appThreadId: threadId,
+        ownerNodeId: null,
+        nativeThreadRef: {
+          driver,
+          nativeId: "native-thread:restart-session",
+          strength: "strong",
+        },
+        nativeConversationHeadRef: null,
+        status: "not_loaded",
+        firstRunOrdinal: 1,
+        lastRunOrdinal: 1,
+        handoffIds: [],
+        forkedFrom: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      const projection = yield* Ref.make(
+        makeProjection({ now, threadId, providerThread, providerTurnId, attemptId }),
+      );
+      const interruptedThread = yield* Ref.make<OrchestrationV2ProviderThread | null>(null);
+      const providerSession = {
+        id: oldSessionId,
+        driver,
+        providerInstanceId,
+        status: "running" as const,
+        cwd: "/workspace",
+        model: modelSelection.model,
+        capabilities: CodexProviderCapabilitiesV2,
+        createdAt: now,
+        updatedAt: now,
+        lastError: null,
+      };
+      const runtime: ProviderAdapterV2SessionRuntime = {
+        instanceId: providerInstanceId,
+        driver,
+        providerSessionId: oldSessionId,
+        providerSession,
+        events: Stream.empty,
+        ensureThread: () => Effect.die("unused ensureThread"),
+        resumeThread: () => Effect.die("unused resumeThread"),
+        startTurn: () => Effect.die("unused startTurn"),
+        steerTurn: () => Effect.die("unused steerTurn"),
+        interruptTurn: ({ providerThread: target }) =>
+          Effect.all(
+            [
+              Ref.set(interruptedThread, target),
+              Ref.update(projection, (current) => ({
+                ...current,
+                providerTurns: current.providerTurns.map((turn) =>
+                  turn.id === providerTurnId
+                    ? { ...turn, status: "interrupted" as const, completedAt: now }
+                    : turn,
+                ),
+              })),
+            ],
+            { discard: true },
+          ),
+        respondToRuntimeRequest: () => Effect.die("unused respondToRuntimeRequest"),
+        readThreadSnapshot: () => Effect.die("unused readThreadSnapshot"),
+        rollbackThread: () => Effect.die("unused rollbackThread"),
+        forkThread: () => Effect.die("unused forkThread"),
+      };
+      const projectionLayer = Layer.succeed(
+        ProjectionStoreV2,
+        ProjectionStoreV2.of({
+          apply: () => Effect.void,
+          getShellSnapshot: () => Effect.die("unused getShellSnapshot"),
+          getThreadShell: () => Effect.die("unused getThreadShell"),
+          getThreadProjection: () => Ref.get(projection),
+          getRecoveryThreadIds: () => Effect.die("unused getRecoveryThreadIds"),
+          getDelegatedCompletionRecoveryThreadIds: () =>
+            Effect.die("unused getDelegatedCompletionRecoveryThreadIds"),
+          getThreadMetadata: () => Effect.die("unused getThreadMetadata"),
+          getQueuedRunThreadIds: () => Effect.die("unused getQueuedRunThreadIds"),
+          getAllowanceHeldThreadIds: () => Effect.die("unused getAllowanceHeldThreadIds"),
+          getPendingSubagentCompletionThreads: () =>
+            Effect.die("unused getPendingSubagentCompletionThreads"),
+          getThreadSnapshot: () => Effect.die("unused getThreadSnapshot"),
+        }),
+      );
+      const sessionManagerLayer = Layer.succeed(
+        ProviderSessionManagerV2,
+        ProviderSessionManagerV2.of({
+          shutdown: Effect.void,
+          open: () => Effect.die("unused open"),
+          get: (providerSessionId) =>
+            Effect.succeed(
+              providerSessionId === oldSessionId ? Option.some(runtime) : Option.none(),
+            ),
+          close: () => Effect.void,
+          release: () => Effect.void,
+          detach: () => Effect.void,
+        }),
+      );
+      const controlLayer = providerTurnControlLayer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            projectionLayer,
+            sessionManagerLayer,
+            Layer.mock(EventSinkV2)({}),
+            idAllocatorLayer,
+          ),
+        ),
+      );
+
+      const [ordinaryInterrupt, unrelatedRestart] = yield* Effect.gen(function* () {
+        const control = yield* ProviderTurnControlServiceV2;
+        const ordinary = yield* Effect.exit(
+          control.interrupt({
+            threadId,
+            providerSessionId: oldSessionId,
+            providerThreadId,
+            providerTurnId,
+          }),
+        );
+        const unrelated = yield* Effect.exit(
+          control.interruptAndAwaitTerminal({
+            threadId,
+            providerSessionId: oldSessionId,
+            replacementProviderSessionId: unrelatedSessionId,
+            providerThreadId,
+            providerTurnId,
+            interruptedAttemptId: attemptId,
+          }),
+        );
+        return [ordinary, unrelated] as const;
+      }).pipe(Effect.provide(controlLayer));
+
+      assert.isTrue(Exit.isFailure(ordinaryInterrupt));
+      assert.isTrue(Exit.isFailure(unrelatedRestart));
+      assert.isNull(yield* Ref.get(interruptedThread));
+
+      yield* Effect.gen(function* () {
+        const control = yield* ProviderTurnControlServiceV2;
+        yield* control.interruptAndAwaitTerminal({
+          threadId,
+          providerSessionId: oldSessionId,
+          replacementProviderSessionId: replacementSessionId,
+          providerThreadId,
+          providerTurnId,
+          interruptedAttemptId: attemptId,
+        });
+      }).pipe(Effect.provide(controlLayer));
+
+      const interrupted = yield* Ref.get(interruptedThread);
+      assert.isNotNull(interrupted);
+      assert.equal(interrupted?.providerSessionId, oldSessionId);
+      assert.equal(interrupted?.id, providerThreadId);
+      assert.equal(interrupted?.nativeThreadRef?.nativeId, "native-thread:restart-session");
+    }),
+);
+
+it.effect("forces an interrupted terminal state when the provider stays running", () =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const threadId = ThreadId.make("thread:interrupt-force-terminal");
+    const providerSessionId = ProviderSessionId.make("provider-session:interrupt-force-terminal");
+    const providerThreadId = ProviderThreadId.make("provider-thread:interrupt-force-terminal");
+    const providerTurnId = ProviderTurnId.make("provider-turn:interrupt-force-terminal");
+    const attemptId = RunAttemptId.make("run-attempt:interrupt-force-terminal");
+    const runId = RunId.make("run:interrupt-force-terminal");
+    const nodeId = NodeId.make("node:interrupt-force-terminal");
+    const providerThread = {
+      id: providerThreadId,
+      providerSessionId,
+      providerInstanceId,
+    } as OrchestrationV2ProviderThread;
+    const projection = {
+      ...makeProjection({ now, threadId, providerThread, providerTurnId, attemptId }),
+      runs: [
+        {
+          id: runId,
+          threadId,
+          rootNodeId: nodeId,
+          activeAttemptId: attemptId,
+          providerInstanceId,
+          status: "running",
+          queuePosition: null,
+          ordinal: 1,
+        },
+      ],
+      attempts: [
+        {
+          id: attemptId,
+          runId,
+          rootNodeId: nodeId,
+          providerInstanceId,
+          status: "running",
+        },
+      ],
+      nodes: [
+        {
+          id: nodeId,
+          threadId,
+          runId,
+          status: "running",
+          providerTurnId,
+        },
+      ],
+      turnItems: [
+        {
+          runId,
+          type: "run_interrupt_request",
+        },
+      ],
+    } as unknown as OrchestrationV2ThreadProjection;
+    const writtenEvents = yield* Ref.make<
+      ReadonlyArray<{ readonly type: string; readonly payload: unknown }>
+    >([]);
+    const runtime = {
+      interruptTurn: () => Effect.void,
+    } as unknown as ProviderAdapterV2SessionRuntime;
+    const layer = providerTurnControlLayer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(ProjectionStoreV2)({
+            getThreadProjection: () => Effect.succeed(projection),
+          }),
+          Layer.mock(ProviderSessionManagerV2)({
+            get: () => Effect.succeed(Option.some(runtime)),
+          }),
+          Layer.mock(EventSinkV2)({
+            writeIfRunCurrent: ({ events }) =>
+              Ref.set(writtenEvents, events).pipe(Effect.as({ committed: true, storedEvents: [] })),
+          }),
+          idAllocatorLayer,
+        ),
+      ),
+    );
+
+    yield* Effect.gen(function* () {
+      const control = yield* ProviderTurnControlServiceV2;
+      yield* control.interrupt({
+        threadId,
+        providerSessionId,
+        providerThreadId,
+        providerTurnId,
+      });
+    }).pipe(Effect.provide(layer));
+
+    const events = yield* Ref.get(writtenEvents);
+    assert.deepEqual(
+      events.map((event) => [event.type, (event.payload as { status?: string }).status]),
+      [
+        ["provider-turn.updated", "interrupted"],
+        ["run-attempt.updated", "interrupted"],
+        ["node.updated", "interrupted"],
+        ["turn-item.updated", "interrupted"],
+        ["run.updated", "interrupted"],
+      ],
+    );
+  }),
+);
+
+it.effect(
+  "hands an async answer to durable follow-up dispatch when its turn completed before delivery",
+  () =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:async-race");
+      const providerThreadId = ProviderThreadId.make("provider-thread:async-race");
+      const providerTurnId = ProviderTurnId.make("provider-turn:async-race");
+      const providerSessionId = ProviderSessionId.make("session:async-race");
+      const messageId = MessageId.make("message:async-answer");
+      const commandId = CommandId.make("command:answer");
+      const providerThread: OrchestrationV2ProviderThread = {
+        id: providerThreadId,
+        driver,
+        providerInstanceId,
+        providerSessionId,
+        appThreadId: threadId,
+        ownerNodeId: null,
+        nativeThreadRef: { driver, nativeId: "native-async", strength: "strong" },
+        nativeConversationHeadRef: null,
+        status: "idle",
+        firstRunOrdinal: 1,
+        lastRunOrdinal: 1,
+        handoffIds: [],
+        forkedFrom: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      const base = makeProjection({
+        now,
+        threadId,
+        providerThread,
+        providerTurnId,
+        attemptId: RunAttemptId.make("attempt:async"),
+      });
+      const projection = {
+        ...base,
+        providerTurns: base.providerTurns.map((turn) => ({
+          ...turn,
+          status: "completed" as const,
+          completedAt: now,
+        })),
+        runtimeRequests: [
+          {
+            id: RuntimeRequestId.make("request:async"),
+            nodeId: NodeId.make("node:async"),
+            providerTurnId,
+            nativeRequestRef: null,
+            kind: "user_input" as const,
+            status: "resolved" as const,
+            isBlocking: false,
+            responseCapability: { type: "message" as const, providerThreadId },
+            responseMessageId: messageId,
+            responseCommandId: commandId,
+            createdAt: now,
+            resolvedAt: now,
+          },
+        ],
+      };
+      const delivered = yield* Ref.make<ReadonlyArray<MessageId>>([]);
+      const controlLayer = providerTurnControlLayer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(ProjectionStoreV2)({
+              getThreadProjection: () => Effect.succeed(projection),
+            }),
+            Layer.mock(ProviderSessionManagerV2)({
+              get: () => Effect.die("A completed turn must not reacquire its old session."),
+            }),
+            Layer.mock(EventSinkV2)({}),
+            idAllocatorLayer,
+            Layer.mock(QuestionAnswerDelivery)({
+              followUp: (input) => {
+                assert.equal(input.providerThreadId, providerThreadId);
+                assert.equal(input.commandId, commandId);
+                return Ref.update(delivered, (messages) => [...messages, input.messageId]);
+              },
+            }),
+          ),
+        ),
+      );
+      yield* ProviderTurnControlServiceV2.pipe(
+        Effect.flatMap((control) =>
+          control.steer({
+            threadId,
+            providerThreadId,
+            providerTurnId,
+            providerSessionId,
+            messageId,
+            answerCommandId: commandId,
+          }),
+        ),
+        Effect.provide(controlLayer),
+      );
+      assert.deepEqual(yield* Ref.get(delivered), [messageId]);
+    }),
+);

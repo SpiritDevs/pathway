@@ -1,0 +1,167 @@
+// @effect-diagnostics nodeBuiltinImport:off - tests use POSIX path joining to match the Linux startup boundary.
+import * as NodePath from "node:path";
+import { assert, describe, it } from "@effect/vitest";
+
+import {
+  resolveEarlyLinuxElectronOptions,
+  resolveEarlyLinuxPasswordStorePreference,
+} from "./DesktopEarlyElectronStartup.ts";
+
+describe("DesktopEarlyElectronStartup", () => {
+  const joinPath = NodePath.posix.join;
+
+  it("reads the persisted linux password-store preference before Electron is ready", () => {
+    const preference = resolveEarlyLinuxPasswordStorePreference({
+      env: { PATHWAY_HOME: "/home/user/.pathway-test" },
+      homeDirectory: "/home/user",
+      joinPath,
+      readFileString: (path) => {
+        assert.equal(path, "/home/user/.pathway-test/userdata/desktop-settings.json");
+        return JSON.stringify({ linuxPasswordStore: "kwallet6" });
+      },
+    });
+
+    assert.equal(preference, "kwallet6");
+  });
+
+  it("accepts JSONC in the early desktop settings file", () => {
+    const preference = resolveEarlyLinuxPasswordStorePreference({
+      env: { PATHWAY_HOME: "/home/user/.pathway-test" },
+      homeDirectory: "/home/user",
+      joinPath,
+      readFileString: () => `{
+        // manually edited setting
+        "linuxPasswordStore": "gnome-libsecret",
+      }`,
+    });
+
+    assert.equal(preference, "gnome-libsecret");
+  });
+
+  it("falls back to auto when the early settings document is missing or invalid", () => {
+    const preference = resolveEarlyLinuxPasswordStorePreference({
+      env: {},
+      homeDirectory: "/home/user",
+      joinPath,
+      readFileString: () => {
+        throw new Error("missing");
+      },
+    });
+
+    assert.equal(preference, "auto");
+  });
+
+  it("preserves absolute root paths when resolving early settings", () => {
+    const preference = resolveEarlyLinuxPasswordStorePreference({
+      env: { PATHWAY_HOME: "/" },
+      homeDirectory: "/home/user",
+      joinPath,
+      readFileString: (path) => {
+        assert.equal(path, "/userdata/desktop-settings.json");
+        return JSON.stringify({ linuxPasswordStore: "kwallet6" });
+      },
+    });
+
+    assert.equal(preference, "kwallet6");
+  });
+
+  it("resolves the early linux Electron switches", () => {
+    const options = resolveEarlyLinuxElectronOptions({
+      env: {
+        PATHWAY_HOME: "/home/user/.pathway-test",
+        XDG_CURRENT_DESKTOP: "niri",
+        VITE_DEV_SERVER_URL: "http://127.0.0.1:5173",
+      },
+      homeDirectory: "/home/user",
+      joinPath,
+      readFileString: (path) => {
+        assert.equal(path, "/home/user/.pathway-test/userdata/desktop-settings.json");
+        return JSON.stringify({ linuxPasswordStore: "auto" });
+      },
+    });
+
+    assert.deepEqual(options, {
+      isDevelopment: true,
+      scheme: "pathway-dev",
+      linuxWmClass: "pathway-dev",
+      linuxDesktopEntryName: "com.spiritdevs.Pathway.Development.desktop",
+      passwordStore: "gnome-libsecret",
+    });
+  });
+
+  it("reads settings and names from the isolated cua identity", () => {
+    const options = resolveEarlyLinuxElectronOptions({
+      env: {},
+      homeDirectory: "/home/user",
+      joinPath,
+      flavor: "cua",
+      readFileString: (path) => {
+        assert.equal(path, "/home/user/.pathway-cua/userdata/desktop-settings.json");
+        return JSON.stringify({ linuxPasswordStore: "kwallet6" });
+      },
+    });
+
+    assert.deepEqual(options, {
+      isDevelopment: false,
+      scheme: "pathway-cua",
+      linuxWmClass: "pathway-cua",
+      linuxDesktopEntryName: "com.spiritdevs.Pathway.Cua.desktop",
+      passwordStore: "kwallet6",
+    });
+  });
+
+  it("reads the cua flavor's early settings from its own home whatever PATHWAY_HOME says", () => {
+    const readPaths: Array<string> = [];
+    for (const PATHWAY_HOME of ["/home/user/.pathway", "~/.pathway/", "/tmp/cua-home"]) {
+      resolveEarlyLinuxElectronOptions({
+        env: { PATHWAY_HOME },
+        homeDirectory: "/home/user",
+        joinPath,
+        flavor: "cua",
+        readFileString: (path) => {
+          readPaths.push(path);
+          return "{}";
+        },
+      });
+    }
+
+    assert.deepEqual(readPaths, [
+      "/home/user/.pathway-cua/userdata/desktop-settings.json",
+      "/home/user/.pathway-cua/userdata/desktop-settings.json",
+      "/home/user/.pathway-cua/userdata/desktop-settings.json",
+    ]);
+  });
+
+  it("keeps implicit development state under ~/.pathway/dev when PATHWAY_HOME is unset", () => {
+    const preference = resolveEarlyLinuxPasswordStorePreference({
+      env: {
+        VITE_DEV_SERVER_URL: "http://127.0.0.1:5173",
+      },
+      homeDirectory: "/home/user",
+      joinPath,
+      readFileString: (path) => {
+        assert.equal(path, "/home/user/.pathway/dev/desktop-settings.json");
+        return JSON.stringify({ linuxPasswordStore: "kwallet" });
+      },
+    });
+
+    assert.equal(preference, "kwallet");
+  });
+
+  it("treats whitespace-only PATHWAY_HOME as unconfigured in development", () => {
+    const preference = resolveEarlyLinuxPasswordStorePreference({
+      env: {
+        PATHWAY_HOME: "   ",
+        VITE_DEV_SERVER_URL: "http://127.0.0.1:5173",
+      },
+      homeDirectory: "/home/user",
+      joinPath,
+      readFileString: (path) => {
+        assert.equal(path, "/home/user/.pathway/dev/desktop-settings.json");
+        return JSON.stringify({ linuxPasswordStore: "gnome-libsecret" });
+      },
+    });
+
+    assert.equal(preference, "gnome-libsecret");
+  });
+});

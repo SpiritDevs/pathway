@@ -1,5 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
-import type { ComputerWindow } from "@synara/contracts";
+import { describe, expect, it } from "@effect/vitest";
+import type { ComputerWindow } from "@spiritdevs/contracts";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
+
 import { waitForWindow } from "./waitForWindow.ts";
 
 const window: ComputerWindow = {
@@ -11,182 +17,285 @@ const window: ComputerWindow = {
   visible: true,
 };
 
+const windows = (list: readonly ComputerWindow[]) => Effect.succeed(list);
+
+/** A readiness probe that records whether it ran. */
+const probe = () => {
+  const calls: string[] = [];
+  return {
+    calls,
+    checkInputReady: (windowId: string) => Effect.sync(() => void calls.push(windowId)),
+  };
+};
+
 describe("launch window readiness", () => {
-  it("bounds a hung native window read and cancels its observation context", async () => {
-    vi.useFakeTimers();
-    try {
-      const result = waitForWindow(() => new Promise(() => {}), "Helium", 500);
-      await vi.advanceTimersByTimeAsync(500);
-      expect(await result).toMatchObject({
+  it.effect("bounds a hung native window read and interrupts its observation", () =>
+    Effect.gen(function* () {
+      const interrupted = yield* Deferred.make<void>();
+      const hung = Effect.never.pipe(
+        Effect.onInterrupt(() => Deferred.succeed(interrupted, void 0)),
+      );
+      const result = yield* Effect.forkChild(waitForWindow(hung, "Helium", 500));
+      yield* TestClock.adjust("500 millis");
+      expect(yield* Fiber.join(result)).toMatchObject({
         windowStatus: "no_usable_window",
         windowReason: "input_unavailable",
       });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+      yield* Deferred.await(interrupted);
+    }),
+  );
 
-  it("returns an existing matching app window immediately", async () => {
-    expect(await waitForWindow(async () => [window], "/Applications/Helium.app", 2_000)).toEqual({
-      window,
-      windowStatus: "ready",
-    });
-  });
-  it("observes again when launch has not produced a window yet", async () => {
-    let reads = 0;
-    expect(await waitForWindow(async () => (++reads === 1 ? [] : [window]), "Helium", 500)).toEqual(
-      { window, windowStatus: "ready" },
-    );
-    expect(reads).toBe(2);
-  });
-  it("does not infer a primary Notes window from accessory sizes", async () => {
-    const notes = {
-      ...window,
-      title: "Notes",
-      appName: "Notes",
-      bounds: { x: 0, y: 0, width: 1000, height: 660 },
-    };
-    const checkInputReady = vi.fn(async () => {});
-    expect(
-      await waitForWindow(
-        async () => [
-          {
-            ...notes,
-            id: "8",
-            title: "",
-            visible: false,
-            bounds: { x: 0, y: 0, width: 500, height: 500 },
-          },
-          { ...notes, id: "9", title: "Window", bounds: { x: 0, y: 0, width: 66, height: 20 } },
-          notes,
-        ],
-        "Notes",
-        0,
-        undefined,
-        { checkInputReady },
-      ),
-    ).toEqual({ window: null, windowStatus: "no_usable_window", windowReason: "ambiguous" });
-    expect(checkInputReady).not.toHaveBeenCalled();
-  });
-  it.each([
+  it.effect("returns an existing matching app window immediately", () =>
+    Effect.gen(function* () {
+      expect(yield* waitForWindow(windows([window]), "/Applications/Helium.app", 2_000)).toEqual({
+        window,
+        windowStatus: "ready",
+      });
+    }),
+  );
+
+  it.effect("observes again when launch has not produced a window yet", () =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const read = Effect.sync(() => (++reads === 1 ? [] : [window]));
+      const result = yield* Effect.forkChild(waitForWindow(read, "Helium", 500));
+      yield* TestClock.adjust("150 millis");
+      expect(yield* Fiber.join(result)).toEqual({ window, windowStatus: "ready" });
+      expect(reads).toBe(2);
+    }),
+  );
+
+  it.effect("does not infer a primary Notes window from accessory sizes", () =>
+    Effect.gen(function* () {
+      const notes = {
+        ...window,
+        title: "Notes",
+        appName: "Notes",
+        bounds: { x: 0, y: 0, width: 1000, height: 660 },
+      };
+      const { calls, checkInputReady } = probe();
+      expect(
+        yield* waitForWindow(
+          windows([
+            {
+              ...notes,
+              id: "8",
+              title: "",
+              visible: false,
+              bounds: { x: 0, y: 0, width: 500, height: 500 },
+            },
+            { ...notes, id: "9", title: "Window", bounds: { x: 0, y: 0, width: 66, height: 20 } },
+            notes,
+          ]),
+          "Notes",
+          0,
+          { checkInputReady },
+        ),
+      ).toEqual({ window: null, windowStatus: "no_usable_window", windowReason: "ambiguous" });
+      expect(calls).toEqual([]);
+    }),
+  );
+
+  it.effect.each([
     { title: "", bounds: { x: 0, y: 0, width: 1000, height: 660 } },
     { title: "Document", bounds: { x: 0, y: 0, width: 0, height: 0 } },
-  ])("does not bind a titled inspector over a document with $title", async (document) => {
-    const checkInputReady = vi.fn(async () => {});
-    const windows = [
-      { ...window, ...document },
-      { ...window, id: "8", title: "Inspector", bounds: { x: 0, y: 0, width: 240, height: 160 } },
-    ];
-    for (const candidates of [windows, [...windows].reverse()]) {
+  ])("does not bind a titled inspector over a document with $title", (document) =>
+    Effect.gen(function* () {
+      const { calls, checkInputReady } = probe();
+      const list = [
+        { ...window, ...document },
+        { ...window, id: "8", title: "Inspector", bounds: { x: 0, y: 0, width: 240, height: 160 } },
+      ];
+      for (const candidates of [list, list.toReversed()]) {
+        expect(yield* waitForWindow(windows(candidates), "Helium", 0, { checkInputReady })).toEqual(
+          { window: null, windowStatus: "no_usable_window", windowReason: "ambiguous" },
+        );
+      }
+      expect(calls).toEqual([]);
+    }),
+  );
+
+  it.effect("keeps two real titled windows ambiguous regardless of size or order", () =>
+    Effect.gen(function* () {
+      const first = { ...window, bounds: { x: 0, y: 0, width: 120, height: 80 } };
+      const second = {
+        ...first,
+        id: "8",
+        title: "Other",
+        bounds: { x: 0, y: 0, width: 1000, height: 660 },
+      };
+      expect(yield* waitForWindow(windows([first, second]), "Helium", 0)).toEqual({
+        window: null,
+        windowStatus: "no_usable_window",
+        windowReason: "ambiguous",
+      });
+    }),
+  );
+
+  it.effect("keeps multiple hidden windows ambiguous", () =>
+    Effect.gen(function* () {
       expect(
-        await waitForWindow(async () => candidates, "Helium", 0, undefined, { checkInputReady }),
+        yield* waitForWindow(
+          windows([
+            { ...window, visible: false },
+            { ...window, id: "8", visible: false },
+          ]),
+          "Helium",
+          0,
+        ),
       ).toEqual({ window: null, windowStatus: "no_usable_window", windowReason: "ambiguous" });
-    }
-    expect(checkInputReady).not.toHaveBeenCalled();
-  });
-  it("keeps two real titled windows ambiguous regardless of size or order", async () => {
-    const first = { ...window, bounds: { x: 0, y: 0, width: 120, height: 80 } };
-    const second = {
-      ...first,
-      id: "8",
-      title: "Other",
-      bounds: { x: 0, y: 0, width: 1000, height: 660 },
-    };
-    expect(await waitForWindow(async () => [first, second], "Helium", 0)).toEqual({
-      window: null,
-      windowStatus: "no_usable_window",
-      windowReason: "ambiguous",
-    });
-  });
-  it("keeps multiple hidden windows ambiguous", async () => {
-    expect(
-      await waitForWindow(
-        async () => [
-          { ...window, visible: false },
-          { ...window, id: "8", visible: false },
-        ],
-        "Helium",
-        0,
-      ),
-    ).toEqual({ window: null, windowStatus: "no_usable_window", windowReason: "ambiguous" });
-  });
-  it("keeps a single untitled window without bounds usable", async () => {
-    const untitled = { ...window, title: "" };
-    expect(await waitForWindow(async () => [untitled], "Helium", 0)).toEqual({
-      window: untitled,
-      windowStatus: "ready",
-    });
-  });
-  it("does not choose between multiple app windows or unrelated apps", async () => {
-    expect(
-      await waitForWindow(async () => [window, { ...window, id: "8" }], "Helium", 0),
-    ).toMatchObject({ window: null, windowStatus: "no_usable_window" });
-    expect(await waitForWindow(async () => [window], "Other", 0)).toMatchObject({
-      window: null,
-      windowStatus: "no_usable_window",
-    });
-  });
-  it("stops without another observation when cancelled", async () => {
-    const controller = new AbortController();
-    let reads = 0;
-    await expect(
-      waitForWindow(
-        async () => {
-          reads += 1;
-          controller.abort();
-          return [];
-        },
-        "Helium",
-        500,
-        controller.signal,
-      ),
-    ).rejects.toThrow();
-    expect(reads).toBe(1);
-  });
-  it("uses the launched pid rather than a same-name process", async () => {
-    const launched = { ...window, pid: 20 };
-    expect(
-      await waitForWindow(
-        async () => [{ ...window, pid: 10 }, launched],
-        "com.vendor.Helium",
-        0,
-        undefined,
-        { pid: 20 },
-      ),
-    ).toEqual({ window: launched, windowStatus: "ready" });
-  });
-  it.each([
+    }),
+  );
+
+  it.effect("keeps a single untitled window without bounds usable", () =>
+    Effect.gen(function* () {
+      const untitled = { ...window, title: "" };
+      expect(yield* waitForWindow(windows([untitled]), "Helium", 0)).toEqual({
+        window: untitled,
+        windowStatus: "ready",
+      });
+    }),
+  );
+
+  it.effect("does not choose between multiple app windows or unrelated apps", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* waitForWindow(windows([window, { ...window, id: "8" }]), "Helium", 0),
+      ).toMatchObject({ window: null, windowStatus: "no_usable_window" });
+      expect(yield* waitForWindow(windows([window]), "Other", 0)).toMatchObject({
+        window: null,
+        windowStatus: "no_usable_window",
+      });
+    }),
+  );
+
+  it.effect("stops without another observation when interrupted", () =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const readDone = yield* Deferred.make<void>();
+      const read = Effect.sync(() => {
+        reads += 1;
+        return [];
+      }).pipe(Effect.tap(() => Deferred.succeed(readDone, void 0)));
+      const result = yield* Effect.forkChild(waitForWindow(read, "Helium", 500));
+      yield* Deferred.await(readDone);
+      yield* Fiber.interrupt(result);
+      yield* TestClock.adjust("500 millis");
+      expect(Exit.hasInterrupts(yield* Fiber.await(result))).toBe(true);
+      expect(reads).toBe(1);
+    }),
+  );
+
+  it.effect("uses the launched pid rather than a same-name process", () =>
+    Effect.gen(function* () {
+      const launched = { ...window, pid: 20 };
+      expect(
+        yield* waitForWindow(windows([{ ...window, pid: 10 }, launched]), "com.vendor.Helium", 0, {
+          pid: 20,
+        }),
+      ).toEqual({ window: launched, windowStatus: "ready" });
+    }),
+  );
+
+  it.effect("keeps the exact pid rule when the launch names no app identity", () =>
+    Effect.gen(function* () {
+      // The macOS (Cua) launch reports a pid and no appId: a same-name window
+      // of another process is never adopted, even when the pid has no window.
+      expect(
+        yield* waitForWindow(windows([{ ...window, pid: 10 }]), "Helium", 0, { pid: 20 }),
+      ).toEqual({ window: null, windowStatus: "no_usable_window", windowReason: "no_window" });
+    }),
+  );
+
+  it.effect("adopts a window of the launched app identity when a wrapper's pid owns none", () =>
+    Effect.gen(function* () {
+      // `flatpak run` / `gio launch`: the reported pid exits, the app's own
+      // process owns the window, and its appName is the desktop id.
+      const kate = { ...window, appName: "org.kde.kate", pid: 4242 };
+      expect(
+        yield* waitForWindow(windows([kate]), "kate", 0, {
+          pid: 1111,
+          appId: "org.kde.kate.desktop",
+        }),
+      ).toEqual({ window: kate, windowStatus: "ready" });
+    }),
+  );
+
+  it.effect(
+    "still matches the launch name when an identity-reporting launch names another id",
+    () =>
+      Effect.gen(function* () {
+        const kate = { ...window, appName: "kate", pid: 4242 };
+        expect(
+          yield* waitForWindow(windows([kate]), "kate", 0, { pid: 1111, appId: "org.kde.kate" }),
+        ).toEqual({ window: kate, windowStatus: "ready" });
+      }),
+  );
+
+  it.effect("prefers the launched pid over same-identity siblings", () =>
+    Effect.gen(function* () {
+      const launched = { ...window, appName: "org.kde.kate", pid: 20 };
+      expect(
+        yield* waitForWindow(windows([{ ...launched, id: "8", pid: 10 }, launched]), "kate", 0, {
+          pid: 20,
+          appId: "org.kde.kate",
+        }),
+      ).toEqual({ window: launched, windowStatus: "ready" });
+    }),
+  );
+
+  it.effect("keeps identity matches across processes ambiguous", () =>
+    Effect.gen(function* () {
+      const kate = { ...window, appName: "org.kde.kate", pid: 10 };
+      expect(
+        yield* waitForWindow(windows([kate, { ...kate, id: "8", pid: 11 }]), "kate", 0, {
+          pid: 1111,
+          appId: "org.kde.kate",
+        }),
+      ).toEqual({ window: null, windowStatus: "no_usable_window", windowReason: "ambiguous" });
+    }),
+  );
+
+  it.effect.each([
     [{ visible: false }, "hidden"],
     [{ minimized: true }, "hidden"],
     [{ onCurrentSpace: false }, "off_space"],
-  ] as const)("does not bind an unusable window: %j", async (state, reason) => {
-    expect(await waitForWindow(async () => [{ ...window, ...state }], "Helium", 0)).toEqual({
-      window: null,
-      windowStatus: "no_usable_window",
-      windowReason: reason,
-    });
-  });
-  it("does not mistake a listed window for native input readiness", async () => {
-    expect(
-      await waitForWindow(async () => [window], "Helium", 0, undefined, {
-        checkInputReady: async () => {
-          throw new Error("ax_window_unresolved");
-        },
-      }),
-    ).toEqual({
-      window: null,
-      windowStatus: "no_usable_window",
-      windowReason: "input_unavailable",
-    });
-  });
-  it("does not return readiness if Stop arrives during the probe", async () => {
-    const controller = new AbortController();
-    await expect(
-      waitForWindow(async () => [window], "Helium", 0, controller.signal, {
-        checkInputReady: async () => {
-          controller.abort();
-        },
-      }),
-    ).rejects.toThrow();
-  });
+  ] as const)("does not bind an unusable window: %j", ([state, reason]) =>
+    Effect.gen(function* () {
+      expect(yield* waitForWindow(windows([{ ...window, ...state }]), "Helium", 0)).toEqual({
+        window: null,
+        windowStatus: "no_usable_window",
+        windowReason: reason,
+      });
+    }),
+  );
+
+  it.effect("does not mistake a listed window for native input readiness", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* waitForWindow(windows([window]), "Helium", 0, {
+          checkInputReady: () => Effect.fail("ax_window_unresolved"),
+        }),
+      ).toEqual({
+        window: null,
+        windowStatus: "no_usable_window",
+        windowReason: "input_unavailable",
+      });
+    }),
+  );
+
+  it.effect("does not return readiness if Stop arrives during the probe", () =>
+    Effect.gen(function* () {
+      const probing = yield* Deferred.make<void>();
+      const result = yield* Effect.forkChild(
+        waitForWindow(windows([window]), "Helium", 0, {
+          checkInputReady: () =>
+            Deferred.succeed(probing, void 0).pipe(Effect.andThen(Effect.never)),
+        }),
+      );
+      yield* Deferred.await(probing);
+      yield* Fiber.interrupt(result);
+      expect(Exit.hasInterrupts(yield* Fiber.await(result))).toBe(true);
+    }),
+  );
 });

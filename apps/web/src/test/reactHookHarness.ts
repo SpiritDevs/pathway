@@ -1,90 +1,89 @@
-// FILE: reactHookHarness.ts
-// Purpose: Minimal React hook runtime for unit-testing hooks in node without a renderer.
-// Layer: Test helper
-// Exports: reactHookHarness (render lifecycle controls), reactHookHarnessMock (the module
-// shape for vi.mock("react")). One harness instance per test file (vitest isolates modules
-// per file), so state never leaks across suites.
-// Usage:
-//   vi.mock("react", async () => (await import("../test/reactHookHarness")).reactHookHarnessMock);
-//   import { reactHookHarness } from "../test/reactHookHarness";
-//   Call beginRender() before each hook invocation, reset() in beforeEach, unmount() to run cleanups.
+import type { Dispatch, SetStateAction } from "react";
 
-interface HookSlot {
-  value?: unknown;
-  deps?: readonly unknown[];
-  cleanup?: (() => void) | undefined;
+/**
+ * Minimal React hook shim for tests that call components as plain functions
+ * instead of mounting a renderer. Slots are keyed by call order, mirroring
+ * React's own rules-of-hooks contract, and `useMemoCache` emulates the React
+ * Compiler runtime so compiled components can execute unmodified.
+ *
+ * This module must stay free of runtime `react` imports: it is loaded from
+ * inside `vi.mock("react", ...)` factories, and a value import would recurse
+ * into the in-progress mock. Wire it up in each test file (mock calls cannot
+ * live here because vitest hoists them per test module):
+ *
+ * ```ts
+ * import { reactHookHarness } from "~/test/reactHookHarness";
+ *
+ * vi.mock("react", async (importOriginal) => {
+ *   const actual = await importOriginal<typeof import("react")>();
+ *   const { reactHookHarness } = await import("~/test/reactHookHarness");
+ *   return {
+ *     ...actual,
+ *     useCallback: reactHookHarness.useCallback,
+ *     useMemo: reactHookHarness.useMemo,
+ *     useRef: reactHookHarness.useRef,
+ *     useState: reactHookHarness.useState,
+ *   };
+ * });
+ * vi.mock("react/compiler-runtime", async () => {
+ *   const { reactHookHarness } = await import("~/test/reactHookHarness");
+ *   return { c: reactHookHarness.useMemoCache };
+ * });
+ * ```
+ *
+ * Call `beginRender()` before each component invocation and `reset()` in
+ * `beforeEach` to drop persisted state between tests.
+ */
+export function createReactHookHarness() {
+  let cursor = 0;
+  let slots: unknown[] = [];
+  const nextIndex = () => cursor++;
+
+  return {
+    beginRender() {
+      cursor = 0;
+    },
+    reset() {
+      cursor = 0;
+      slots = [];
+    },
+    useCallback<T>(callback: T): T {
+      nextIndex();
+      return callback;
+    },
+    useMemo<T>(factory: () => T): T {
+      nextIndex();
+      return factory();
+    },
+    useMemoCache(size: number): unknown[] {
+      const index = nextIndex();
+      if (!slots[index]) {
+        slots[index] = Array.from({ length: size }, () => Symbol.for("react.memo_cache_sentinel"));
+      }
+      return slots[index] as unknown[];
+    },
+    useRef<T>(initialValue: T): { current: T } {
+      const index = nextIndex();
+      if (!slots[index]) {
+        slots[index] = { current: initialValue };
+      }
+      return slots[index] as { current: T };
+    },
+    useState<T>(initialValue: T | (() => T)): [T, Dispatch<SetStateAction<T>>] {
+      const index = nextIndex();
+      if (index >= slots.length) {
+        slots[index] =
+          typeof initialValue === "function" ? (initialValue as () => T)() : initialValue;
+      }
+      const setValue: Dispatch<SetStateAction<T>> = (nextValue) => {
+        const previous = slots[index] as T;
+        slots[index] =
+          typeof nextValue === "function" ? (nextValue as (value: T) => T)(previous) : nextValue;
+      };
+      return [slots[index] as T, setValue];
+    },
+  };
 }
 
-let slots: HookSlot[] = [];
-let cursor = 0;
-
-const nextSlot = () => {
-  const index = cursor;
-  cursor += 1;
-  slots[index] ??= {};
-  return slots[index]!;
-};
-
-const depsEqual = (left: readonly unknown[] | undefined, right: readonly unknown[]) =>
-  left !== undefined &&
-  left.length === right.length &&
-  left.every((value, index) => Object.is(value, right[index]));
-
-const useEffect = (effect: () => void | (() => void), deps: readonly unknown[]) => {
-  const slot = nextSlot();
-  if (depsEqual(slot.deps, deps)) return;
-  slot.cleanup?.();
-  slot.deps = deps;
-  slot.cleanup = effect() ?? undefined;
-};
-
-export const reactHookHarness = {
-  beginRender() {
-    cursor = 0;
-  },
-  reset() {
-    slots = [];
-    cursor = 0;
-  },
-  unmount() {
-    for (const slot of slots) slot.cleanup?.();
-    slots = [];
-    cursor = 0;
-  },
-};
-
-export const reactHookHarnessMock = {
-  useMemo<T>(factory: () => T, deps: readonly unknown[]): T {
-    const slot = nextSlot();
-    if (!depsEqual(slot.deps, deps)) {
-      slot.deps = deps;
-      slot.value = factory();
-    }
-    return slot.value as T;
-  },
-  useCallback<T extends (...args: never[]) => unknown>(callback: T, deps: readonly unknown[]): T {
-    const slot = nextSlot();
-    if (!depsEqual(slot.deps, deps)) {
-      slot.deps = deps;
-      slot.value = callback;
-    }
-    return slot.value as T;
-  },
-  useEffect,
-  useLayoutEffect: useEffect,
-  useRef<T>(initialValue: T) {
-    const slot = nextSlot();
-    slot.value ??= { current: initialValue };
-    return slot.value as { current: T };
-  },
-  useState<T>(initialValue: T | (() => T)) {
-    const slot = nextSlot();
-    if (!("value" in slot)) {
-      slot.value = typeof initialValue === "function" ? (initialValue as () => T)() : initialValue;
-    }
-    const setValue = (next: T | ((current: T) => T)) => {
-      slot.value = typeof next === "function" ? (next as (current: T) => T)(slot.value as T) : next;
-    };
-    return [slot.value as T, setValue] as const;
-  },
-};
+/** Shared instance so `vi.mock` factories and test bodies see the same slots. */
+export const reactHookHarness = createReactHookHarness();

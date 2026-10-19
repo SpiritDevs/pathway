@@ -1,89 +1,113 @@
-// FILE: os-jank.ts
-// Purpose: Smooths over shell/path differences between packaged app launches and login shells.
-// Exports: PATH hydration plus base-dir helpers used by server startup.
-
-import { Effect } from "effect";
+import { HostProcessEnvironment, HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
 import {
-  isShellEnvironmentHydrated,
   listLoginShellCandidates,
   mergePathEntries,
-  readPathFromLaunchctl,
   readPathFromLoginShell,
-} from "@synara/shared/shell";
-import { createCachedLoginShellPathReader } from "@synara/shared/loginShellEnvironment";
-import {
-  expandHomePath as expandHomePathSync,
-  resolveSynaraHomeDirectory,
-} from "@synara/shared/synaraHome";
+  readPathFromLaunchctl,
+  resolveWindowsEnvironment,
+} from "@spiritdevs/shared/shell";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as NodeOS from "node:os";
 
 function logPathHydrationWarning(message: string, error?: unknown): void {
-  console.warn(`[server] ${message}`, error instanceof Error ? error.message : (error ?? ""));
+  process.stderr.write(
+    `[server] ${message} ${error instanceof Error ? error.message : (error ?? "")}\n`,
+  );
 }
 
-export function fixPath(
-  options: {
-    env?: NodeJS.ProcessEnv;
-    platform?: NodeJS.Platform;
-    readPath?: typeof readPathFromLoginShell;
-    readLaunchctlPath?: typeof readPathFromLaunchctl;
-    userShell?: string;
-    logWarning?: (message: string, error?: unknown) => void;
-  } = {},
-): void {
-  const platform = options.platform ?? process.platform;
-  if (platform !== "darwin" && platform !== "linux") return;
-
-  const env = options.env ?? process.env;
-
-  // Startup blocks here: the server does not begin listening until the probe returns,
-  // and `-ilc` sources the user's whole interactive rc (~1s). When the desktop shell
-  // already ran it and handed us the resulting PATH, repeating it buys nothing and
-  // doubles cold start. The marker — not merely a populated PATH — is what proves it.
-  if (isShellEnvironmentHydrated(env)) return;
-
-  const logWarning = options.logWarning ?? logPathHydrationWarning;
-
-  try {
-    // launchctl stays a last resort, never a fast path: `launchctl getenv PATH` is a
-    // launchd-session value that something published once (often a login-item plist with a
-    // hardcoded string), so it can be arbitrarily stale, while the login-shell probe is the
-    // PATH the user actually has in their terminal. With the probe cached below, preferring
-    // launchctl would trade a sub-millisecond file read for a wrong PATH — and a spawn.
-    const readLaunchctlFallbackPath = (): string | undefined =>
-      platform === "darwin" ? (options.readLaunchctlPath ?? readPathFromLaunchctl)() : undefined;
-
-    // Cached by default: the probe result is persisted under the Synara home and reused
-    // until the shell, the user, or any of its startup files changes.
-    const readPath = options.readPath ?? createCachedLoginShellPathReader({ env, platform });
-
-    let shellPath: string | undefined;
-    for (const shell of listLoginShellCandidates(platform, env.SHELL, options.userShell)) {
-      try {
-        shellPath = readPath(shell);
-      } catch (error) {
-        logWarning(`Failed to read PATH from login shell ${shell}.`, error);
-      }
-
-      if (shellPath) {
-        break;
-      }
+function hydratePosixPath(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): void {
+  let shellPath: string | undefined;
+  for (const shell of listLoginShellCandidates(platform, env.SHELL)) {
+    try {
+      shellPath = readPathFromLoginShell(shell);
+    } catch (error) {
+      logPathHydrationWarning(`Failed to read PATH from login shell ${shell}.`, error);
     }
 
-    const mergedPath = mergePathEntries(
-      shellPath || readLaunchctlFallbackPath(),
-      env.PATH,
-      platform,
-    );
-    if (mergedPath) {
-      env.PATH = mergedPath;
-    }
-  } catch (error) {
-    logWarning("Failed to hydrate PATH from the user environment.", error);
+    if (shellPath) break;
+  }
+
+  const launchctlPath = platform === "darwin" && !shellPath ? readPathFromLaunchctl() : undefined;
+  const mergedPath = mergePathEntries(shellPath ?? launchctlPath, env.PATH, platform);
+  if (mergedPath) {
+    env.PATH = mergedPath;
   }
 }
 
-export const expandHomePath = (input: string): Effect.Effect<string> =>
-  Effect.succeed(expandHomePathSync(input));
+export function hydratePosixHome(
+  env: NodeJS.ProcessEnv,
+  resolveHomeDir = () => NodeOS.userInfo().homedir,
+): void {
+  if ((env.HOME?.trim() ?? "").length > 0) return;
 
-export const resolveBaseDir = (raw: string | undefined): Effect.Effect<string> =>
-  Effect.succeed(resolveSynaraHomeDirectory({ configuredHome: raw }));
+  const homeDir = resolveHomeDir();
+  if (homeDir.length > 0) {
+    env.HOME = homeDir;
+  }
+}
+
+export const fixPath = Effect.fn("fixPath")(function* (options?: {
+  readonly shellEnvironmentHydrated?: boolean | undefined;
+}): Effect.fn.Return<void, never, FileSystem.FileSystem | Path.Path> {
+  const platform = yield* HostProcessPlatform;
+  const env = yield* HostProcessEnvironment;
+
+  if (platform === "win32") {
+    if (options?.shellEnvironmentHydrated) return;
+    const repairedEnvironment = yield* resolveWindowsEnvironment(env).pipe(
+      Effect.catchDefect((defect) =>
+        Effect.sync(() => {
+          logPathHydrationWarning("Failed to hydrate PATH from the user environment.", defect);
+          return {} as Partial<NodeJS.ProcessEnv>;
+        }),
+      ),
+    );
+    for (const [key, value] of Object.entries(repairedEnvironment)) {
+      if (value !== undefined) {
+        env[key] = value;
+      }
+    }
+    return;
+  }
+
+  if (platform !== "darwin" && platform !== "linux") return;
+
+  yield* Effect.sync(() => hydratePosixHome(env)).pipe(
+    Effect.catchDefect((defect) =>
+      Effect.sync(() => {
+        logPathHydrationWarning("Failed to hydrate HOME from the user account.", defect);
+      }),
+    ),
+  );
+  // The native desktop already waited for shell hydration before spawning us.
+  // Preserve HOME repair above; WSL and standalone servers still need their own PATH.
+  if (options?.shellEnvironmentHydrated) return;
+  yield* Effect.sync(() => hydratePosixPath(env, platform)).pipe(
+    Effect.catchDefect((defect) =>
+      Effect.sync(() => {
+        logPathHydrationWarning("Failed to hydrate PATH from the user environment.", defect);
+      }),
+    ),
+  );
+});
+
+export const expandHomePath = Effect.fn(function* (input: string) {
+  const { join } = yield* Path.Path;
+  if (input === "~") {
+    return NodeOS.homedir();
+  }
+  if (input.startsWith("~/") || input.startsWith("~\\")) {
+    return join(NodeOS.homedir(), input.slice(2));
+  }
+  return input;
+});
+
+export const resolveBaseDir = Effect.fn(function* (raw: string | undefined) {
+  const { join, resolve } = yield* Path.Path;
+  if (!raw || raw.trim().length === 0) {
+    return join(NodeOS.homedir(), ".pathway");
+  }
+  return resolve(yield* expandHomePath(raw.trim()));
+});

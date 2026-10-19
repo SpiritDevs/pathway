@@ -1,66 +1,63 @@
-import { Effect, Exit, Scope } from "effect";
-import { afterEach, describe, expect, it } from "vitest";
-import type { ComputerEvent } from "@synara/contracts";
+import type { ComputerEvent } from "@spiritdevs/contracts";
+import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
 
-import { LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL } from "../managedAttachmentPrincipal.ts";
-import { makeWsConnectionSessions } from "../wsConnectionSessions.ts";
 import { ComputerEventInterests } from "./computerEventInterests.ts";
 
 const stateEvent = (threadId: string) =>
   ({ type: "computer.thread-state", state: { threadId } }) as ComputerEvent;
 const actionEvent = (threadId?: string) => ({ type: "computer.action", threadId }) as ComputerEvent;
-const cleanups: Array<() => Promise<void>> = [];
 
-afterEach(async () => {
-  await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
-});
-
-async function makeFixture() {
-  const sessions = await Effect.runPromise(makeWsConnectionSessions);
+/**
+ * A socket registry with the close-hook contract the server's WebSocket layer
+ * provides: cleanups registered on a live connection run when it closes, and a
+ * closed connection refuses new registrations.
+ */
+function makeFixture() {
+  const connections = new Map<string, Set<() => void>>();
+  let nextKey = 0;
+  const onClose = (key: string, cleanup: () => void) => {
+    const cleanups = connections.get(key);
+    if (!cleanups) return false;
+    cleanups.add(cleanup);
+    return true;
+  };
   const cleanupRegistrations = { count: 0 };
   const interests = new ComputerEventInterests((key, cleanup) => {
     cleanupRegistrations.count += 1;
-    return sessions.onClose(key, cleanup);
+    return onClose(key, cleanup);
   });
-  const listeners = new Set<(event: ComputerEvent) => void>();
-  const onEvent = (listener: (event: ComputerEvent) => void) => {
-    listeners.add(listener);
-    return () => {
-      listeners.delete(listener);
-    };
-  };
   return {
-    sessions,
     interests,
+    onClose,
     cleanupRegistrations,
-    listeners,
-    onEvent,
-    emit: (event: ComputerEvent) => {
-      for (const listener of listeners) listener(event);
-    },
-    open: async () => {
-      const scope = await Effect.runPromise(Scope.make());
-      const key = await Effect.runPromise(
-        Scope.provide(
-          sessions.register({
-            role: "owner",
-            attachmentPrincipal: LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
-          }),
-          scope,
-        ),
-      );
-      const close = () => Effect.runPromise(Scope.close(scope, Exit.void));
-      cleanups.push(close);
-      return { key, close };
+    open: () => {
+      const key = `connection-${(nextKey += 1)}`;
+      connections.set(key, new Set());
+      return {
+        key,
+        close: () => {
+          const cleanups = connections.get(key);
+          connections.delete(key);
+          for (const cleanup of cleanups ?? []) cleanup();
+        },
+      };
     },
   };
 }
 
+const deliver = (
+  interests: ComputerEventInterests,
+  connectionKey: string | undefined,
+  events: readonly ComputerEvent[],
+) => Stream.runCollect(interests.subscribe(connectionKey, Stream.fromIterable(events)));
+
 describe("ComputerEventInterests", () => {
-  it("filters thread state and actions while preserving global and human events", async () => {
-    const f = await makeFixture();
-    const first = await f.open();
-    const second = await f.open();
+  it("filters thread state and actions while preserving global and human events", () => {
+    const f = makeFixture();
+    const first = f.open();
+    const second = f.open();
     f.interests.watch(first.key, "thread-a");
     f.interests.watch(second.key, "thread-b");
     expect(f.interests.accepts(first.key, stateEvent("thread-a"))).toBe(true);
@@ -73,18 +70,18 @@ describe("ComputerEventInterests", () => {
     );
   });
 
-  it("retains live views beyond 256 connections and across disconnected-client churn", async () => {
-    const f = await makeFixture();
-    const first = await f.open();
+  it("retains live views beyond 256 connections and across disconnected-client churn", () => {
+    const f = makeFixture();
+    const first = f.open();
     f.interests.watch(first.key, "first-view");
     const liveKeys: string[] = [];
     for (let index = 0; index < 300; index += 1) {
-      const live = await f.open();
+      const live = f.open();
       liveKeys.push(live.key);
       f.interests.watch(live.key, `view-${index}`);
-      const transient = await f.open();
+      const transient = f.open();
       f.interests.watch(transient.key, "transient-view");
-      await transient.close();
+      transient.close();
       expect(f.interests.accepts(transient.key, stateEvent("transient-view"))).toBe(false);
     }
     expect(f.interests.accepts(first.key, stateEvent("first-view"))).toBe(true);
@@ -94,9 +91,9 @@ describe("ComputerEventInterests", () => {
     }
   });
 
-  it("falls back to broadcast beyond 64 distinct views without silently dropping any", async () => {
-    const f = await makeFixture();
-    const connection = await f.open();
+  it("falls back to broadcast beyond 64 distinct views without silently dropping any", () => {
+    const f = makeFixture();
+    const connection = f.open();
     for (let index = 0; index < 100; index += 1) {
       f.interests.watch(connection.key, `view-${index}`);
     }
@@ -104,62 +101,53 @@ describe("ComputerEventInterests", () => {
       expect(f.interests.accepts(connection.key, stateEvent(`view-${index}`))).toBe(true);
     }
     expect(f.interests.accepts(connection.key, stateEvent("another-view"))).toBe(true);
-    await connection.close();
+    connection.close();
     expect(f.interests.accepts(connection.key, stateEvent("view-0"))).toBe(false);
   });
 
-  it("does not consume the distinct-view budget on repeated state reads", async () => {
-    const f = await makeFixture();
-    const connection = await f.open();
+  it("does not consume the distinct-view budget on repeated state reads", () => {
+    const f = makeFixture();
+    const connection = f.open();
     for (let index = 0; index < 100; index += 1) f.interests.watch(connection.key, "same-view");
     expect(f.interests.accepts(connection.key, stateEvent("same-view"))).toBe(true);
     expect(f.interests.accepts(connection.key, stateEvent("another-view"))).toBe(false);
   });
 
-  it("cleans state-only connections and rejects late reads after socket close", async () => {
-    const f = await makeFixture();
-    const connection = await f.open();
+  it("cleans state-only connections and rejects late reads after socket close", () => {
+    const f = makeFixture();
+    const connection = f.open();
     f.interests.watch(connection.key, "view");
-    await connection.close();
+    connection.close();
     f.interests.watch(connection.key, "view");
     expect(f.interests.accepts(connection.key, stateEvent("view"))).toBe(false);
-    expect(f.sessions.onClose(connection.key, () => {})).toBe(false);
-    expect(f.listeners.size).toBe(0);
+    expect(f.onClose(connection.key, () => {})).toBe(false);
   });
 
-  it("keeps interests across stream retries but releases the old event listener", async () => {
-    const f = await makeFixture();
-    const connection = await f.open();
-    const received: ComputerEvent[] = [];
-    f.interests.watch(connection.key, "view");
-    const stopFirst = f.interests.subscribe(connection.key, f.onEvent, (event) =>
-      received.push(event),
-    );
-    f.emit(stateEvent("view"));
-    stopFirst();
-    expect(f.listeners.size).toBe(0);
-    f.emit(stateEvent("view"));
-    const stopSecond = f.interests.subscribe(connection.key, f.onEvent, (event) =>
-      received.push(event),
-    );
-    f.emit(stateEvent("other"));
-    f.emit(stateEvent("view"));
-    expect(received).toEqual([stateEvent("view"), stateEvent("view")]);
-    expect(f.cleanupRegistrations.count).toBe(1);
-    await connection.close();
-    f.emit(stateEvent("view"));
-    expect(received).toHaveLength(2);
-    stopSecond();
-    expect(f.listeners.size).toBe(0);
-  });
+  it.effect("keeps interests across stream retries without registering the socket twice", () =>
+    Effect.gen(function* () {
+      const f = makeFixture();
+      const connection = f.open();
+      f.interests.watch(connection.key, "view");
+      expect(yield* deliver(f.interests, connection.key, [stateEvent("view")])).toEqual([
+        stateEvent("view"),
+      ]);
+      // A retried stream is a fresh subscription on the same socket.
+      expect(
+        yield* deliver(f.interests, connection.key, [stateEvent("other"), stateEvent("view")]),
+      ).toEqual([stateEvent("view")]);
+      expect(f.cleanupRegistrations.count).toBe(1);
+      connection.close();
+      expect(yield* deliver(f.interests, connection.key, [stateEvent("view")])).toEqual([]);
+    }),
+  );
 
-  it("preserves broadcast for callers without a connection context", async () => {
-    const f = await makeFixture();
-    const received: ComputerEvent[] = [];
-    f.interests.watch(undefined, "view");
-    const stop = f.interests.subscribe(undefined, f.onEvent, (event) => received.push(event));
-    f.emit(stateEvent("other"));
-    expect(received).toEqual([stateEvent("other")]);
-    stop();
-  });
+  it.effect("preserves broadcast for callers without a connection context", () =>
+    Effect.gen(function* () {
+      const f = makeFixture();
+      f.interests.watch(undefined, "view");
+      expect(yield* deliver(f.interests, undefined, [stateEvent("other")])).toEqual([
+        stateEvent("other"),
+      ]);
+    }),
+  );
 });

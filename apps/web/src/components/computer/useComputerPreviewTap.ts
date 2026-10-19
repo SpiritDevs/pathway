@@ -1,15 +1,19 @@
 // FILE: useComputerPreviewTap.ts
 // Purpose: Draws the desktop app's native frame tap into a canvas.
 // Layer: Web computer surface hook
-// Depends on: window.desktopBridge computerPreview channel (Electron only)
+// Depends on: window.desktopBridge computer.onPreviewFrame (Electron only)
 //
 // The tap is the preferred frame source for the in-chat preview: the desktop
 // host captures the driven window itself and pushes JPEGs over IPC, so frames
 // never touch the computer WebSocket or the server. A plain browser has no
 // channel; the hook stays inert there and the stills stream remains the only
 // source. The caller picks one drawer at a time via `enabled` and `active`.
+//
+// The tap shows the desktop's own host, so callers only enable it for the
+// primary (local) environment; a remote environment always uses the stills.
 
-import type { ThreadId } from "@synara/contracts";
+import { scopedThreadKey } from "@spiritdevs/client-runtime/environment";
+import type { ScopedThreadRef } from "@spiritdevs/contracts";
 import { useEffect, useRef, useState } from "react";
 
 import { useComputerStateStore } from "../../computerStateStore";
@@ -31,10 +35,12 @@ function isImageBitmapAvailable(): boolean {
 
 export function useComputerPreviewTap(input: {
   readonly canvasRef: React.RefObject<HTMLCanvasElement | null>;
-  readonly threadId?: ThreadId | undefined;
+  readonly threadRef?: ScopedThreadRef | undefined;
   readonly enabled: boolean;
 }): { readonly active: boolean; readonly frameSize: ComputerPreviewTapFrameSize | null } {
-  const { canvasRef, enabled, threadId } = input;
+  const { canvasRef, enabled, threadRef } = input;
+  const threadKey = threadRef ? scopedThreadKey(threadRef) : undefined;
+  const threadId = threadRef?.threadId;
   const [active, setActive] = useState(false);
   const [frameSize, setFrameSize] = useState<ComputerPreviewTapFrameSize | null>(null);
   const generationRef = useRef(0);
@@ -44,8 +50,8 @@ export function useComputerPreviewTap(input: {
   // agent mid-call that was not refused for another owner's lease. No thread
   // state (or no thread) means a single surface, which keeps drawing.
   const isDrivingThread = useComputerStateStore((store) => {
-    if (threadId === undefined) return true;
-    const threadState = store.threadStatesByThreadId[threadId];
+    if (threadKey === undefined) return true;
+    const threadState = store.threadStates[threadKey];
     if (!threadState) return true;
     // These frames carry no task id. Independent background tasks must use
     // their observation stills until the native tap can attribute each frame.
@@ -66,7 +72,7 @@ export function useComputerPreviewTap(input: {
   }, []);
 
   useEffect(() => {
-    const onFrame = window.desktopBridge?.computerPreview?.onFrame;
+    const onFrame = window.desktopBridge?.computer?.onPreviewFrame;
     if (
       !enabled ||
       !pageVisible ||
@@ -155,11 +161,11 @@ export function useComputerPreviewTap(input: {
       // teardown it does not.
       setFrameSize(null);
     };
-    // The tap stream is host-wide rather than per thread; threadId keys the
+    // The tap stream is host-wide rather than per thread; the thread key keys the
     // subscription so a card remounted for another thread restarts sequence
     // tracking instead of inheriting stale seq state. isDrivingThread re-keys
     // it the same way when ownership moves between split leaves.
-  }, [canvasRef, enabled, pageVisible, threadId, isDrivingThread]);
+  }, [canvasRef, enabled, pageVisible, threadKey, isDrivingThread]);
 
   return { active, frameSize };
 }

@@ -1,112 +1,58 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { copyTextToClipboard } from "./useCopyToClipboard";
+import {
+  ClipboardApiUnavailableError,
+  ClipboardWriteError,
+  writeTextToClipboard,
+} from "./useCopyToClipboard";
 
-const originalWindow = globalThis.window;
-const originalDocument = globalThis.document;
-const originalNavigator = globalThis.navigator;
-
-function installMockDocument(execCommandResult: boolean) {
-  const activeElement = { focus: vi.fn() };
-  const selection = {
-    rangeCount: 0,
-    getRangeAt: vi.fn(),
-    removeAllRanges: vi.fn(),
-    addRange: vi.fn(),
-  };
-  const textarea = {
-    value: "",
-    style: {} as Record<string, string>,
-    setAttribute: vi.fn(),
-    focus: vi.fn(),
-    select: vi.fn(),
-    setSelectionRange: vi.fn(),
-    remove: vi.fn(),
-  };
-  const documentMock = {
-    activeElement,
-    body: {
-      appendChild: vi.fn(),
-    },
-    createElement: vi.fn(() => textarea),
-    execCommand: vi.fn().mockReturnValue(execCommandResult),
-    getSelection: vi.fn(() => selection),
-  };
-
-  Object.defineProperty(globalThis, "document", {
-    configurable: true,
-    value: documentMock,
+describe("writeTextToClipboard", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
-  return { activeElement, documentMock, selection, textarea };
-}
+  it("reports unavailable clipboard support with structural context", async () => {
+    vi.stubGlobal("window", {});
+    vi.stubGlobal("navigator", {});
 
-afterEach(() => {
-  if (originalWindow === undefined) {
-    Reflect.deleteProperty(globalThis, "window");
-  } else {
-    Object.defineProperty(globalThis, "window", {
-      configurable: true,
-      value: originalWindow,
+    const error = await writeTextToClipboard("plan contents", "plan").then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
+
+    expect(error).toBeInstanceOf(ClipboardApiUnavailableError);
+    expect(error).toMatchObject({
+      target: "plan",
     });
-  }
-
-  if (originalDocument === undefined) {
-    Reflect.deleteProperty(globalThis, "document");
-  } else {
-    Object.defineProperty(globalThis, "document", {
-      configurable: true,
-      value: originalDocument,
-    });
-  }
-
-  if (originalNavigator === undefined) {
-    Reflect.deleteProperty(globalThis, "navigator");
-  } else {
-    Object.defineProperty(globalThis, "navigator", {
-      configurable: true,
-      value: originalNavigator,
-    });
-  }
-
-  vi.restoreAllMocks();
-});
-
-describe("copyTextToClipboard", () => {
-  it("falls back to execCommand when navigator.clipboard.writeText rejects", async () => {
-    const { documentMock } = installMockDocument(true);
-
-    Object.defineProperty(globalThis, "window", {
-      configurable: true,
-      value: {},
-    });
-    Object.defineProperty(globalThis, "navigator", {
-      configurable: true,
-      value: {
-        clipboard: {
-          writeText: vi.fn().mockRejectedValue(new DOMException("Blocked", "NotAllowedError")),
-        },
-      },
-    });
-
-    await expect(copyTextToClipboard("hello")).resolves.toBeUndefined();
-    expect(globalThis.navigator?.clipboard?.writeText).toHaveBeenCalledWith("hello");
-    expect(documentMock.execCommand).toHaveBeenCalledWith("copy");
+    expect((error as Error).message).not.toContain("plan contents");
   });
 
-  it("throws when neither clipboard API nor fallback copy is available", async () => {
-    const { documentMock } = installMockDocument(false);
+  it("preserves the exact clipboard failure without exposing copied contents", async () => {
+    const cause = new Error("browser clipboard failure");
+    const writeText = vi.fn().mockRejectedValue(cause);
+    vi.stubGlobal("window", {});
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
 
-    Object.defineProperty(globalThis, "window", {
-      configurable: true,
-      value: {},
-    });
-    Object.defineProperty(globalThis, "navigator", {
-      configurable: true,
-      value: {},
-    });
+    const error = await writeTextToClipboard("secret clipboard contents", "error-message").then(
+      () => undefined,
+      (failure: unknown) => failure,
+    );
 
-    await expect(copyTextToClipboard("hello")).rejects.toThrow("Clipboard API unavailable.");
-    expect(documentMock.execCommand).toHaveBeenCalledWith("copy");
+    expect(writeText).toHaveBeenCalledWith("secret clipboard contents");
+    expect(error).toBeInstanceOf(ClipboardWriteError);
+    expect(error).toMatchObject({
+      target: "error-message",
+      cause,
+    });
+    expect((error as Error).message).not.toContain("secret clipboard contents");
+  });
+
+  it("keeps empty values as a no-op when clipboard support is available", async () => {
+    const writeText = vi.fn();
+    vi.stubGlobal("window", {});
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+
+    await expect(writeTextToClipboard("", "plan")).resolves.toBe(false);
+    expect(writeText).not.toHaveBeenCalled();
   });
 });

@@ -1,44 +1,41 @@
-import {
-  type ContextWindowSnapshot,
-  deriveContextWindowMeterDisplay,
-  formatContextWindowTokens,
-  formatCostUsd,
-} from "~/lib/contextWindow";
-import { useState } from "react";
-import { useNowMs } from "~/hooks/useNowMs";
+import { cn } from "~/lib/utils";
+import { type ContextWindowSnapshot, formatContextWindowTokens } from "~/lib/contextWindow";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
-import { ClaudeCacheDetails } from "./ClaudeCacheDetails";
 import { Button } from "../ui/button";
+import { formatContextWindowCompactionMessage } from "./ContextWindowMeter.logic";
+
+function formatPercentage(value: number | null): string | null {
+  if (value === null || !Number.isFinite(value)) {
+    return null;
+  }
+  if (value < 10) {
+    return `${value.toFixed(1).replace(/\.0$/, "")}%`;
+  }
+  return `${Math.round(value)}%`;
+}
 
 export function ContextWindowMeter(props: {
   usage: ContextWindowSnapshot;
-  cumulativeCostUsd?: number | null | undefined;
-  activeWindowLabel?: string | null | undefined;
-  pendingWindowLabel?: string | null | undefined;
-  showClaudeCache?: boolean;
-  onOpenChange?: (open: boolean) => void;
-  compactAction?: {
-    disabledReason: string | null;
-    isSubmitting: boolean;
-    onCompact: () => Promise<boolean>;
-  };
+  modelDisplayName?: string | null;
+  onCompact?: (() => void) | undefined;
+  compactDisabled?: boolean;
+  compactDisabledReason?: string | null;
 }) {
-  const { usage, cumulativeCostUsd, activeWindowLabel, pendingWindowLabel } = props;
-  const [open, setOpen] = useState(false);
-  const nowMs = useNowMs(open && usage.claudeCache != null, 10_000);
-  const display = deriveContextWindowMeterDisplay(usage);
-  const radius = 6;
+  const { usage, modelDisplayName } = props;
+  const usedPercentage = formatPercentage(usage.usedPercentage);
+  const normalizedPercentage = Math.max(0, Math.min(100, usage.usedPercentage ?? 0));
+  const radius = 9.75;
   const circumference = 2 * Math.PI * radius;
-  const dashOffset = circumference - (display.normalizedPercentage / 100) * circumference;
+  const dashOffset = circumference * (1 - normalizedPercentage / 100);
+  const totalProcessedTokens = usage.totalProcessedTokens ?? null;
+  const showTotalProcessed = totalProcessedTokens !== null && totalProcessedTokens > 0;
+  const isOverloaded = normalizedPercentage > 90;
+  const usageColor = isOverloaded
+    ? "var(--color-error)"
+    : "color-mix(in oklab, var(--color-muted-foreground) 72%, transparent)";
 
   return (
-    <Popover
-      open={open}
-      onOpenChange={(nextOpen) => {
-        setOpen(nextOpen);
-        props.onOpenChange?.(nextOpen);
-      }}
-    >
+    <Popover>
       <PopoverTrigger
         openOnHover
         delay={150}
@@ -46,126 +43,111 @@ export function ContextWindowMeter(props: {
         render={
           <button
             type="button"
-            className="group inline-flex shrink-0 items-center justify-center rounded-full p-0.5 transition-opacity hover:opacity-80"
-            aria-label={display.ariaLabel}
+            className={cn(
+              "inline-flex size-7 cursor-pointer items-center justify-center rounded-full border border-transparent text-muted-foreground outline-none transition-colors",
+              "hover:bg-accent data-[pressed]:bg-accent",
+              "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+            )}
+            aria-label={
+              usage.maxTokens !== null && usedPercentage
+                ? `Context window ${usedPercentage} used`
+                : `Context window ${formatContextWindowTokens(usage.usedTokens)} tokens used`
+            }
           >
-            <span className="relative flex h-4 w-4 items-center justify-center">
+            <span className="relative flex size-5 items-center justify-center">
               <svg
-                viewBox="0 0 16 16"
-                className="-rotate-90 absolute inset-0 h-full w-full transform-gpu"
+                viewBox="0 0 24 24"
+                className="-rotate-90 absolute inset-0 size-full transform-gpu mx-0!"
                 aria-hidden="true"
               >
                 <circle
-                  cx="8"
-                  cy="8"
+                  cx="12"
+                  cy="12"
                   r={radius}
                   fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  className="text-muted-foreground/25 dark:text-muted-foreground/40"
+                  stroke="color-mix(in oklab, var(--color-muted-foreground) 24%, transparent)"
+                  strokeWidth="3"
                 />
                 <circle
-                  cx="8"
-                  cy="8"
+                  cx="12"
+                  cy="12"
                   r={radius}
                   fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
+                  stroke={usageColor}
+                  strokeWidth="3"
                   strokeLinecap="round"
                   strokeDasharray={circumference}
                   strokeDashoffset={dashOffset}
-                  className="text-primary transition-[stroke-dashoffset] duration-500 ease-out motion-reduce:transition-none dark:text-[var(--color-text-foreground)]"
+                  className="transition-[stroke-dashoffset,stroke] duration-500 ease-out motion-reduce:transition-none"
                 />
               </svg>
             </span>
           </button>
         }
       />
-      <PopoverPopup tooltipStyle side="top" align="end" className="w-max max-w-none px-3 py-2">
-        <div className="space-y-1.5 leading-tight">
-          <div className="text-ui-sm font-medium text-muted-foreground">Context window</div>
-          {pendingWindowLabel ? (
-            <div className="text-ui leading-snug text-muted-foreground">
-              Current session: {activeWindowLabel ?? "Unknown"}
-            </div>
-          ) : null}
-          {display.usedPercentageLabel ? (
-            <div className="whitespace-nowrap text-ui leading-snug font-medium text-foreground">
-              <span>{display.usedPercentageLabel}</span>
-              {display.hasReliableTokenRatio ? (
-                <>
-                  <span className="mx-1">⋅</span>
-                  <span>{display.tokenUsageLabel}</span>
-                  <span>/</span>
-                  <span>{formatContextWindowTokens(usage.maxTokens)} context used</span>
-                </>
-              ) : (
-                <span className="ml-1">context used</span>
-              )}
-            </div>
-          ) : (
-            <div className="text-ui leading-snug text-foreground">
-              {display.tokenUsageLabel} tokens used so far
-            </div>
-          )}
+      <PopoverPopup
+        tooltipStyle
+        side="top"
+        align="end"
+        viewportClassName="p-0"
+        className="w-64 max-w-none text-left whitespace-normal"
+      >
+        <div className="flex flex-col gap-2 p-[var(--floating-content-inset)]">
+          <div className="flex items-center justify-between gap-3">
+            <div className="font-medium text-muted-foreground text-xs">Context Window</div>
+            {usage.maxTokens !== null && usedPercentage ? (
+              <div className="text-secondary-label text-[11px] tabular-nums">
+                <span>{usedPercentage}</span>
+                <span className="mx-1">·</span>
+                <span>
+                  {formatContextWindowTokens(usage.usedTokens)}/
+                  {formatContextWindowTokens(usage.maxTokens ?? null)}
+                </span>
+              </div>
+            ) : (
+              <div className="text-secondary-label text-[11px] tabular-nums">
+                {formatContextWindowTokens(usage.usedTokens)}
+              </div>
+            )}
+          </div>
           {usage.maxTokens !== null ? (
-            <div className="text-ui leading-snug text-muted-foreground">
-              Active context limit: {formatContextWindowTokens(usage.maxTokens)} tokens
+            <div
+              className="h-1.5 w-full overflow-hidden rounded-full bg-muted/60"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(normalizedPercentage)}
+              aria-label="Context window usage"
+            >
+              <div
+                className="h-full rounded-full transition-[width,background-color] duration-500 ease-out motion-reduce:transition-none"
+                style={{ width: `${normalizedPercentage}%`, backgroundColor: usageColor }}
+              />
             </div>
           ) : null}
-          {props.showClaudeCache && activeWindowLabel ? (
-            <div className="max-w-72 space-y-1 text-ui leading-snug text-muted-foreground">
-              <div>Auto-compact target: {activeWindowLabel}</div>
-              <p className="leading-relaxed">
-                The session's auto-compact target can be lower than the model's supported window.
-              </p>
-            </div>
-          ) : null}
-          {pendingWindowLabel ? (
-            <div className="text-ui leading-snug text-muted-foreground">
-              Next turn: {pendingWindowLabel}
-            </div>
-          ) : null}
-          {(usage.totalProcessedTokens ?? null) !== null &&
-          (usage.totalProcessedTokens ?? 0) > usage.usedTokens ? (
-            <div className="text-ui leading-snug text-muted-foreground">
-              {usage.tokenAccountingVersion === 1 ? "Estimated total processed" : "Total processed"}
-              : {formatContextWindowTokens(usage.totalProcessedTokens ?? null)} tokens
+          {showTotalProcessed ? (
+            <div className="flex items-center justify-between gap-3 text-[11px] leading-4">
+              <span className="text-secondary-label">Total processed</span>
+              <span className="font-medium tabular-nums text-secondary-label">
+                {formatContextWindowTokens(totalProcessedTokens)}
+              </span>
             </div>
           ) : null}
           {usage.compactsAutomatically ? (
-            <div className="text-ui leading-snug text-muted-foreground">
-              Automatically compacts its context when needed.
+            <div className="mt-1 text-pretty text-secondary-label text-[11px] font-medium">
+              {formatContextWindowCompactionMessage(modelDisplayName, usage.autoCompactThreshold)}
             </div>
           ) : null}
-          {cumulativeCostUsd !== null && cumulativeCostUsd !== undefined ? (
-            <div className="text-ui leading-snug text-muted-foreground">
-              Session cost: {formatCostUsd(cumulativeCostUsd)}
-            </div>
-          ) : null}
-          {usage.claudeCache || props.showClaudeCache ? (
-            <ClaudeCacheDetails observation={usage.claudeCache ?? undefined} nowMs={nowMs} />
-          ) : null}
-          {props.compactAction ? (
-            <div className="max-w-72 space-y-1.5 border-t border-border/50 pt-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={
-                  props.compactAction.disabledReason !== null || props.compactAction.isSubmitting
-                }
-                onClick={() => {
-                  void props.compactAction?.onCompact();
-                }}
-              >
-                {props.compactAction.isSubmitting ? "Starting compaction..." : "Compact now"}
-              </Button>
-              <p className="text-ui leading-relaxed text-muted-foreground">
-                {props.compactAction.disabledReason ??
-                  "Compaction processes this conversation and consumes usage. Later turns use its summary."}
-              </p>
-            </div>
+          {props.onCompact ? (
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={props.compactDisabled}
+              {...(props.compactDisabledReason ? { title: props.compactDisabledReason } : {})}
+              onClick={props.onCompact}
+            >
+              Compact context
+            </Button>
           ) : null}
         </div>
       </PopoverPopup>

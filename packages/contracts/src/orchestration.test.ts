@@ -1,256 +1,59 @@
-import assert from "node:assert/strict";
-import { it } from "@effect/vitest";
-import { Effect, Schema } from "effect";
+import { assert, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
 import {
-  ClientOrchestrationCommand,
-  DEFAULT_PROVIDER_INTERACTION_MODE,
-  DEFAULT_RUNTIME_MODE,
-  ModelSelection,
   OrchestrationCommand,
   OrchestrationEvent,
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetTurnDiffInput,
   OrchestrationLatestTurn,
-  OrchestrationReadModel,
   ProjectCreatedPayload,
   ProjectMetaUpdatedPayload,
   OrchestrationProposedPlan,
   OrchestrationSession,
-  OrchestrationThreadPullRequest,
-  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
-  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
-  ProviderInteractionMode,
-  ProviderStartOptions,
+  OrchestrationThread,
+  OrchestrationThreadShell,
   ProjectCreateCommand,
-  THREAD_NOTES_MAX_CHARS,
-  THREAD_GOAL_MAX_CHARS,
   ThreadMetaUpdatedPayload,
   ThreadTurnStartCommand,
+  ThreadTurnEditCommand,
   ThreadCreatedPayload,
   ThreadTurnDiff,
-  ThreadHandoff,
   ThreadTurnStartRequestedPayload,
-  RuntimeMode,
-} from "./orchestration";
+} from "./orchestration.ts";
+import { ModelSelection } from "./modelSelection.ts";
+import { DEFAULT_PROVIDER_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "./providerPolicy.ts";
+import { ProviderInstanceId } from "./providerInstance.ts";
 
 const decodeTurnDiffInput = Schema.decodeUnknownEffect(OrchestrationGetTurnDiffInput);
 const decodeFullThreadDiffInput = Schema.decodeUnknownEffect(OrchestrationGetFullThreadDiffInput);
 const decodeThreadTurnDiff = Schema.decodeUnknownEffect(ThreadTurnDiff);
-const decodeRuntimeMode = Schema.decodeUnknownEffect(RuntimeMode);
-const decodeProviderInteractionMode = Schema.decodeUnknownEffect(ProviderInteractionMode);
 const decodeProjectCreateCommand = Schema.decodeUnknownEffect(ProjectCreateCommand);
 const decodeProjectCreatedPayload = Schema.decodeUnknownEffect(ProjectCreatedPayload);
 const decodeProjectMetaUpdatedPayload = Schema.decodeUnknownEffect(ProjectMetaUpdatedPayload);
 const decodeThreadTurnStartCommand = Schema.decodeUnknownEffect(ThreadTurnStartCommand);
-
-it.effect("decodes the AI-reviewed auto runtime mode", () =>
-  Effect.gen(function* () {
-    assert.strictEqual(yield* decodeRuntimeMode("auto"), "auto");
-  }),
-);
-
-it.effect("decodes the Synara-controlled debug interaction mode", () =>
-  Effect.gen(function* () {
-    assert.strictEqual(yield* decodeProviderInteractionMode("debug"), "debug");
-  }),
-);
+const decodeThreadTurnEditCommand = Schema.decodeUnknownEffect(ThreadTurnEditCommand);
 const decodeThreadTurnStartRequestedPayload = Schema.decodeUnknownEffect(
   ThreadTurnStartRequestedPayload,
 );
 const decodeOrchestrationLatestTurn = Schema.decodeUnknownEffect(OrchestrationLatestTurn);
 const decodeOrchestrationProposedPlan = Schema.decodeUnknownEffect(OrchestrationProposedPlan);
 const decodeOrchestrationSession = Schema.decodeUnknownEffect(OrchestrationSession);
+const decodeOrchestrationThread = Schema.decodeUnknownEffect(OrchestrationThread);
+const decodeOrchestrationThreadShell = Schema.decodeUnknownEffect(OrchestrationThreadShell);
+const encodeThreadCreatedPayload = Schema.encodeEffect(ThreadCreatedPayload);
+
+function getOptionValue(
+  options: ReadonlyArray<{ id: string; value: unknown }> | undefined,
+  id: string,
+): unknown {
+  return options?.find((option) => option.id === id)?.value;
+}
 const decodeThreadCreatedPayload = Schema.decodeUnknownEffect(ThreadCreatedPayload);
-const decodeThreadMetaUpdatedPayload = Schema.decodeUnknownEffect(ThreadMetaUpdatedPayload);
-const decodeModelSelection = Schema.decodeUnknownEffect(ModelSelection);
-const decodeProviderStartOptions = Schema.decodeUnknownEffect(ProviderStartOptions);
-const decodeClientOrchestrationCommand = Schema.decodeUnknownEffect(ClientOrchestrationCommand);
 const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
 const decodeOrchestrationEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
-const decodeThreadPullRequest = Schema.decodeUnknownEffect(OrchestrationThreadPullRequest);
-
-it.effect("decodes last-known PRs persisted before draft/mergeability/diff fields existed", () =>
-  Effect.gen(function* () {
-    const legacy = yield* decodeThreadPullRequest({
-      number: 42,
-      title: "Legacy PR",
-      url: "https://github.com/o/r/pull/42",
-      baseBranch: "main",
-      headBranch: "feature/legacy",
-      state: "open",
-    });
-    assert.equal(legacy.number, 42);
-    assert.equal(legacy.isDraft, undefined);
-    assert.equal(legacy.mergeability, undefined);
-
-    const enriched = yield* decodeThreadPullRequest({
-      number: 43,
-      title: "Enriched PR",
-      url: "https://github.com/o/r/pull/43",
-      baseBranch: "main",
-      headBranch: "feature/enriched",
-      state: "open",
-      isDraft: true,
-      mergeability: "conflicting",
-      additions: 38,
-      deletions: 36,
-      changedFiles: 3,
-    });
-    assert.equal(enriched.isDraft, true);
-    assert.equal(enriched.mergeability, "conflicting");
-    assert.equal(enriched.additions, 38);
-  }),
-);
-
-it.effect("preserves thread activity payloads through the RPC JSON codec", () =>
-  Effect.gen(function* () {
-    const codec = Schema.toCodecJson(OrchestrationReadModel);
-    const readModel = {
-      snapshotSequence: 1,
-      spaces: [],
-      updatedAt: "2026-01-01T00:00:00.000Z",
-      projects: [],
-      threads: [
-        {
-          id: "thread-1",
-          codexThreadId: null,
-          projectId: "project-1",
-          title: "Thread 1",
-          modelSelection: {
-            provider: "codex",
-            model: "gpt-5.5",
-          },
-          interactionMode: "default",
-          runtimeMode: "full-access",
-          envMode: "local",
-          branch: null,
-          worktreePath: null,
-          associatedWorktreePath: null,
-          associatedWorktreeBranch: null,
-          associatedWorktreeRef: null,
-          createBranchFlowCompleted: false,
-          parentThreadId: null,
-          subagentAgentId: null,
-          subagentNickname: null,
-          subagentRole: null,
-          forkSourceThreadId: null,
-          sidechatSourceThreadId: null,
-          lastKnownPr: null,
-          handoff: null,
-          latestTurn: null,
-          createdAt: "2026-01-01T00:00:00.000Z",
-          updatedAt: "2026-01-01T00:00:00.000Z",
-          archivedAt: null,
-          deletedAt: null,
-          messages: [],
-          proposedPlans: [],
-          activities: [
-            {
-              id: "activity-1",
-              tone: "tool",
-              kind: "tool.completed",
-              summary: "Ran command",
-              payload: {
-                itemType: "command_execution",
-                data: {
-                  item: {
-                    command: "git status --short",
-                  },
-                },
-              },
-              turnId: null,
-              sequence: 1,
-              createdAt: "2026-01-01T00:00:00.000Z",
-            },
-          ],
-          checkpoints: [],
-          session: null,
-        },
-      ],
-    };
-
-    const encoded = yield* Schema.encodeUnknownEffect(codec)(readModel);
-    const decoded = yield* Schema.decodeUnknownEffect(codec)(encoded);
-    const activity = decoded.threads[0]?.activities[0];
-
-    assert.deepStrictEqual(activity?.payload, {
-      itemType: "command_execution",
-      data: {
-        item: {
-          command: "git status --short",
-        },
-      },
-    });
-  }),
-);
-
-it.effect("preserves Pi model selections when decoding model selections", () =>
-  Effect.gen(function* () {
-    const parsed = yield* decodeModelSelection({
-      provider: "pi",
-      model: "openai/gpt-5.5",
-    });
-
-    assert.deepStrictEqual(parsed, {
-      provider: "pi",
-      model: "openai/gpt-5.5",
-    });
-  }),
-);
-
-it.effect("preserves Antigravity effort options separately from the model", () =>
-  Effect.gen(function* () {
-    const parsed = yield* decodeModelSelection({
-      provider: "antigravity",
-      model: "Gemini 3.5 Flash",
-      options: { reasoningEffort: "high" },
-    });
-
-    assert.deepStrictEqual(parsed, {
-      provider: "antigravity",
-      model: "Gemini 3.5 Flash",
-      options: { reasoningEffort: "high" },
-    });
-  }),
-);
-
-it.effect("preserves Pi model selections through the JSON codec", () =>
-  Effect.gen(function* () {
-    const codec = Schema.fromJsonString(ModelSelection);
-    const parsed = yield* Schema.decodeUnknownEffect(codec)(
-      JSON.stringify({
-        provider: "pi",
-        model: "openai/gpt-5.5",
-      }),
-    );
-
-    assert.deepStrictEqual(parsed, {
-      provider: "pi",
-      model: "openai/gpt-5.5",
-    });
-  }),
-);
-
-it.effect("drops legacy provider passwords from decoded provider options", () =>
-  Effect.gen(function* () {
-    const parsed = yield* decodeProviderStartOptions({
-      opencode: {
-        binaryPath: "/custom/bin/opencode",
-        serverUrl: "http://127.0.0.1:4096",
-        serverPassword: "legacy-opencode-secret",
-      },
-    });
-
-    assert.deepStrictEqual(parsed, {
-      opencode: {
-        binaryPath: "/custom/bin/opencode",
-        serverUrl: "http://127.0.0.1:4096",
-      },
-    });
-    assert.doesNotMatch(JSON.stringify(parsed), /serverPassword|legacy-.*-secret/);
-  }),
-);
+const decodeThreadMetaUpdatedPayload = Schema.decodeUnknownEffect(ThreadMetaUpdatedPayload);
 
 it.effect("parses turn diff input when fromTurnCount <= toTurnCount", () =>
   Effect.gen(function* () {
@@ -258,23 +61,32 @@ it.effect("parses turn diff input when fromTurnCount <= toTurnCount", () =>
       threadId: "thread-1",
       fromTurnCount: 1,
       toTurnCount: 2,
-      ignoreWhitespace: true,
     });
     assert.strictEqual(parsed.fromTurnCount, 1);
     assert.strictEqual(parsed.toTurnCount, 2);
+  }),
+);
+
+it.effect("parses turn diff input with whitespace ignoring enabled", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeTurnDiffInput({
+      threadId: "thread-1",
+      fromTurnCount: 1,
+      toTurnCount: 2,
+      ignoreWhitespace: true,
+    });
     assert.strictEqual(parsed.ignoreWhitespace, true);
   }),
 );
 
-it.effect("parses full thread diff input with optional whitespace flag", () =>
+it.effect("parses full thread diff input with whitespace ignoring enabled", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeFullThreadDiffInput({
       threadId: "thread-1",
       toTurnCount: 2,
-      ignoreWhitespace: false,
+      ignoreWhitespace: true,
     });
-    assert.strictEqual(parsed.toTurnCount, 2);
-    assert.strictEqual(parsed.ignoreWhitespace, false);
+    assert.strictEqual(parsed.ignoreWhitespace, true);
   }),
 );
 
@@ -305,25 +117,6 @@ it.effect("rejects thread turn diff when fromTurnCount > toTurnCount", () =>
   }),
 );
 
-it.effect("keeps generic conversation rollback internal-only", () =>
-  Effect.gen(function* () {
-    const rollbackCommand = {
-      type: "thread.conversation.rollback",
-      commandId: "cmd-rollback",
-      threadId: "thread-1",
-      messageId: "message-1",
-      numTurns: 1,
-      createdAt: "2026-01-01T00:00:00.000Z",
-    };
-
-    const clientResult = yield* Effect.exit(decodeClientOrchestrationCommand(rollbackCommand));
-    assert.strictEqual(clientResult._tag, "Failure");
-
-    const parsedInternal = yield* decodeOrchestrationCommand(rollbackCommand);
-    assert.strictEqual(parsedInternal.type, "thread.conversation.rollback");
-  }),
-);
-
 it.effect("trims branded ids and command string fields at decode boundaries", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeProjectCreateCommand({
@@ -342,10 +135,77 @@ it.effect("trims branded ids and command string fields at decode boundaries", ()
     assert.strictEqual(parsed.projectId, "project-1");
     assert.strictEqual(parsed.title, "Project Title");
     assert.strictEqual(parsed.workspaceRoot, "/tmp/workspace");
+    assert.strictEqual(parsed.createWorkspaceRootIfMissing, undefined);
     assert.deepStrictEqual(parsed.defaultModelSelection, {
-      provider: "codex",
+      instanceId: ProviderInstanceId.make("codex"),
       model: "gpt-5.2",
     });
+  }),
+);
+
+it.effect("decodes a rootless project.create and a rooted one from an older client", () =>
+  Effect.gen(function* () {
+    const rootless = yield* decodeProjectCreateCommand({
+      type: "project.create",
+      commandId: "cmd-1",
+      projectId: "project-1",
+      title: "Planning",
+      workspaceRoot: null,
+      createdAt: "2026-08-12T00:00:00.000Z",
+    });
+    assert.strictEqual(rootless.workspaceRoot, null);
+
+    const rooted = yield* decodeProjectCreateCommand({
+      type: "project.create",
+      commandId: "cmd-2",
+      projectId: "project-2",
+      title: "Rooted",
+      workspaceRoot: "/tmp/workspace",
+      createdAt: "2026-08-12T00:00:00.000Z",
+    });
+    assert.strictEqual(rooted.workspaceRoot, "/tmp/workspace");
+  }),
+);
+
+it.effect("decodes persisted project.created payloads written before and after rootless", () =>
+  Effect.gen(function* () {
+    const historical = yield* decodeProjectCreatedPayload({
+      projectId: "project-1",
+      title: "Rooted",
+      workspaceRoot: "/tmp/workspace",
+      defaultModelSelection: null,
+      scripts: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(historical.workspaceRoot, "/tmp/workspace");
+
+    const rootless = yield* decodeProjectCreatedPayload({
+      projectId: "project-2",
+      title: "Rootless",
+      workspaceRoot: null,
+      defaultModelSelection: null,
+      scripts: [],
+      createdAt: "2026-08-12T00:00:00.000Z",
+      updatedAt: "2026-08-12T00:00:00.000Z",
+    });
+    assert.strictEqual(rootless.workspaceRoot, null);
+  }),
+);
+
+it.effect("decodes project.create with createWorkspaceRootIfMissing enabled", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeProjectCreateCommand({
+      type: "project.create",
+      commandId: "cmd-1",
+      projectId: "project-1",
+      title: "Project Title",
+      workspaceRoot: "/tmp/workspace",
+      createWorkspaceRootIfMissing: true,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.strictEqual(parsed.createWorkspaceRootIfMissing, true);
   }),
 );
 
@@ -363,8 +223,7 @@ it.effect("decodes historical project.created payloads with a default provider",
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
-    assert.strictEqual(parsed.defaultModelSelection?.provider, "codex");
-    assert.strictEqual(parsed.isPinned, false);
+    assert.strictEqual(parsed.defaultModelSelection?.instanceId, "codex");
   }),
 );
 
@@ -376,11 +235,9 @@ it.effect("decodes project.meta-updated payloads with explicit default provider"
         provider: "claudeAgent",
         model: "claude-opus-4-6",
       },
-      isPinned: true,
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
-    assert.strictEqual(parsed.defaultModelSelection?.provider, "claudeAgent");
-    assert.strictEqual(parsed.isPinned, true);
+    assert.strictEqual(parsed.defaultModelSelection?.instanceId, "claudeAgent");
   }),
 );
 
@@ -400,7 +257,7 @@ it.effect("rejects command fields that become empty after trim", () =>
   }),
 );
 
-it.effect("decodes thread.turn.start defaults for provider, runtime mode, and dispatch mode", () =>
+it.effect("decodes thread.turn.start defaults for provider and runtime mode", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadTurnStartCommand({
       type: "thread.turn.start",
@@ -417,64 +274,22 @@ it.effect("decodes thread.turn.start defaults for provider, runtime mode, and di
     assert.strictEqual(parsed.modelSelection, undefined);
     assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
     assert.strictEqual(parsed.interactionMode, DEFAULT_PROVIDER_INTERACTION_MODE);
-    assert.strictEqual(parsed.dispatchMode, "queue");
   }),
 );
 
-it.effect("preserves the per-thread computer-control opt-in", () =>
+it.effect("decodes a message edit that restarts the latest turn", () =>
   Effect.gen(function* () {
-    const parsed = yield* decodeThreadTurnStartCommand({
-      type: "thread.turn.start",
-      commandId: "cmd-computer-1",
+    const parsed = yield* decodeThreadTurnEditCommand({
+      type: "thread.turn.edit",
+      commandId: "cmd-edit-turn-1",
       threadId: "thread-1",
-      message: {
-        messageId: "msg-computer-1",
-        role: "user",
-        text: "use the desktop",
-        attachments: [],
-      },
-      enableComputerControl: true,
+      messageId: "msg-1",
+      text: "Corrected message",
       createdAt: "2026-01-01T00:00:00.000Z",
     });
-    assert.strictEqual(parsed.enableComputerControl, true);
-  }),
-);
-
-it.effect("bounds initial turn text while preserving attachment-only turns", () =>
-  Effect.gen(function* () {
-    const command = (text: string, attachments: ReadonlyArray<unknown> = []) => ({
-      type: "thread.turn.start",
-      commandId: "cmd-turn-input-limit",
-      threadId: "thread-1",
-      message: { messageId: "msg-input-limit", role: "user", text, attachments },
-      createdAt: "2026-01-01T00:00:00.000Z",
-    });
-
-    const exact = yield* decodeThreadTurnStartCommand(
-      command("x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
-    );
-    assert.strictEqual(exact.message.text.length, PROVIDER_SEND_TURN_MAX_INPUT_CHARS);
-
-    const overLimit = yield* Effect.exit(
-      decodeThreadTurnStartCommand(command("x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS + 1))),
-    );
-    assert.strictEqual(overLimit._tag, "Failure");
-
-    const whitespaceOnly = yield* Effect.exit(decodeThreadTurnStartCommand(command("   ")));
-    assert.strictEqual(whitespaceOnly._tag, "Failure");
-
-    const attachmentOnly = yield* decodeThreadTurnStartCommand(
-      command("", [
-        {
-          type: "image",
-          id: "thread-1-11111111-1111-4111-8111-111111111111",
-          name: "screen.png",
-          mimeType: "image/png",
-          sizeBytes: 1,
-        },
-      ]),
-    );
-    assert.strictEqual(attachmentOnly.message.attachments.length, 1);
+    assert.strictEqual(parsed.text, "Corrected message");
+    assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
+    assert.strictEqual(parsed.interactionMode, DEFAULT_PROVIDER_INTERACTION_MODE);
   }),
 );
 
@@ -497,40 +312,52 @@ it.effect("preserves explicit provider and runtime mode in thread.turn.start", (
       runtimeMode: "full-access",
       createdAt: "2026-01-01T00:00:00.000Z",
     });
-    assert.strictEqual(parsed.modelSelection?.provider, "codex");
+    assert.strictEqual(parsed.modelSelection?.instanceId, "codex");
     assert.strictEqual(parsed.runtimeMode, "full-access");
     assert.strictEqual(parsed.interactionMode, DEFAULT_PROVIDER_INTERACTION_MODE);
   }),
 );
 
-it.effect("preserves debug mode in thread turns and interaction-mode commands", () =>
+it.effect("accepts bootstrap metadata in thread.turn.start", () =>
   Effect.gen(function* () {
-    const turn = yield* decodeThreadTurnStartCommand({
+    const parsed = yield* decodeThreadTurnStartCommand({
       type: "thread.turn.start",
-      commandId: "cmd-debug-turn",
+      commandId: "cmd-turn-bootstrap",
       threadId: "thread-1",
       message: {
-        messageId: "msg-debug-turn",
+        messageId: "msg-bootstrap",
         role: "user",
-        text: "debug the failing request",
+        text: "hello",
         attachments: [],
       },
-      interactionMode: "debug",
-      createdAt: "2026-08-11T00:00:00.000Z",
+      bootstrap: {
+        createThread: {
+          projectId: "project-1",
+          title: "Bootstrap thread",
+          modelSelection: {
+            provider: "codex",
+            model: "gpt-5.4",
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+        prepareWorktree: {
+          projectCwd: "/tmp/workspace",
+          baseBranch: "main",
+          branch: "pathway/example",
+          startFromOrigin: true,
+        },
+        runSetupScript: true,
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
     });
-    const modeChange = yield* decodeClientOrchestrationCommand({
-      type: "thread.interaction-mode.set",
-      commandId: "cmd-debug-mode",
-      threadId: "thread-1",
-      interactionMode: "debug",
-      createdAt: "2026-08-11T00:00:00.000Z",
-    });
-
-    assert.strictEqual(turn.interactionMode, "debug");
-    assert.strictEqual(modeChange.type, "thread.interaction-mode.set");
-    if (modeChange.type === "thread.interaction-mode.set") {
-      assert.strictEqual(modeChange.interactionMode, "debug");
-    }
+    assert.strictEqual(parsed.bootstrap?.createThread?.projectId, "project-1");
+    assert.strictEqual(parsed.bootstrap?.prepareWorktree?.baseBranch, "main");
+    assert.strictEqual(parsed.bootstrap?.prepareWorktree?.startFromOrigin, true);
+    assert.strictEqual(parsed.bootstrap?.runSetupScript, true);
   }),
 );
 
@@ -552,7 +379,29 @@ it.effect("decodes thread.created runtime mode for historical events", () =>
     });
 
     assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
-    assert.strictEqual(parsed.modelSelection.provider, "codex");
+    assert.strictEqual(parsed.modelSelection.instanceId, "codex");
+  }),
+);
+
+it.effect("decodes thread.meta-updated payloads with explicit provider", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeThreadMetaUpdatedPayload({
+      threadId: "thread-1",
+      regenerateTitle: true,
+      previousTitle: "Previous title",
+      titleRegeneration: {
+        requestId: "cmd-title-regenerate",
+        startedAt: "2026-01-01T00:00:00.000Z",
+      },
+      modelSelection: {
+        provider: "claudeAgent",
+        model: "claude-opus-4-6",
+      },
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(parsed.previousTitle, "Previous title");
+    assert.strictEqual(parsed.titleRegeneration?.requestId, "cmd-title-regenerate");
+    assert.strictEqual(parsed.modelSelection?.instanceId, "claudeAgent");
   }),
 );
 
@@ -571,6 +420,75 @@ it.effect("decodes thread archive and unarchive commands", () =>
 
     assert.strictEqual(archive.type, "thread.archive");
     assert.strictEqual(unarchive.type, "thread.unarchive");
+  }),
+);
+
+it.effect("decodes thread settle and unsettle commands", () =>
+  Effect.gen(function* () {
+    const settle = yield* decodeOrchestrationCommand({
+      type: "thread.settle",
+      commandId: "cmd-settle-1",
+      threadId: "thread-1",
+    });
+    const unsettle = yield* decodeOrchestrationCommand({
+      type: "thread.unsettle",
+      commandId: "cmd-unsettle-1",
+      threadId: "thread-1",
+      reason: "user",
+    });
+
+    assert.strictEqual(settle.type, "thread.settle");
+    assert.strictEqual(unsettle.type, "thread.unsettle");
+
+    // "activity" is server-owned: it exists on the event, never on the
+    // command, so a client cannot forge the neutral reset.
+    const forged = yield* decodeOrchestrationCommand({
+      type: "thread.unsettle",
+      commandId: "cmd-unsettle-2",
+      threadId: "thread-1",
+      reason: "activity",
+    }).pipe(Effect.flip);
+    assert.ok(forged);
+  }),
+);
+
+it.effect("defaults settled fields when decoding historical thread data", () =>
+  Effect.gen(function* () {
+    const common = {
+      id: "thread-1",
+      projectId: "project-1",
+      title: "Historical thread",
+      modelSelection: { provider: "codex", model: "gpt-5.4" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      latestTurn: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      archivedAt: null,
+      session: null,
+    };
+    const thread = yield* decodeOrchestrationThread({
+      ...common,
+      deletedAt: null,
+      messages: [],
+      proposedPlans: [],
+      activities: [],
+      checkpoints: [],
+    });
+    const shell = yield* decodeOrchestrationThreadShell({
+      ...common,
+      latestUserMessageAt: null,
+      hasPendingApprovals: false,
+      hasPendingUserInput: false,
+      hasActionableProposedPlan: false,
+    });
+
+    assert.strictEqual(thread.settledOverride, null);
+    assert.strictEqual(thread.settledAt, null);
+    assert.strictEqual(shell.settledOverride, null);
+    assert.strictEqual(shell.settledAt, null);
   }),
 );
 
@@ -610,151 +528,53 @@ it.effect("decodes thread archived and unarchived events", () =>
       },
     });
 
-    assert.strictEqual(archived.type, "thread.archived");
+    if (archived.type !== "thread.archived") {
+      assert.fail(`Expected thread.archived event, received ${archived.type}.`);
+    }
     assert.strictEqual(archived.payload.archivedAt, "2026-01-01T00:00:00.000Z");
     assert.strictEqual(unarchived.type, "thread.unarchived");
-    assert.strictEqual(unarchived.payload.updatedAt, "2026-01-02T00:00:00.000Z");
   }),
 );
 
-it.effect("decodes thread.meta-updated payloads with explicit provider", () =>
+it.effect("decodes thread settled and unsettled events", () =>
   Effect.gen(function* () {
-    const parsed = yield* decodeThreadMetaUpdatedPayload({
-      threadId: "thread-1",
-      modelSelection: {
-        provider: "claudeAgent",
-        model: "claude-opus-4-6",
-        supportsAutoMode: false,
-      },
-      updatedAt: "2026-01-01T00:00:00.000Z",
-    });
-    assert.strictEqual(parsed.modelSelection?.provider, "claudeAgent");
-    assert.strictEqual(
-      parsed.modelSelection?.provider === "claudeAgent"
-        ? parsed.modelSelection.supportsAutoMode
-        : undefined,
-      false,
-    );
-  }),
-);
-
-it.effect("strips client-sent dispatchOrigin from thread.turn.start commands", () =>
-  Effect.gen(function* () {
-    // dispatchOrigin is server-assigned (automation engine only). The client command
-    // schema deliberately omits it, so a spoofed value must not survive decoding —
-    // otherwise any WS client could fake the "Sent via Automation" label.
-    const command = yield* decodeClientOrchestrationCommand({
-      type: "thread.turn.start",
-      commandId: "cmd-turn-start-origin",
-      threadId: "thread-1",
-      message: {
-        messageId: "message-1",
-        role: "user",
-        text: "hello",
-        attachments: [],
-      },
-      dispatchMode: "queue",
-      dispatchOrigin: "automation",
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    });
-    assert.strictEqual(command.type, "thread.turn.start");
-    assert.strictEqual("dispatchOrigin" in command, false);
-  }),
-);
-
-it.effect("strips client-sent agent dispatchOrigin from thread.turn.start commands", () =>
-  Effect.gen(function* () {
-    // The "agent" origin is reserved for turns dispatched through the Synara
-    // agent gateway; WS clients must not be able to spoof it either.
-    const command = yield* decodeClientOrchestrationCommand({
-      type: "thread.turn.start",
-      commandId: "cmd-turn-start-agent-origin",
-      threadId: "thread-1",
-      message: {
-        messageId: "message-1",
-        role: "user",
-        text: "hello",
-        attachments: [],
-      },
-      dispatchMode: "queue",
-      dispatchOrigin: "agent",
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    });
-    assert.strictEqual(command.type, "thread.turn.start");
-    assert.strictEqual("dispatchOrigin" in command, false);
-  }),
-);
-
-it.effect("decodes pinned-message commands and events", () =>
-  Effect.gen(function* () {
-    const command = yield* decodeClientOrchestrationCommand({
-      type: "thread.pinned-message.label.set",
-      commandId: "cmd-pin-label",
-      threadId: "thread-1",
-      messageId: "message-1",
-      label: "Review this",
-    });
-    assert.strictEqual(command.type, "thread.pinned-message.label.set");
-
-    const event = yield* decodeOrchestrationEvent({
+    const settled = yield* decodeOrchestrationEvent({
       sequence: 1,
-      eventId: "event-pin-added",
+      eventId: "event-settle-1",
       aggregateKind: "thread",
       aggregateId: "thread-1",
-      type: "thread.pinned-message-added",
+      type: "thread.settled",
       occurredAt: "2026-01-01T00:00:00.000Z",
-      commandId: "cmd-pin-add",
+      commandId: "cmd-settle-1",
       causationEventId: null,
-      correlationId: "cmd-pin-add",
+      correlationId: "cmd-settle-1",
       metadata: {},
       payload: {
         threadId: "thread-1",
-        pin: {
-          messageId: "message-1",
-          label: null,
-          done: false,
-          pinnedAt: "2026-01-01T00:00:00.000Z",
-        },
+        settledAt: "2026-01-01T00:00:00.000Z",
         updatedAt: "2026-01-01T00:00:00.000Z",
       },
     });
-    assert.strictEqual(event.type, "thread.pinned-message-added");
-  }),
-);
+    const unsettled = yield* decodeOrchestrationEvent({
+      sequence: 2,
+      eventId: "event-unsettle-1",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      type: "thread.unsettled",
+      occurredAt: "2026-01-02T00:00:00.000Z",
+      commandId: "cmd-unsettle-1",
+      causationEventId: null,
+      correlationId: "cmd-unsettle-1",
+      metadata: {},
+      payload: {
+        threadId: "thread-1",
+        reason: "user",
+        updatedAt: "2026-01-02T00:00:00.000Z",
+      },
+    });
 
-it.effect("rejects oversized thread notes payloads", () =>
-  Effect.gen(function* () {
-    const failed = yield* decodeThreadMetaUpdatedPayload({
-      threadId: "thread-1",
-      notes: "x".repeat(THREAD_NOTES_MAX_CHARS + 1),
-      updatedAt: "2026-01-01T00:00:00.000Z",
-    }).pipe(
-      Effect.match({
-        onFailure: () => true,
-        onSuccess: () => false,
-      }),
-    );
-    assert.strictEqual(failed, true);
-  }),
-);
-
-it.effect("rejects oversized thread goal payloads", () =>
-  Effect.gen(function* () {
-    const failed = yield* decodeThreadMetaUpdatedPayload({
-      threadId: "thread-1",
-      goal: "x".repeat(THREAD_GOAL_MAX_CHARS + 1),
-      updatedAt: "2026-01-01T00:00:00.000Z",
-    }).pipe(
-      Effect.match({
-        onFailure: () => true,
-        onSuccess: () => false,
-      }),
-    );
-    assert.strictEqual(failed, true);
+    assert.strictEqual(settled.type, "thread.settled");
+    assert.strictEqual(unsettled.type, "thread.unsettled");
   }),
 );
 
@@ -773,16 +593,160 @@ it.effect("accepts provider-scoped model options in thread.turn.start", () =>
       modelSelection: {
         provider: "codex",
         model: "gpt-5.3-codex",
-        options: {
-          reasoningEffort: "high",
-          fastMode: true,
-        },
+        options: [
+          { id: "reasoningEffort", value: "high" },
+          { id: "fastMode", value: true },
+        ],
       },
       createdAt: "2026-01-01T00:00:00.000Z",
     });
-    assert.strictEqual(parsed.modelSelection?.provider, "codex");
-    assert.strictEqual(parsed.modelSelection?.options?.reasoningEffort, "high");
-    assert.strictEqual(parsed.modelSelection?.options?.fastMode, true);
+    assert.strictEqual(parsed.modelSelection?.instanceId, "codex");
+    assert.strictEqual(getOptionValue(parsed.modelSelection?.options, "reasoningEffort"), "high");
+    assert.strictEqual(getOptionValue(parsed.modelSelection?.options, "fastMode"), true);
+  }),
+);
+
+it.effect("normalizes legacy object-shaped modelSelection.options on decode", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeThreadCreatedPayload({
+      threadId: "thread-1",
+      projectId: "project-1",
+      title: "Legacy options thread",
+      modelSelection: {
+        provider: "claudeAgent",
+        model: "claude-opus-4-6",
+        options: {
+          effort: "max",
+          fastMode: true,
+          // Falsy/garbage entries are dropped, matching migration 026.
+          emptyStr: "   ",
+          nullish: null,
+          nested: { foo: 1 },
+        },
+      },
+      branch: null,
+      worktreePath: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.strictEqual(parsed.modelSelection.instanceId, ProviderInstanceId.make("claudeAgent"));
+    assert.deepStrictEqual(parsed.modelSelection.options, [
+      { id: "effort", value: "max" },
+      { id: "fastMode", value: true },
+    ]);
+  }),
+);
+
+it.effect("normalizes legacy object-shaped defaultModelSelection.options on decode", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeProjectCreatedPayload({
+      projectId: "project-1",
+      title: "Legacy default project",
+      workspaceRoot: "/tmp/legacy",
+      defaultModelSelection: {
+        provider: "codex",
+        model: "gpt-5.4",
+        options: { reasoningEffort: "low" },
+      },
+      scripts: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.deepStrictEqual(parsed.defaultModelSelection?.options, [
+      { id: "reasoningEffort", value: "low" },
+    ]);
+  }),
+);
+
+it.effect(
+  "normalizes legacy object-shaped options on decode and re-encodes as canonical array",
+  () =>
+    Effect.gen(function* () {
+      const decoded = yield* decodeThreadCreatedPayload({
+        threadId: "thread-1",
+        projectId: "project-1",
+        title: "Round trip thread",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5.4",
+          options: { fastMode: true },
+        },
+        branch: null,
+        worktreePath: null,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      });
+
+      const encoded = yield* encodeThreadCreatedPayload(decoded);
+      assert.deepStrictEqual(encoded.modelSelection.options, [{ id: "fastMode", value: true }]);
+    }),
+);
+
+it.effect("accepts a title seed in thread.turn.start", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeThreadTurnStartCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-turn-title-seed",
+      threadId: "thread-1",
+      message: {
+        messageId: "msg-title-seed",
+        role: "user",
+        text: "hello",
+        attachments: [],
+      },
+      titleSeed: "Investigate reconnect failures",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(parsed.titleSeed, "Investigate reconnect failures");
+  }),
+);
+
+it.effect("accepts a title regeneration intent in thread.meta.update", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationCommand({
+      type: "thread.meta.update",
+      commandId: "cmd-title-regenerate",
+      threadId: "thread-1",
+      regenerateTitle: true,
+    });
+    assert.strictEqual(parsed.type, "thread.meta.update");
+    if (parsed.type === "thread.meta.update") {
+      assert.strictEqual(parsed.regenerateTitle, true);
+    }
+  }),
+);
+
+it.effect("accepts an internal title regeneration completion", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationCommand({
+      type: "thread.title.regeneration.complete",
+      commandId: "cmd-title-regeneration-complete",
+      threadId: "thread-1",
+      requestId: "cmd-title-regenerate",
+      title: "Updated title",
+    });
+    assert.strictEqual(parsed.type, "thread.title.regeneration.complete");
+    if (parsed.type === "thread.title.regeneration.complete") {
+      assert.strictEqual(parsed.requestId, "cmd-title-regenerate");
+      assert.strictEqual(parsed.title, "Updated title");
+    }
+  }),
+);
+
+it.effect("rejects an explicit title combined with title regeneration", () =>
+  Effect.gen(function* () {
+    const result = yield* Effect.exit(
+      decodeOrchestrationCommand({
+        type: "thread.meta.update",
+        commandId: "cmd-title-regenerate-with-title",
+        threadId: "thread-1",
+        title: "Explicit title",
+        regenerateTitle: true,
+      }),
+    );
+    assert.strictEqual(result._tag, "Failure");
   }),
 );
 
@@ -811,66 +775,6 @@ it.effect("accepts a source proposed plan reference in thread.turn.start", () =>
   }),
 );
 
-it.effect("rejects normalized thread.turn.start commands with too many attachments", () =>
-  Effect.gen(function* () {
-    const failed = yield* decodeThreadTurnStartCommand({
-      type: "thread.turn.start",
-      commandId: "cmd-turn-too-many-attachments",
-      threadId: "thread-1",
-      message: {
-        messageId: "msg-too-many-attachments",
-        role: "user",
-        text: "hello",
-        attachments: Array.from({ length: PROVIDER_SEND_TURN_MAX_ATTACHMENTS + 1 }, (_, index) => ({
-          type: "image",
-          id: `attachment-${index}`,
-          name: `image-${index}.png`,
-          mimeType: "image/png",
-          sizeBytes: 1,
-        })),
-      },
-      createdAt: "2026-01-01T00:00:00.000Z",
-    }).pipe(
-      Effect.match({
-        onFailure: () => true,
-        onSuccess: () => false,
-      }),
-    );
-    assert.strictEqual(failed, true);
-  }),
-);
-
-it.effect("rejects client thread.turn.start commands with too many upload attachments", () =>
-  Effect.gen(function* () {
-    const failed = yield* decodeClientOrchestrationCommand({
-      type: "thread.turn.start",
-      commandId: "cmd-client-turn-too-many-attachments",
-      threadId: "thread-1",
-      message: {
-        messageId: "msg-client-too-many-attachments",
-        role: "user",
-        text: "hello",
-        attachments: Array.from({ length: PROVIDER_SEND_TURN_MAX_ATTACHMENTS + 1 }, (_, index) => ({
-          type: "image",
-          id: `thread-1-00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
-          name: `image-${index}.png`,
-          mimeType: "image/png",
-          sizeBytes: 1,
-        })),
-      },
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    }).pipe(
-      Effect.match({
-        onFailure: () => true,
-        onSuccess: () => false,
-      }),
-    );
-    assert.strictEqual(failed, true);
-  }),
-);
-
 it.effect(
   "decodes thread.turn-start-requested defaults for provider, runtime mode, and interaction mode",
   () =>
@@ -883,8 +787,8 @@ it.effect(
       assert.strictEqual(parsed.modelSelection, undefined);
       assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
       assert.strictEqual(parsed.interactionMode, DEFAULT_PROVIDER_INTERACTION_MODE);
-      assert.strictEqual(parsed.dispatchMode, "queue");
       assert.strictEqual(parsed.sourceProposedPlan, undefined);
+      assert.strictEqual(parsed.rollbackTurns, undefined);
     }),
 );
 
@@ -897,12 +801,26 @@ it.effect("decodes thread.turn-start-requested source proposed plan metadata whe
         threadId: "thread-1",
         planId: "plan-1",
       },
+      rollbackTurns: 1,
       createdAt: "2026-01-01T00:00:00.000Z",
     });
     assert.deepStrictEqual(parsed.sourceProposedPlan, {
       threadId: "thread-1",
       planId: "plan-1",
     });
+    assert.strictEqual(parsed.rollbackTurns, 1);
+  }),
+);
+
+it.effect("decodes thread.turn-start-requested title seed when present", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeThreadTurnStartRequestedPayload({
+      threadId: "thread-2",
+      messageId: "msg-2",
+      titleSeed: "Investigate reconnect failures",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(parsed.titleSeed, "Investigate reconnect failures");
   }),
 );
 
@@ -973,59 +891,117 @@ it.effect("preserves proposed plan implementation metadata when present", () =>
   }),
 );
 
-it.effect("preserves user-input answer values through the RPC JSON codec", () =>
+// ── ModelSelection: instance-keyed wire shape + legacy decoder ────────
+//
+// `ModelSelection` is routing-keyed on `instanceId` — never a driver kind.
+// Persisted and in-flight payloads from pre-instance builds carry a
+// `provider` field whose value was a driver kind; those payloads are migrated
+// at the wire boundary by
+// promoting `provider` to the default instance id for that driver
+// (built-in drivers use the driver kind slug as their default instance id, so
+// the migration is a 1:1 rename).
+//
+// These tests pin the rollback/fork tolerance invariant: legacy payloads
+// decode cleanly for fork-provided drivers, and the decoded form uses
+// `instanceId` uniformly regardless of origin.
+
+const decodeModelSelection = Schema.decodeUnknownEffect(ModelSelection);
+const encodeModelSelection = Schema.encodeUnknownEffect(ModelSelection);
+
+it.effect("ModelSelection migrates legacy `provider` field to `instanceId`", () =>
   Effect.gen(function* () {
-    const codec = Schema.toCodecJson(ClientOrchestrationCommand);
-    const wire = {
-      type: "thread.user-input.respond",
-      commandId: "cmd-1",
-      threadId: "thread-1",
-      requestId: "req-1",
-      answers: {
-        single: "Purple",
-        multi: ["Reading", "Coding"],
-        skipped: null,
-      },
-      createdAt: "2026-05-19T16:14:28.202Z",
-    };
-    const decoded = yield* Schema.decodeUnknownEffect(codec)(wire);
-    assert.deepStrictEqual(
-      (decoded as Extract<typeof decoded, { type: "thread.user-input.respond" }>).answers,
-      {
-        single: "Purple",
-        multi: ["Reading", "Coding"],
-        skipped: null,
-      },
-    );
+    const parsed = yield* decodeModelSelection({
+      provider: "codex",
+      model: "gpt-5-codex",
+      options: [{ id: "reasoningEffort", value: "high" }],
+    });
+    assert.strictEqual(parsed.instanceId, ProviderInstanceId.make("codex"));
+    assert.strictEqual(parsed.model, "gpt-5-codex");
+    assert.deepStrictEqual(parsed.options, [{ id: "reasoningEffort", value: "high" }]);
   }),
 );
 
-const decodeThreadHandoff = Schema.decodeUnknownEffect(ThreadHandoff);
-
-it.effect("ThreadHandoff decodes legacy provider names instead of failing the row", () =>
+it.effect("ModelSelection accepts an explicit instanceId routing key", () =>
   Effect.gen(function* () {
-    const handoff = yield* decodeThreadHandoff({
-      sourceThreadId: "thread-src",
-      sourceProvider: "kilo",
-      importedAt: "2026-01-01T00:00:00Z",
-      bootstrapStatus: "completed",
+    const parsed = yield* decodeModelSelection({
+      instanceId: "codex_personal",
+      model: "gpt-5-codex",
     });
-    assert.equal(handoff.sourceProvider, "opencode");
+    assert.strictEqual(parsed.instanceId, ProviderInstanceId.make("codex_personal"));
+  }),
+);
 
-    const renamed = yield* decodeThreadHandoff({
-      sourceThreadId: "thread-src",
-      sourceProvider: "gemini",
-      importedAt: "2026-01-01T00:00:00Z",
-      bootstrapStatus: "completed",
+it.effect("ModelSelection prefers explicit instanceId over legacy provider", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeModelSelection({
+      provider: "codex",
+      instanceId: "codex_personal",
+      model: "gpt-5-codex",
     });
-    assert.equal(renamed.sourceProvider, "antigravity");
+    assert.strictEqual(parsed.instanceId, ProviderInstanceId.make("codex_personal"));
+  }),
+);
 
-    const current = yield* decodeThreadHandoff({
-      sourceThreadId: "thread-src",
-      sourceProvider: "codex",
-      importedAt: "2026-01-01T00:00:00Z",
-      bootstrapStatus: "completed",
+it.effect(
+  "ModelSelection decodes unknown driver kinds via legacy provider (rollback / fork invariant)",
+  () =>
+    Effect.gen(function* () {
+      const parsed = yield* decodeModelSelection({
+        provider: "ollama",
+        model: "llama3:70b",
+        options: [{ id: "temperature", value: "0.4" }],
+      });
+      assert.strictEqual(parsed.instanceId, ProviderInstanceId.make("ollama"));
+      assert.strictEqual(parsed.model, "llama3:70b");
+    }),
+);
+
+it.effect("ModelSelection encodes to the canonical instanceId wire form", () =>
+  Effect.gen(function* () {
+    const decoded = yield* decodeModelSelection({
+      provider: "ollama",
+      model: "llama3:70b",
+      options: [{ id: "temperature", value: "0.4" }],
     });
-    assert.equal(current.sourceProvider, "codex");
+    const encoded = yield* encodeModelSelection(decoded);
+    assert.deepStrictEqual(encoded, {
+      instanceId: "ollama",
+      model: "llama3:70b",
+      options: [{ id: "temperature", value: "0.4" }],
+    });
+  }),
+);
+
+it.effect("ModelSelection rejects malformed instance ids", () =>
+  Effect.gen(function* () {
+    const result = yield* Effect.exit(
+      decodeModelSelection({
+        instanceId: "1invalid", // must start with a letter
+        model: "x",
+      }),
+    );
+    assert.strictEqual(result._tag, "Failure");
+  }),
+);
+
+it.effect("project favicon overrides accept only supported image files", () =>
+  Effect.gen(function* () {
+    const valid = yield* decodeOrchestrationCommand({
+      type: "project.meta.update",
+      commandId: "cmd-project-favicon",
+      projectId: "project-1",
+      faviconPath: "brand/icon.svg",
+    });
+    assert.strictEqual(valid.type, "project.meta.update");
+
+    const invalid = yield* Effect.exit(
+      decodeOrchestrationCommand({
+        type: "project.meta.update",
+        commandId: "cmd-project-secret",
+        projectId: "project-1",
+        faviconPath: ".env",
+      }),
+    );
+    assert.strictEqual(invalid._tag, "Failure");
   }),
 );

@@ -1,0 +1,7 @@
+# Thread workspace moves are durable server workflows
+
+Moving an existing Agent Thread from a project's root checkout to a new Git worktree is one server-owned workflow. The server stashes every tracked and untracked non-ignored change, creates a branch from the source checkout's exact `HEAD`, applies the exact stash in the new worktree, rebinds the thread, drops the stash, and starts the project's standard worktree setup action. The workflow persists progress and recovery state so client disconnects cannot strand the repository between steps.
+
+The move is allowed only when every thread sharing the source checkout has no active or queued work. Running terminals also block it, but the confirmation flow may explicitly stop all affected terminals and continue after their cleanup receipts arrive. Transfer conflicts roll back to the source checkout. If rollback cannot restore the source, the server keeps the stash and reports its identifier for manual recovery. Setup failures do not undo a completed move.
+
+Web and desktop expose the action beside the project-folder row and in the command palette. Both use the same confirmation and progress state. Mobile is deferred while its Agent Thread UI is being built, but consumes the same client-neutral contract later. Moving a worktree thread back to the project folder is a separate design because the shared root may have changed; it is not part of this decision.

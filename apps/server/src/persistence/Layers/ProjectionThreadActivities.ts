@@ -1,9 +1,12 @@
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
-import { NonNegativeInt } from "@synara/contracts";
-import { Effect, Layer, Schema, Struct } from "effect";
+import { NonNegativeInt } from "@spiritdevs/contracts";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import * as Struct from "effect/Struct";
 
-import { toPersistenceSqlError, toPersistenceSqlOrDecodeError } from "../Errors.ts";
+import { toPersistenceDecodeError, toPersistenceSqlError } from "../Errors.ts";
 
 import {
   DeleteProjectionThreadActivitiesInput,
@@ -19,6 +22,13 @@ const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
     sequence: Schema.NullOr(NonNegativeInt),
   }),
 );
+
+function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: string) {
+  return (cause: unknown) =>
+    Schema.isSchemaError(cause)
+      ? toPersistenceDecodeError(decodeOperation)(cause)
+      : toPersistenceSqlError(sqlOperation)(cause);
+}
 
 const makeProjectionThreadActivityRepository = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;

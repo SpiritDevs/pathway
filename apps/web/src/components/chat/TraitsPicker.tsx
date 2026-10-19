@@ -1,684 +1,588 @@
-// FILE: TraitsPicker.tsx
-// Purpose: Renders composer trait controls for effort, thinking, and fast mode across menu surfaces.
-// Layer: Chat composer presentation
-// Depends on: shared trait resolution helpers, provider model option updates, and shared menu primitives.
-
 import {
-  type OpenCodeModelOptions,
-  type ProviderAgentDescriptor,
-  type ProviderKind,
-  type ProviderModelDescriptor,
-  type ThreadId,
-} from "@synara/contracts";
-import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronDownIcon, FastModeIcon, FastModeOutlineIcon, SettingsIcon } from "~/lib/icons";
-import { cn } from "~/lib/utils";
-import { Button } from "../ui/button";
+  type ProviderDriverKind,
+  type ProviderInstanceId,
+  type ProviderOptionDescriptor,
+  type ProviderOptionSelection,
+  type ScopedThreadRef,
+  type ServerProviderModel,
+} from "@spiritdevs/contracts";
+import {
+  applyClaudePromptEffortPrefix,
+  buildProviderOptionSelectionsFromDescriptors,
+  getProviderOptionCurrentLabel,
+  getProviderOptionCurrentValue,
+  getProviderOptionDescriptors,
+  isClaudeUltrathinkPrompt,
+} from "@spiritdevs/shared/model";
+import { memo, useCallback, useState } from "react";
+import type { VariantProps } from "class-variance-authority";
+import { ZapIcon } from "lucide-react";
+import { buttonVariants } from "../ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   Menu,
   MenuGroup,
-  MenuGroupLabel,
+  MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
   MenuSeparator as MenuDivider,
   MenuTrigger,
 } from "../ui/menu";
-import { type ProviderOptions } from "../../providerModelOptions";
-import { COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME } from "./composerPickerStyles";
-import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
-import {
-  getComposerTraitSelection,
-  hasVisibleComposerTraitControls,
-  planComposerEffortChange,
-  resolveComposerTraitStatusLabel,
-  showsComposerFastModeBadge,
-  supportsComposerFastModeControl,
-} from "./composerTraits";
-import { useComposerTraitCommit } from "./useComposerTraitCommit";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { ShortcutKbd } from "../ui/shortcut-kbd";
+import { useComposerDraftStore, DraftId } from "../../composerDraftStore";
+import { getProviderModelCapabilities } from "../../providerModels";
+import { cn } from "~/lib/utils";
+import { Badge } from "../ui/badge";
+import { ComposerControl, ComposerControlChevron, ComposerControlIcon } from "./ComposerControl";
 
-export function defaultAgentForProvider(provider: ProviderKind): string | null {
-  if (provider === "opencode") return "build";
-  return null;
-}
+type ProviderOptions = ReadonlyArray<ProviderOptionSelection>;
 
-export function getAgentOptions(
-  provider: ProviderKind,
-  runtimeAgents: ReadonlyArray<ProviderAgentDescriptor> | null | undefined,
-): ReadonlyArray<ProviderAgentDescriptor> {
-  if (provider !== "opencode") return [];
-  return runtimeAgents ?? [];
-}
+type TraitsPersistence =
+  | {
+      threadRef?: ScopedThreadRef;
+      draftId?: DraftId;
+      onModelOptionsChange?: never;
+    }
+  | {
+      threadRef?: undefined;
+      onModelOptionsChange: (nextOptions: ProviderOptions | undefined) => void;
+    };
 
-export function getSelectedAgentValue(
-  provider: ProviderKind,
-  modelOptions: ProviderOptions | null | undefined,
-): string | null {
-  const defaultAgent = defaultAgentForProvider(provider);
-  if (!defaultAgent) return null;
-  const selectedAgent = (modelOptions as OpenCodeModelOptions | undefined)?.agent?.trim();
-  return selectedAgent && selectedAgent.length > 0 ? selectedAgent : defaultAgent;
-}
+const ULTRATHINK_PROMPT_PREFIX = "Ultrathink:\n";
 
-// Whether the Agent radio section renders for this provider/runtime pair; lets
-// hosts decide on separators before TraitsMenuContent mounts.
-export function hasComposerAgentControls(
-  provider: ProviderKind,
-  runtimeAgents: ReadonlyArray<ProviderAgentDescriptor> | null | undefined,
-): boolean {
+function DefaultBadge() {
   return (
-    getAgentOptions(provider, runtimeAgents).length > 0 &&
-    defaultAgentForProvider(provider) !== null
+    <Badge
+      variant="outline"
+      className="inline-flex h-4 w-fit min-w-0 items-center justify-center gap-0 border-border/70 bg-muted/60 px-1.5 py-0 font-semibold text-[10px] text-muted-foreground leading-none sm:h-4"
+    >
+      Default
+    </Badge>
   );
 }
 
-function findAgentLabel(
-  agents: ReadonlyArray<ProviderAgentDescriptor>,
-  value: string | null,
+function replaceDescriptorCurrentValue(
+  descriptors: ReadonlyArray<ProviderOptionDescriptor>,
+  descriptorId: string,
+  currentValue: string | boolean | undefined,
+): ReadonlyArray<ProviderOptionDescriptor> {
+  return descriptors.map((descriptor) =>
+    descriptor.id !== descriptorId
+      ? descriptor
+      : descriptor.type === "boolean"
+        ? {
+            ...descriptor,
+            ...(typeof currentValue === "boolean" ? { currentValue } : {}),
+          }
+        : {
+            ...descriptor,
+            ...(typeof currentValue === "string" ? { currentValue } : {}),
+          },
+  );
+}
+
+function getDescriptorStringValue(
+  descriptor: Extract<ProviderOptionDescriptor, { type: "select" }> | null,
 ): string | null {
-  if (!value) return null;
-  const agent = agents.find((candidate) => candidate.name === value);
-  return agent?.displayName ?? value;
+  if (!descriptor) {
+    return null;
+  }
+  const value = getProviderOptionCurrentValue(descriptor);
+  return typeof value === "string" ? value : null;
 }
 
-// Mirrors the trigger label assembly so callers (e.g. the composer footer
-// width planner) can measure the summary without rendering the picker.
-export function resolveTraitsTriggerSummary(options: {
-  provider: ProviderKind;
-  model: string | null | undefined;
-  prompt: string;
-  modelOptions: ProviderOptions | null | undefined;
-  runtimeModel?: ProviderModelDescriptor | undefined;
-  runtimeAgents: ReadonlyArray<ProviderAgentDescriptor> | null | undefined;
-}): {
-  contextWindowLabel: string | null;
-  primaryLabel: string | null;
-  showsFastBadge: boolean;
-  summaryText: string;
-} {
-  const selection = getComposerTraitSelection(
-    options.provider,
-    options.model,
-    options.prompt,
-    options.modelOptions,
-    options.runtimeModel,
+function getSelectedTraits(
+  provider: ProviderDriverKind,
+  models: ReadonlyArray<ServerProviderModel>,
+  model: string | null | undefined,
+  prompt: string,
+  modelOptions: ProviderOptions | null | undefined,
+  allowPromptInjectedEffort: boolean,
+) {
+  const caps = getProviderModelCapabilities(models, model, provider);
+  const descriptors = getProviderOptionDescriptors({
+    caps,
+    selections: modelOptions,
+  });
+  const selectDescriptors = descriptors.filter(
+    (descriptor): descriptor is Extract<ProviderOptionDescriptor, { type: "select" }> =>
+      descriptor.type === "select",
   );
-  const {
-    effortLevels,
-    thinkingEnabled,
-    fastModeEnabled,
-    contextWindow,
-    contextWindowOptions,
-    defaultContextWindow,
-  } = selection;
-  // Providers whose only trait control is the fast toggle surface it as the
-  // primary label ("Fast"/"Default") instead of the appended badge.
-  const isFastOnlyControl =
-    supportsComposerFastModeControl(selection) &&
-    effortLevels.length === 0 &&
-    thinkingEnabled === null &&
-    contextWindowOptions.length <= 1;
-  // The shared status ladder (ultrathink → effort → thinking) covers every model
-  // that exposes those controls; the fast-only fallback only applies when it does not.
-  const primaryLabel =
-    resolveComposerTraitStatusLabel(selection) ??
-    (isFastOnlyControl ? (fastModeEnabled ? "Fast" : "Default") : null);
-  // Only departures from the default context window earn a label.
-  const contextWindowLabel =
-    contextWindowOptions.length > 1 && contextWindow !== defaultContextWindow
-      ? (contextWindowOptions.find((option) => option.value === contextWindow)?.label ?? null)
-      : null;
-  const agentOptions = getAgentOptions(options.provider, options.runtimeAgents);
-  const selectedAgent = getSelectedAgentValue(options.provider, options.modelOptions);
-  const agentLabel = findAgentLabel(agentOptions, selectedAgent);
-  // Agent name stands in as the primary label for agent-driven providers
-  // (opencode) that expose no effort/thinking controls.
-  const resolvedPrimaryLabel = primaryLabel ?? agentLabel;
-  const showsFastBadge = showsComposerFastModeBadge(selection) && !isFastOnlyControl;
-  const summaryText = [resolvedPrimaryLabel, showsFastBadge ? "Fast" : null, contextWindowLabel]
-    .filter((value): value is string => Boolean(value))
-    .join(" · ");
+  const booleanDescriptors = descriptors.filter(
+    (descriptor): descriptor is Extract<ProviderOptionDescriptor, { type: "boolean" }> =>
+      descriptor.type === "boolean",
+  );
+  const primarySelectDescriptor = selectDescriptors[0] ?? null;
+  const contextWindowDescriptor =
+    selectDescriptors.find((descriptor) => descriptor.id === "contextWindow") ?? null;
+  const agentDescriptor = selectDescriptors.find((descriptor) => descriptor.id === "agent") ?? null;
+  const fastModeDescriptor =
+    booleanDescriptors.find((descriptor) => descriptor.id === "fastMode") ?? null;
+  const thinkingDescriptor =
+    booleanDescriptors.find((descriptor) => descriptor.id === "thinking") ?? null;
+
+  // Prompt-controlled effort (e.g. ultrathink in prompt text)
+  const ultrathinkPromptControlled =
+    allowPromptInjectedEffort &&
+    (primarySelectDescriptor?.promptInjectedValues?.length ?? 0) > 0 &&
+    isClaudeUltrathinkPrompt(prompt);
+
+  // Check if "ultrathink" appears in the body text (not just our prefix)
+  const ultrathinkInBodyText =
+    ultrathinkPromptControlled && isClaudeUltrathinkPrompt(prompt.replace(/^Ultrathink:\s*/i, ""));
+  const effort =
+    (ultrathinkPromptControlled
+      ? "ultrathink"
+      : getDescriptorStringValue(primarySelectDescriptor)) ?? null;
+  const thinkingEnabled =
+    typeof thinkingDescriptor?.currentValue === "boolean" ? thinkingDescriptor.currentValue : null;
+  const contextWindow = getDescriptorStringValue(contextWindowDescriptor);
+  const selectedAgent = getDescriptorStringValue(agentDescriptor);
+  const selectedAgentLabel = agentDescriptor
+    ? getProviderOptionCurrentLabel(agentDescriptor)
+    : null;
 
   return {
-    contextWindowLabel,
-    primaryLabel: resolvedPrimaryLabel,
-    showsFastBadge,
-    summaryText,
+    caps,
+    descriptors,
+    selectDescriptors,
+    booleanDescriptors,
+    primarySelectDescriptor,
+    contextWindowDescriptor,
+    agentDescriptor,
+    fastModeDescriptor,
+    thinkingDescriptor,
+    effort,
+    thinkingEnabled,
+    contextWindow,
+    ultrathinkPromptControlled,
+    ultrathinkInBodyText,
+    selectedAgent,
+    selectedAgentLabel,
   };
 }
 
-// Compact icon toggle for fast mode. Outline zap (Central reversed set) = default
-// speed, filled zap (Central fill set) = fast mode on. Toggling keeps the menu
-// open so the state flip is visible in place. `tone="muted"` docks at the far
-// right of the Effort section header; `tone="accent"` is the slider card's
-// larger, accent-colored variant.
-export function FastModeToggle({
-  enabled,
-  onToggle,
-  tone: toneProp,
-}: {
-  enabled: boolean;
-  onToggle: () => void;
-  tone?: "muted" | "accent";
+function getTraitsSectionVisibility(input: {
+  provider: ProviderDriverKind;
+  models: ReadonlyArray<ServerProviderModel>;
+  model: string | null | undefined;
+  prompt: string;
+  modelOptions: ProviderOptions | null | undefined;
+  allowPromptInjectedEffort?: boolean;
 }) {
-  const tone = toneProp ?? "muted";
-  const Icon = enabled ? FastModeIcon : FastModeOutlineIcon;
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <button
-            type="button"
-            aria-label="Fast mode"
-            aria-pressed={enabled}
-            className={cn(
-              "flex shrink-0 cursor-pointer items-center justify-center transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_6%,transparent)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[color:var(--color-border-focus)]/60",
-              tone === "accent" ? "size-6 rounded-lg" : "-my-1 size-5 rounded-md",
-            )}
-            onClick={onToggle}
-          />
-        }
-      >
-        <Icon
-          aria-hidden="true"
-          className={cn(
-            "size-3.5",
-            enabled
-              ? tone === "accent"
-                ? "text-[var(--color-text-accent)]"
-                : "text-[hsl(var(--chart-4))]"
-              : "text-muted-foreground/70",
-          )}
-        />
-      </TooltipTrigger>
-      <TooltipPopup side="top" variant="picker">
-        {enabled ? "Fast mode on" : "Fast mode off"}
-      </TooltipPopup>
-    </Tooltip>
+  const selected = getSelectedTraits(
+    input.provider,
+    input.models,
+    input.model,
+    input.prompt,
+    input.modelOptions,
+    input.allowPromptInjectedEffort ?? true,
   );
+
+  const showEffort = selected.primarySelectDescriptor !== null;
+  const showThinking = selected.thinkingDescriptor !== null;
+  const showFastMode = selected.fastModeDescriptor !== null;
+  const showContextWindow = selected.contextWindowDescriptor !== null;
+  const showAgent = selected.agentDescriptor !== null;
+
+  return {
+    ...selected,
+    showEffort,
+    showThinking,
+    showFastMode,
+    showContextWindow,
+    showAgent,
+    hasAnyControls: showEffort || showThinking || showFastMode || showContextWindow || showAgent,
+  };
 }
 
-interface TraitRadioOption {
-  value: string;
-  label: string;
-  isDefault?: boolean;
-  description?: string | null;
-}
-
-// Shared layout for one composer trait section: a labeled radio group whose rows
-// optionally show a "(default)" suffix and a right-side description tooltip.
-// `onSelectionComplete` runs on every row click (not just on value change) so
-// re-selecting the already-active option still closes the menu — a radio group's
-// `onValueChange` does not fire when the value is unchanged.
-function TraitRadioSection({
-  label,
-  labelTrailing,
-  note,
-  value,
-  options,
-  disabled,
-  onValueChange,
-  onSelectionComplete,
-}: {
-  label: string;
-  labelTrailing?: ReactNode;
-  note?: ReactNode;
-  value: string;
-  options: ReadonlyArray<TraitRadioOption>;
-  disabled?: boolean;
-  onValueChange: (value: string) => void;
-  onSelectionComplete?: (() => void) | undefined;
-}) {
-  return (
-    <MenuGroup>
-      {labelTrailing ? (
-        <MenuGroupLabel className="flex items-center justify-between gap-2">
-          {label}
-          {labelTrailing}
-        </MenuGroupLabel>
-      ) : (
-        <MenuGroupLabel>{label}</MenuGroupLabel>
-      )}
-      {note}
-      <MenuRadioGroup value={value} onValueChange={onValueChange}>
-        {options.map((option) => {
-          const item = (
-            <MenuRadioItem
-              key={option.value}
-              value={option.value}
-              {...(disabled ? { disabled: true } : {})}
-              onClick={() => onSelectionComplete?.()}
-            >
-              {option.label}
-              {option.isDefault ? " (default)" : ""}
-            </MenuRadioItem>
-          );
-          return option.description ? (
-            <Tooltip key={option.value}>
-              <TooltipTrigger render={item} />
-              <TooltipPopup
-                side="right"
-                variant="picker"
-                className="max-w-80 whitespace-normal leading-tight"
-              >
-                {option.description}
-              </TooltipPopup>
-            </Tooltip>
-          ) : (
-            item
-          );
-        })}
-      </MenuRadioGroup>
-    </MenuGroup>
-  );
+export function shouldRenderTraitsControls(input: {
+  provider: ProviderDriverKind;
+  models: ReadonlyArray<ServerProviderModel>;
+  model: string | null | undefined;
+  prompt: string;
+  modelOptions: ProviderOptions | null | undefined;
+  allowPromptInjectedEffort?: boolean;
+}): boolean {
+  return getTraitsSectionVisibility(input).hasAnyControls;
 }
 
 export interface TraitsMenuContentProps {
-  provider: ProviderKind;
-  threadId: ThreadId;
+  provider: ProviderDriverKind;
+  instanceId?: ProviderInstanceId;
+  models: ReadonlyArray<ServerProviderModel>;
   model: string | null | undefined;
-  runtimeModel?: ProviderModelDescriptor | undefined;
-  runtimeModels?: ReadonlyArray<ProviderModelDescriptor> | null | undefined;
-  runtimeAgents?: ReadonlyArray<ProviderAgentDescriptor> | null | undefined;
   prompt: string;
   onPromptChange: (prompt: string) => void;
-  includeFastMode?: boolean;
-  // Drop the Effort ladder and the Speed section; the slider card renders both
-  // itself and only needs the remaining trait sections (thinking, context, agent).
-  excludeEffort?: boolean;
   modelOptions?: ProviderOptions | null | undefined;
-  onSelectionComplete?: () => void;
+  allowPromptInjectedEffort?: boolean;
+  triggerVariant?: VariantProps<typeof buttonVariants>["variant"];
+  triggerClassName?: string;
+  disabledReason?: string;
 }
 
 export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   provider,
-  threadId,
+  instanceId,
+  models,
   model,
-  runtimeModel,
-  runtimeAgents,
   prompt,
   onPromptChange,
-  includeFastMode: includeFastModeProp,
-  excludeEffort: excludeEffortProp,
   modelOptions,
-  onSelectionComplete,
-}: TraitsMenuContentProps) {
-  const excludeEffort = excludeEffortProp ?? false;
-  const includeFastMode = (includeFastModeProp ?? true) && !excludeEffort;
-  const selection = getComposerTraitSelection(provider, model, prompt, modelOptions, runtimeModel);
-  const {
-    caps,
-    defaultEffort,
-    effort,
-    thinkingEnabled,
-    fastModeEnabled,
-    contextWindowOptions,
-    contextWindow,
-    defaultContextWindow,
-    contextWindowDescriptor,
-    ultrathinkPromptControlled,
-    fastModeDescriptor,
-  } = selection;
-  const effortLevels = excludeEffort ? [] : selection.effortLevels;
-  const hasVisibleControls = hasVisibleComposerTraitControls(
-    { caps, effortLevels, thinkingEnabled, contextWindowOptions, fastModeDescriptor },
-    { includeFastMode },
-  );
-  const supportsFastModeControl = supportsComposerFastModeControl({ caps, fastModeDescriptor });
-  // Fast mode rides the Effort header as a compact icon toggle whenever an
-  // effort section exists; fast-only models (no effort levels) keep the
-  // standalone radio section instead.
-  const showsFastModeEffortToggle =
-    includeFastMode && supportsFastModeControl && effortLevels.length > 0;
-  const agentOptions = getAgentOptions(provider, runtimeAgents);
-  const defaultAgent = defaultAgentForProvider(provider);
-  const selectedAgent = getSelectedAgentValue(provider, modelOptions);
-  const hasAgentControls = agentOptions.length > 0 && defaultAgent !== null;
-  const hasPriorContextWindowSection = thinkingEnabled !== null;
-  // Resolved up here rather than inline. React Compiler cannot lower a `??` in an object-key
-  // position, which would make it skip this component entirely.
-  const contextWindowTraitId = contextWindowDescriptor?.id ?? "contextWindow";
-  const hasPriorEffortSection = thinkingEnabled !== null || contextWindowOptions.length > 1;
-  const hasPriorFastModeSection =
-    thinkingEnabled !== null || effortLevels.length > 0 || contextWindowOptions.length > 1;
-
-  const commitTraitOptions = useComposerTraitCommit({ threadId, provider, model, modelOptions });
-  // Commit a trait change and close the menu. Every section funnels here; the
-  // fast-mode header toggle passes `keepMenuOpen` so its state flip stays visible.
-  const commitTrait = useCallback(
-    (patch: Record<string, unknown>, options?: { keepMenuOpen?: boolean }) => {
-      commitTraitOptions(patch);
-      if (!options?.keepMenuOpen) {
-        onSelectionComplete?.();
+  allowPromptInjectedEffort = true,
+  disabledReason,
+  ...persistence
+}: TraitsMenuContentProps & TraitsPersistence) {
+  const setProviderModelOptions = useComposerDraftStore((store) => store.setProviderModelOptions);
+  const updateModelOptions = useCallback(
+    (nextOptions: ProviderOptions | undefined) => {
+      if (disabledReason) {
+        return;
       }
+      if ("onModelOptionsChange" in persistence) {
+        persistence.onModelOptionsChange(nextOptions);
+        return;
+      }
+      const threadTarget = persistence.threadRef ?? persistence.draftId;
+      if (!threadTarget) {
+        return;
+      }
+      setProviderModelOptions(threadTarget, provider, nextOptions, {
+        ...(instanceId ? { instanceId } : {}),
+        model,
+        persistSticky: true,
+      });
     },
-    [commitTraitOptions, onSelectionComplete],
+    [disabledReason, instanceId, model, persistence, provider, setProviderModelOptions],
   );
-
-  // Deliberately not wrapped in `useCallback`: its inputs all come out of one
-  // `getComposerTraitSelection` call, which React Compiler memoizes as a single scope, so no
-  // hand-written dependency list can match it and the validator refuses to compile the component at
-  // all. Letting the compiler own this memoization is what gets the whole file optimized.
-  const handleEffortChange = (value: string) => {
-    const plan = planComposerEffortChange({ provider, selection, prompt, value });
-    if (!plan) return;
-    if (plan.kind === "prompt") {
-      onPromptChange(plan.prompt);
-      onSelectionComplete?.();
-      return;
-    }
-    commitTrait(plan.patch);
+  const {
+    descriptors,
+    selectDescriptors,
+    booleanDescriptors,
+    primarySelectDescriptor,
+    ultrathinkPromptControlled,
+    ultrathinkInBodyText,
+    hasAnyControls,
+  } = getTraitsSectionVisibility({
+    provider,
+    models,
+    model,
+    prompt,
+    modelOptions,
+    allowPromptInjectedEffort,
+  });
+  const updateDescriptors = (nextDescriptors: ReadonlyArray<ProviderOptionDescriptor>) => {
+    updateModelOptions(buildProviderOptionSelectionsFromDescriptors(nextDescriptors));
   };
 
-  if (!hasVisibleControls && !hasAgentControls) {
+  const handleSelectChange = (
+    descriptor: Extract<ProviderOptionDescriptor, { type: "select" }>,
+    value: string,
+  ) => {
+    if (disabledReason) return;
+    if (!value) return;
+    if (descriptor.promptInjectedValues?.includes(value)) {
+      const nextPrompt =
+        prompt.trim().length === 0
+          ? ULTRATHINK_PROMPT_PREFIX
+          : applyClaudePromptEffortPrefix(prompt, "ultrathink");
+      onPromptChange(nextPrompt);
+      return;
+    }
+    if (ultrathinkInBodyText && descriptor.id === primarySelectDescriptor?.id) return;
+    if (ultrathinkPromptControlled && descriptor.id === primarySelectDescriptor?.id) {
+      const stripped = prompt.replace(/^Ultrathink:\s*/i, "");
+      onPromptChange(stripped);
+    }
+    updateDescriptors(replaceDescriptorCurrentValue(descriptors, descriptor.id, value));
+  };
+
+  if (!hasAnyControls) {
     return null;
   }
 
   return (
     <>
-      {thinkingEnabled !== null ? (
-        <TraitRadioSection
-          label="Thinking"
-          value={thinkingEnabled ? "on" : "off"}
-          options={[
-            { value: "on", label: "On (default)" },
-            { value: "off", label: "Off" },
-          ]}
-          onValueChange={(value) => commitTrait({ thinking: value === "on" })}
-          onSelectionComplete={onSelectionComplete}
-        />
-      ) : null}
-      {contextWindowOptions.length > 1 ? (
-        <>
-          {hasPriorContextWindowSection ? <MenuDivider /> : null}
-          <TraitRadioSection
-            label={contextWindowDescriptor?.label ?? "Context"}
-            value={contextWindow ?? defaultContextWindow ?? ""}
-            options={contextWindowOptions.map((option) => ({
-              value: option.value,
-              label: option.label,
-              isDefault: option.value === defaultContextWindow,
-            }))}
-            onValueChange={(value) => commitTrait({ [contextWindowTraitId]: value })}
-            onSelectionComplete={onSelectionComplete}
-          />
-        </>
-      ) : null}
-      {effortLevels.length > 0 ? (
-        <>
-          {hasPriorEffortSection ? <MenuDivider /> : null}
-          <TraitRadioSection
-            label={provider === "opencode" ? "Variant" : "Effort"}
-            labelTrailing={
-              showsFastModeEffortToggle ? (
-                <FastModeToggle
-                  enabled={fastModeEnabled}
-                  onToggle={() =>
-                    commitTrait({ fastMode: !fastModeEnabled }, { keepMenuOpen: true })
-                  }
-                />
-              ) : undefined
-            }
-            note={
-              ultrathinkPromptControlled ? (
-                <div className="px-2 pb-1.5 text-muted-foreground/80 text-ui leading-snug">
-                  Remove Ultrathink from the prompt to change effort.
+      {selectDescriptors.map((descriptor, index) => {
+        const selectedValue =
+          ultrathinkPromptControlled && descriptor.id === primarySelectDescriptor?.id
+            ? "ultrathink"
+            : (getDescriptorStringValue(descriptor) ?? "");
+
+        return (
+          <div key={descriptor.id}>
+            {index > 0 ? <MenuDivider /> : null}
+            <MenuGroup>
+              <div className="px-2 pt-1.5 pb-1 font-medium text-muted-foreground text-xs">
+                {descriptor.label}
+              </div>
+              {ultrathinkInBodyText && descriptor.id === primarySelectDescriptor?.id ? (
+                <div className="px-2 pb-1.5 text-muted-foreground/80 text-xs">
+                  Your prompt contains &quot;ultrathink&quot; in the text. Remove it to change this
+                  option.
                 </div>
-              ) : undefined
-            }
-            value={effort ?? ""}
-            disabled={ultrathinkPromptControlled}
-            options={effortLevels.map((option) => ({
-              value: option.value,
-              label: option.label,
-              isDefault: option.value === defaultEffort,
-              description: option.description ?? null,
-            }))}
-            onValueChange={handleEffortChange}
-            onSelectionComplete={onSelectionComplete}
-          />
-        </>
-      ) : null}
-      {includeFastMode && supportsFastModeControl && !showsFastModeEffortToggle ? (
-        <>
-          {hasPriorFastModeSection ? <MenuDivider /> : null}
-          <TraitRadioSection
-            label="Speed"
-            value={fastModeEnabled ? "on" : "off"}
-            options={[
-              { value: "off", label: "Default" },
-              { value: "on", label: "Fast" },
-            ]}
-            onValueChange={(value) => commitTrait({ fastMode: value === "on" })}
-            onSelectionComplete={onSelectionComplete}
-          />
-        </>
-      ) : null}
-      {hasAgentControls ? (
-        <>
-          {hasVisibleControls ? <MenuDivider /> : null}
-          <TraitRadioSection
-            label="Agent"
-            value={selectedAgent ?? defaultAgent ?? ""}
-            options={agentOptions.map((agent) => ({
-              value: agent.name,
-              label: agent.displayName,
-              isDefault: agent.name === defaultAgent,
-              description: agent.description ?? null,
-            }))}
-            onValueChange={(value) => {
-              if (!value || !defaultAgent) return;
-              commitTrait({ agent: value === defaultAgent ? undefined : value });
-            }}
-            onSelectionComplete={onSelectionComplete}
-          />
-        </>
-      ) : null}
+              ) : null}
+              <MenuRadioGroup
+                value={selectedValue}
+                onValueChange={(value) => handleSelectChange(descriptor, value)}
+              >
+                {descriptor.options.map((option) => (
+                  <MenuRadioItem
+                    key={option.id}
+                    value={option.id}
+                    hideIndicator
+                    // Base UI keeps radio menus open by default. Close on pick so
+                    // the traits menu behaves like the model picker.
+                    closeOnClick
+                    disabled={
+                      Boolean(disabledReason) ||
+                      (ultrathinkInBodyText && descriptor.id === primarySelectDescriptor?.id)
+                    }
+                  >
+                    <span className="flex w-full min-w-0 flex-col">
+                      <span className="flex w-full min-w-0 items-center justify-between gap-3">
+                        <span className="min-w-0 truncate">
+                          {option.label}
+                          {option.isDefault ? (
+                            <>
+                              {" "}
+                              <DefaultBadge />
+                            </>
+                          ) : null}
+                        </span>
+                      </span>
+                      {option.description ? (
+                        <span className="max-w-56 text-pretty text-muted-foreground/80 text-xs">
+                          {option.description}
+                        </span>
+                      ) : null}
+                    </span>
+                  </MenuRadioItem>
+                ))}
+              </MenuRadioGroup>
+            </MenuGroup>
+          </div>
+        );
+      })}
+      {booleanDescriptors.map((descriptor, index) => {
+        const selectedValue = descriptor.currentValue === true ? "on" : "off";
+
+        return (
+          <div key={descriptor.id}>
+            {index > 0 || selectDescriptors.length > 0 ? <MenuDivider /> : null}
+            <MenuGroup>
+              <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">
+                {descriptor.label}
+              </div>
+              <MenuRadioGroup
+                value={selectedValue}
+                onValueChange={(value) => {
+                  if (disabledReason) return;
+                  updateDescriptors(
+                    replaceDescriptorCurrentValue(descriptors, descriptor.id, value === "on"),
+                  );
+                }}
+              >
+                {(["on", "off"] as const).map((value) => (
+                  <MenuRadioItem
+                    key={value}
+                    value={value}
+                    hideIndicator
+                    closeOnClick
+                    disabled={Boolean(disabledReason)}
+                  >
+                    <span className="flex w-full min-w-0 items-center justify-between gap-3">
+                      <span>{value === "on" ? "On" : "Off"}</span>
+                    </span>
+                  </MenuRadioItem>
+                ))}
+              </MenuRadioGroup>
+            </MenuGroup>
+          </div>
+        );
+      })}
     </>
   );
 });
 
+/**
+ * Build the traits trigger's text label plus whether the fast-mode bolt should
+ * render. Claude and Cursor expose fast mode as a boolean, while Codex exposes
+ * it through the Standard/Fast service tiers. In either form, fast mode is a
+ * lightning bolt when on and nothing at all when off. The one exception is when
+ * fast mode is the only trait, where a bare bolt (or bare chevron) would leave
+ * the trigger unreadable.
+ */
+export function buildTraitsTriggerDisplay(input: {
+  provider: ProviderDriverKind;
+  descriptors: ReadonlyArray<ProviderOptionDescriptor>;
+  primarySelectDescriptorId: string | null;
+  ultrathinkPromptControlled: boolean;
+}): { label: string; showFastModeIcon: boolean } {
+  let fastModeFallbackLabel: string | null = null;
+  let fastModeEnabled = false;
+  const labels: Array<string> = [];
+  for (const descriptor of input.descriptors) {
+    if (descriptor.id === "fastMode" && descriptor.type === "boolean") {
+      fastModeEnabled = descriptor.currentValue === true;
+      fastModeFallbackLabel = fastModeEnabled ? "Fast" : "Normal";
+      continue;
+    }
+    if (
+      input.provider === "codex" &&
+      descriptor.id === "serviceTier" &&
+      descriptor.type === "select"
+    ) {
+      const currentValue = getProviderOptionCurrentValue(descriptor);
+      const fastTier = descriptor.options.find(({ label }) => label === "Fast");
+      if (fastTier && (currentValue === "default" || currentValue === fastTier.id)) {
+        fastModeEnabled = currentValue === fastTier.id;
+        fastModeFallbackLabel =
+          descriptor.options.find(({ id }) => id === currentValue)?.label ??
+          (fastModeEnabled ? "Fast" : "Normal");
+        continue;
+      }
+    }
+    const label =
+      input.ultrathinkPromptControlled && descriptor.id === input.primarySelectDescriptorId
+        ? "Ultrathink"
+        : descriptor.type === "boolean"
+          ? `${descriptor.label} ${descriptor.currentValue === true ? "On" : "Off"}`
+          : getProviderOptionCurrentLabel(descriptor);
+    if (typeof label === "string" && label.length > 0) {
+      labels.push(label);
+    }
+  }
+
+  // Only fall back to text when fast mode is genuinely the sole trait. Keying
+  // off an empty label list alone would also catch descriptors that resolved to
+  // no label at all, printing a bogus "Normal" for a model without fast mode.
+  if (labels.length === 0 && fastModeFallbackLabel !== null) {
+    return { label: fastModeFallbackLabel, showFastModeIcon: false };
+  }
+  return { label: labels.join(" · "), showFastModeIcon: fastModeEnabled };
+}
+
 export const TraitsPicker = memo(function TraitsPicker({
   provider,
-  threadId,
+  instanceId,
+  models,
   model,
-  runtimeModel,
-  runtimeAgents,
   prompt,
   onPromptChange,
-  includeFastMode: includeFastModeProp,
   modelOptions,
-  open,
-  onOpenChange,
-  onSelectionCommitted,
-  shortcutLabel,
-  hideLabel: hideLabelProp,
-}: TraitsMenuContentProps & {
-  open?: boolean;
-  onOpenChange?: (open: boolean) => void;
-  onSelectionCommitted?: () => void;
-  shortcutLabel?: string | null;
-  // Icon-only trigger (gear + chevron) for narrow composers; the effort/context
-  // summary moves to title/sr-only.
-  hideLabel?: boolean;
-}) {
-  const includeFastMode = includeFastModeProp ?? true;
-  const hideLabel = hideLabelProp ?? false;
-  const [uncontrolledMenuOpen, setUncontrolledMenuOpen] = useState(false);
-  const selectionCommitTimerRef = useRef<number | null>(null);
-  const isMenuOpen = open ?? uncontrolledMenuOpen;
-  const setMenuOpen = useCallback(
-    (nextOpen: boolean) => {
-      if (open === undefined) {
-        setUncontrolledMenuOpen(nextOpen);
-      }
-      onOpenChange?.(nextOpen);
-    },
-    [onOpenChange, open],
-  );
-  const scheduleSelectionCommitted = useCallback(() => {
-    if (selectionCommitTimerRef.current !== null) {
-      window.clearTimeout(selectionCommitTimerRef.current);
-    }
-    selectionCommitTimerRef.current = window.setTimeout(() => {
-      selectionCommitTimerRef.current = null;
-      onSelectionCommitted?.();
-    }, 0);
-  }, [onSelectionCommitted]);
-  useEffect(
-    () => () => {
-      if (selectionCommitTimerRef.current !== null) {
-        window.clearTimeout(selectionCommitTimerRef.current);
-      }
-    },
-    [],
-  );
-  const handleSelectionComplete = useCallback(() => {
-    setMenuOpen(false);
-    scheduleSelectionCommitted();
-  }, [scheduleSelectionCommitted, setMenuOpen]);
-  const { caps, effortLevels, thinkingEnabled, contextWindowOptions, fastModeDescriptor } =
-    getComposerTraitSelection(provider, model, prompt, modelOptions, runtimeModel);
-  const hasVisibleControls = hasVisibleComposerTraitControls(
-    { caps, effortLevels, thinkingEnabled, contextWindowOptions, fastModeDescriptor },
-    { includeFastMode },
-  );
-  const agentOptions = getAgentOptions(provider, runtimeAgents);
-  const defaultAgent = defaultAgentForProvider(provider);
-  const hasAgentControls = agentOptions.length > 0 && defaultAgent !== null;
-
-  if (!hasVisibleControls && !hasAgentControls) {
+  allowPromptInjectedEffort = true,
+  triggerVariant,
+  triggerClassName,
+  disabledReason,
+  ...persistence
+}: TraitsMenuContentProps & TraitsPersistence) {
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const { descriptors, primarySelectDescriptor, ultrathinkPromptControlled } =
+    getTraitsSectionVisibility({
+      provider,
+      models,
+      model,
+      prompt,
+      modelOptions,
+      allowPromptInjectedEffort,
+    });
+  if (
+    !shouldRenderTraitsControls({
+      provider,
+      models,
+      model,
+      prompt,
+      modelOptions,
+      allowPromptInjectedEffort,
+    })
+  ) {
     return null;
   }
 
-  const {
-    contextWindowLabel,
-    primaryLabel: visiblePrimaryTriggerLabel,
-    showsFastBadge,
-    summaryText: hiddenLabelTitle,
-  } = resolveTraitsTriggerSummary({
+  const { label: triggerLabel, showFastModeIcon } = buildTraitsTriggerDisplay({
     provider,
-    model,
-    prompt,
-    modelOptions,
-    runtimeModel,
-    runtimeAgents,
+    descriptors,
+    primarySelectDescriptorId: primarySelectDescriptor?.id ?? null,
+    ultrathinkPromptControlled,
   });
+  const fastModeIcon = showFastModeIcon ? (
+    <>
+      <ComposerControlIcon
+        icon={ZapIcon}
+        className={cn(
+          "fill-current opacity-80",
+          provider === "claudeAgent" ? "text-[#d97757]" : "text-foreground",
+        )}
+      />
+      <span className="sr-only">Fast mode on</span>
+    </>
+  ) : null;
 
   const isCodexStyle = provider === "codex";
-
-  const triggerButton = (
-    <Button
-      size="sm"
-      variant="chrome"
-      className={`min-w-0 shrink-0 justify-start overflow-hidden whitespace-nowrap px-2 sm:px-2.5 [&_svg]:mx-0 ${COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME}`}
-      aria-label="Change effort, context, and speed"
-      {...(hideLabel && hiddenLabelTitle.length > 0 ? { title: hiddenLabelTitle } : {})}
-    />
-  );
-
-  const triggerContent = hideLabel ? (
-    <span className="flex min-w-0 items-center gap-1">
-      <SettingsIcon aria-hidden="true" className="size-3.5 shrink-0 opacity-75" />
-      {hiddenLabelTitle.length > 0 ? <span className="sr-only">{hiddenLabelTitle}</span> : null}
-      <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 opacity-60" />
-    </span>
-  ) : isCodexStyle ? (
-    <span className="flex min-w-0 w-full items-center gap-2 overflow-hidden">
-      <span className="min-w-0 flex flex-1 items-center gap-1.5 truncate">
-        {visiblePrimaryTriggerLabel ? (
-          <span className="truncate">{visiblePrimaryTriggerLabel}</span>
-        ) : (
-          <span className="truncate">Options</span>
-        )}
-        {showsFastBadge ? (
-          <>
-            <span className="shrink-0 text-muted-foreground/45">·</span>
-            <span className="inline-flex shrink-0 items-center gap-1">
-              <FastModeIcon aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
-              <span>Fast</span>
-            </span>
-          </>
-        ) : null}
-        {contextWindowLabel ? (
-          <>
-            {visiblePrimaryTriggerLabel || showsFastBadge ? (
-              <span className="shrink-0 text-muted-foreground/45">·</span>
-            ) : null}
-            <span className="shrink-0">{contextWindowLabel}</span>
-          </>
-        ) : null}
-      </span>
-      <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 opacity-60" />
-    </span>
-  ) : (
-    <>
-      <span className="inline-flex items-center gap-1.5">
-        <span>{visiblePrimaryTriggerLabel ?? "Options"}</span>
-        {showsFastBadge ? (
-          <>
-            <span className="text-muted-foreground/45">·</span>
-            <span className="inline-flex items-center gap-1">
-              <FastModeIcon aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
-              <span>Fast</span>
-            </span>
-          </>
-        ) : null}
-        {contextWindowLabel ? (
-          <>
-            {visiblePrimaryTriggerLabel || showsFastBadge ? (
-              <span className="text-muted-foreground/45">·</span>
-            ) : null}
-            <span>{contextWindowLabel}</span>
-          </>
-        ) : null}
-      </span>
-      <ChevronDownIcon aria-hidden="true" className="size-3 opacity-60" />
-    </>
+  const traitsTrigger = (
+    <MenuTrigger
+      render={
+        <ComposerControl
+          variant={triggerVariant ?? "ghost"}
+          className={cn(
+            isCodexStyle
+              ? "min-w-0 max-w-40 shrink justify-start overflow-hidden whitespace-nowrap sm:max-w-48"
+              : "shrink-0 whitespace-nowrap",
+            triggerClassName,
+          )}
+          disabled={Boolean(disabledReason)}
+          aria-label={disabledReason ? `Provider traits. ${disabledReason}` : undefined}
+        />
+      }
+    >
+      {isCodexStyle ? (
+        <span className="flex min-w-0 w-full items-center gap-1.5 overflow-hidden">
+          {fastModeIcon}
+          <span className="min-w-0 truncate">{triggerLabel}</span>
+          <ComposerControlChevron />
+        </span>
+      ) : (
+        <>
+          {fastModeIcon}
+          <span>{triggerLabel}</span>
+          <ComposerControlChevron />
+        </>
+      )}
+    </MenuTrigger>
   );
 
   return (
     <Menu
-      open={isMenuOpen}
+      open={disabledReason ? false : isMenuOpen}
       onOpenChange={(open) => {
-        setMenuOpen(open);
+        if (disabledReason) return;
+        setIsMenuOpen(open);
       }}
     >
-      {shortcutLabel ? (
+      {disabledReason ? (
         <Tooltip>
-          <TooltipTrigger render={<MenuTrigger render={triggerButton} />}>
-            {triggerContent}
+          <TooltipTrigger render={<span className="inline-flex" title={disabledReason} />}>
+            {traitsTrigger}
           </TooltipTrigger>
-          {!isMenuOpen ? (
-            <TooltipPopup side="top" sideOffset={6} variant="picker">
-              <span className="inline-flex items-center gap-2 px-1 py-0.5">
-                <span>Change effort, context, and speed</span>
-                <ShortcutKbd
-                  shortcutLabel={shortcutLabel}
-                  className="h-4 min-w-4 px-1 text-ui-2xs text-muted-foreground"
-                />
-              </span>
-            </TooltipPopup>
-          ) : null}
+          <TooltipPopup side="top">{disabledReason}</TooltipPopup>
         </Tooltip>
       ) : (
-        <MenuTrigger render={triggerButton}>{triggerContent}</MenuTrigger>
+        traitsTrigger
       )}
-      <ComposerPickerMenuPopup align="start" fixedWidth>
+      <MenuPopup align="start">
         <TraitsMenuContent
           provider={provider}
-          threadId={threadId}
+          {...(instanceId ? { instanceId } : {})}
+          models={models}
           model={model}
-          runtimeModel={runtimeModel}
-          runtimeAgents={runtimeAgents}
           prompt={prompt}
           onPromptChange={onPromptChange}
-          includeFastMode={includeFastMode}
           modelOptions={modelOptions}
-          onSelectionComplete={handleSelectionComplete}
+          allowPromptInjectedEffort={allowPromptInjectedEffort}
+          {...(disabledReason ? { disabledReason } : {})}
+          {...persistence}
         />
-      </ComposerPickerMenuPopup>
+      </MenuPopup>
     </Menu>
   );
 });

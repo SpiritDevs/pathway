@@ -1,7 +1,7 @@
 "use client";
 
 import { Autocomplete as AutocompletePrimitive } from "@base-ui/react/autocomplete";
-import { ChevronsUpDownIcon, XIcon } from "~/lib/icons";
+import { ChevronsUpDownIcon, XIcon } from "lucide-react";
 
 import { cn } from "~/lib/utils";
 import { Input } from "~/components/ui/input";
@@ -11,23 +11,18 @@ const Autocomplete = AutocompletePrimitive.Root;
 
 function AutocompleteInput({
   className,
-  showTrigger: showTriggerProp,
-  showClear: showClearProp,
+  showTrigger = false,
+  showClear = false,
   startAddon,
   size,
-  variant: variantProp,
   ...props
 }: Omit<AutocompletePrimitive.Input.Props, "size"> & {
   showTrigger?: boolean;
   showClear?: boolean;
   startAddon?: React.ReactNode;
   size?: "sm" | "default" | "lg" | number;
-  variant?: "default" | "soft";
   ref?: React.Ref<HTMLInputElement>;
 }) {
-  const showTrigger = showTriggerProp ?? false;
-  const showClear = showClearProp ?? false;
-  const variant = variantProp ?? "default";
   const sizeValue = (size ?? "default") as "sm" | "default" | "lg" | number;
 
   return (
@@ -51,7 +46,7 @@ function AutocompleteInput({
           className,
         )}
         data-slot="autocomplete-input"
-        render={<Input nativeInput size={sizeValue} variant={variant} />}
+        render={<Input nativeInput size={sizeValue} />}
         {...props}
       />
       {showTrigger && (
@@ -83,10 +78,10 @@ function AutocompleteInput({
 function AutocompletePopup({
   className,
   children,
-  side: sideProp,
-  sideOffset: sideOffsetProp,
+  side = "bottom",
+  sideOffset = 4,
   alignOffset,
-  align: alignProp,
+  align = "start",
   anchor,
   ...props
 }: AutocompletePrimitive.Popup.Props & {
@@ -96,23 +91,20 @@ function AutocompletePopup({
   side?: AutocompletePrimitive.Positioner.Props["side"];
   anchor?: AutocompletePrimitive.Positioner.Props["anchor"];
 }) {
-  const side = sideProp ?? "bottom";
-  const sideOffset = sideOffsetProp ?? 4;
-  const align = alignProp ?? "start";
   return (
     <AutocompletePrimitive.Portal>
       <AutocompletePrimitive.Positioner
         align={align}
         alignOffset={alignOffset}
         anchor={anchor}
-        className="z-50 select-none"
+        className="z-[130] select-none"
         data-slot="autocomplete-positioner"
         side={side}
         sideOffset={sideOffset}
       >
         <span
           className={cn(
-            "relative flex max-h-full min-w-(--anchor-width) max-w-(--available-width) origin-(--transform-origin) rounded-lg border border-[color:var(--color-border-light)] bg-[var(--color-background-surface-under)] shadow-lg/5 transition-[scale,opacity] before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-lg)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
+            "relative flex max-h-full min-w-(--anchor-width) max-w-(--available-width) origin-(--transform-origin) rounded-lg border bg-popover not-dark:bg-clip-padding shadow-lg/5 transition-[scale,opacity] before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-lg)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
             className,
           )}
         >
@@ -129,12 +121,11 @@ function AutocompletePopup({
   );
 }
 
-// Match Input and Select sizing, including changes to the app typography setting.
 function AutocompleteItem({ className, children, ...props }: AutocompletePrimitive.Item.Props) {
   return (
     <AutocompletePrimitive.Item
       className={cn(
-        "flex min-h-8 cursor-default select-none items-center rounded-sm px-2 py-1 text-ui outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 sm:min-h-7 sm:text-ui",
+        "flex min-h-8 cursor-default select-none items-center rounded-sm px-2 py-1 text-base outline-none hover:bg-accent data-disabled:pointer-events-none data-selected:bg-accent/50 data-selected:text-foreground data-highlighted:bg-accent data-highlighted:text-accent-foreground [&[data-highlighted][data-selected]]:bg-accent [&[data-highlighted][data-selected]]:text-accent-foreground data-disabled:opacity-64 sm:min-h-7 sm:text-sm [&_svg:not([class*='text-'])]:text-muted-foreground",
         className,
       )}
       data-slot="autocomplete-item"
@@ -168,7 +159,7 @@ function AutocompleteGroup({ className, ...props }: AutocompletePrimitive.Group.
 function AutocompleteGroupLabel({ className, ...props }: AutocompletePrimitive.GroupLabel.Props) {
   return (
     <AutocompletePrimitive.GroupLabel
-      className={cn("px-2 py-1.5 font-medium text-muted-foreground text-ui-xs", className)}
+      className={cn("px-2 py-1.5 font-medium text-muted-foreground text-xs", className)}
       data-slot="autocomplete-group-label"
       {...props}
     />
@@ -179,7 +170,7 @@ function AutocompleteEmpty({ className, ...props }: AutocompletePrimitive.Empty.
   return (
     <AutocompletePrimitive.Empty
       className={cn(
-        "not-empty:p-2 text-center text-ui text-muted-foreground sm:text-ui",
+        "not-empty:p-2 text-center text-base text-muted-foreground sm:text-sm",
         className,
       )}
       data-slot="autocomplete-empty"
@@ -202,7 +193,7 @@ function AutocompleteList({ className, ...props }: AutocompletePrimitive.List.Pr
   return (
     <ScrollArea scrollbarGutter scrollFade>
       <AutocompletePrimitive.List
-        className={cn("not-empty:scroll-py-1 not-empty:p-1 in-data-has-overflow-y:pe-3", className)}
+        className={cn("not-empty:scroll-py-1 not-empty:p-1", className)}
         data-slot="autocomplete-list"
         {...props}
       />
@@ -229,7 +220,7 @@ function AutocompleteStatus({ className, ...props }: AutocompletePrimitive.Statu
   return (
     <AutocompletePrimitive.Status
       className={cn(
-        "px-3 py-2 font-medium text-muted-foreground text-ui-xs empty:m-0 empty:p-0",
+        "px-3 py-2 font-medium text-muted-foreground text-xs empty:m-0 empty:p-0",
         className,
       )}
       data-slot="autocomplete-status"

@@ -1,116 +1,72 @@
 {
-  "name": "@synara/shared",
-  "version": "0.0.0-alpha.1",
+  "name": "@spiritdevs/shared",
   "private": true,
   "type": "module",
   "exports": {
-    "./cuaActionDiagnostics": {
-      "types": "./src/cuaActionDiagnostics.ts",
-      "import": "./src/cuaActionDiagnostics.ts"
+    "./cuaDriverRelease.json": "./src/cuaDriverRelease.json",
+    "./desktopFlavor": {
+      "types": "./src/desktopFlavor.ts",
+      "import": "./src/desktopFlavor.ts"
     },
-    "./computerInvocation": {
-      "types": "./src/computerInvocation.ts",
-      "import": "./src/computerInvocation.ts"
+    "./browserPasswordAutofill": {
+      "types": "./src/browserPasswordAutofill.ts",
+      "import": "./src/browserPasswordAutofill.ts"
     },
-    "./modelImageBudget": {
-      "types": "./src/modelImageBudget.ts",
-      "import": "./src/modelImageBudget.ts"
+    "./Array": {
+      "types": "./src/Array.ts",
+      "import": "./src/Array.ts"
     },
-    "./claudeCache": {
-      "types": "./src/claudeCache.ts",
-      "import": "./src/claudeCache.ts"
+    "./projectFavicon": {
+      "types": "./src/projectFavicon.ts",
+      "import": "./src/projectFavicon.ts"
     },
     "./model": {
       "types": "./src/model.ts",
       "import": "./src/model.ts"
     },
-    "./runtimeMode": {
-      "types": "./src/runtimeMode.ts",
-      "import": "./src/runtimeMode.ts"
+    "./claudeCompaction": {
+      "types": "./src/claudeCompaction.ts",
+      "import": "./src/claudeCompaction.ts"
+    },
+    "./advertisedEndpoint": {
+      "types": "./src/advertisedEndpoint.ts",
+      "import": "./src/advertisedEndpoint.ts"
+    },
+    "./agentAwareness": {
+      "types": "./src/agentAwareness.ts",
+      "import": "./src/agentAwareness.ts"
     },
     "./git": {
       "types": "./src/git.ts",
       "import": "./src/git.ts"
     },
-    "./githubAvatar": {
-      "types": "./src/githubAvatar.ts",
-      "import": "./src/githubAvatar.ts"
+    "./sourceControl": {
+      "types": "./src/sourceControl.ts",
+      "import": "./src/sourceControl.ts"
     },
-    "./githubRepository": {
-      "types": "./src/githubRepository.ts",
-      "import": "./src/githubRepository.ts"
+    "./pullRequestReview": {
+      "types": "./src/pullRequestReview.ts",
+      "import": "./src/pullRequestReview.ts"
     },
     "./logging": {
       "types": "./src/logging.ts",
       "import": "./src/logging.ts"
     },
-    "./errorMessages": {
-      "types": "./src/errorMessages.ts",
-      "import": "./src/errorMessages.ts"
+    "./observability": {
+      "types": "./src/observability.ts",
+      "import": "./src/observability.ts"
+    },
+    "./httpObservability": {
+      "types": "./src/httpObservability.ts",
+      "import": "./src/httpObservability.ts"
     },
     "./shell": {
       "types": "./src/shell.ts",
       "import": "./src/shell.ts"
     },
-    "./loginShellEnvironment": {
-      "types": "./src/loginShellEnvironment.ts",
-      "import": "./src/loginShellEnvironment.ts"
-    },
-    "./synaraHome": {
-      "types": "./src/synaraHome.ts",
-      "import": "./src/synaraHome.ts"
-    },
-    "./staticSnapshot": {
-      "types": "./src/staticSnapshot.ts",
-      "import": "./src/staticSnapshot.ts"
-    },
-    "./windowsProcess": {
-      "types": "./src/windowsProcess.ts",
-      "import": "./src/windowsProcess.ts"
-    },
-    "./executable": {
-      "types": "./src/executable.ts",
-      "import": "./src/executable.ts"
-    },
-    "./platformProcess": {
-      "types": "./src/platformProcess.ts",
-      "import": "./src/platformProcess.ts"
-    },
-    "./processRuntime": {
-      "types": "./src/processRuntime.ts",
-      "import": "./src/processRuntime.ts"
-    },
-    "./filesystemPlatform": {
-      "types": "./src/filesystemPlatform.ts",
-      "import": "./src/filesystemPlatform.ts"
-    },
-    "./platformEnvironment": {
-      "types": "./src/platformEnvironment.ts",
-      "import": "./src/platformEnvironment.ts"
-    },
-    "./wslBridge": {
-      "types": "./src/wslBridge.ts",
-      "import": "./src/wslBridge.ts"
-    },
-    "./windowsCertificate": {
-      "types": "./src/windowsCertificate.ts",
-      "import": "./src/windowsCertificate.ts"
-    },
-    "./codexConfig": {
-      "types": "./src/codexConfig.ts",
-      "import": "./src/codexConfig.ts"
-    },
-    "./desktopChrome": {
-      "types": "./src/desktopChrome.ts",
-      "import": "./src/desktopChrome.ts"
-    },
-    "./desktopTitleBar": {
-      "types": "./src/desktopTitleBar.ts",
-      "import": "./src/desktopTitleBar.ts"
-    },
-    "./desktopIdentity": {
-      "types": "./src/desktopIdentity.ts",
-      "import": "./src/desktopIdentity.ts"
+    "./semver": {
+      "types": "./src/semver.ts",
+      "import": "./src/semver.ts"
     },
     "./Net": {
       "types": "./src/Net.ts",
@@ -120,33 +76,25 @@
       "types": "./src/DrainableWorker.ts",
       "import": "./src/DrainableWorker.ts"
     },
-    "./chatThreads": {
-      "types": "./src/chatThreads.ts",
-      "import": "./src/chatThreads.ts"
-    },
-    "./localServers": {
-      "types": "./src/localServers.ts",
-      "import": "./src/localServers.ts"
-    },
-    "./browserShortcuts": {
-      "types": "./src/browserShortcuts.ts",
-      "import": "./src/browserShortcuts.ts"
-    },
-    "./appSnapShortcut": {
-      "types": "./src/appSnapShortcut.ts",
-      "import": "./src/appSnapShortcut.ts"
-    },
-    "./browserSession": {
-      "types": "./src/browserSession.ts",
-      "import": "./src/browserSession.ts"
-    },
-    "./conversationEdit": {
-      "types": "./src/conversationEdit.ts",
-      "import": "./src/conversationEdit.ts"
+    "./KeyedCoalescingWorker": {
+      "types": "./src/KeyedCoalescingWorker.ts",
+      "import": "./src/KeyedCoalescingWorker.ts"
     },
     "./schemaJson": {
       "types": "./src/schemaJson.ts",
       "import": "./src/schemaJson.ts"
+    },
+    "./schemaYaml": {
+      "types": "./src/schemaYaml.ts",
+      "import": "./src/schemaYaml.ts"
+    },
+    "./toolActivity": {
+      "types": "./src/toolActivity.ts",
+      "import": "./src/toolActivity.ts"
+    },
+    "./pathwayMcpToolPresentation": {
+      "types": "./src/pathwayMcpToolPresentation.ts",
+      "import": "./src/pathwayMcpToolPresentation.ts"
     },
     "./Struct": {
       "types": "./src/Struct.ts",
@@ -156,235 +104,215 @@
       "types": "./src/serverSettings.ts",
       "import": "./src/serverSettings.ts"
     },
-    "./terminalThreads": {
-      "types": "./src/terminalThreads.ts",
-      "import": "./src/terminalThreads.ts"
+    "./backgroundActivitySettings": {
+      "types": "./src/backgroundActivitySettings.ts",
+      "import": "./src/backgroundActivitySettings.ts"
     },
-    "./threadEnvironment": {
-      "types": "./src/threadEnvironment.ts",
-      "import": "./src/threadEnvironment.ts"
+    "./String": {
+      "types": "./src/String.ts",
+      "import": "./src/String.ts"
     },
-    "./threadDetailEvents": {
-      "types": "./src/threadDetailEvents.ts",
-      "import": "./src/threadDetailEvents.ts"
+    "./projectScripts": {
+      "types": "./src/projectScripts.ts",
+      "import": "./src/projectScripts.ts"
     },
-    "./sidechatExpiry": {
-      "types": "./src/sidechatExpiry.ts",
-      "import": "./src/sidechatExpiry.ts"
+    "./threadEnvMode": {
+      "types": "./src/threadEnvMode.ts",
+      "import": "./src/threadEnvMode.ts"
     },
-    "./threadSummary": {
-      "types": "./src/threadSummary.ts",
-      "import": "./src/threadSummary.ts"
+    "./pathwayProjectFile": {
+      "types": "./src/pathwayProjectFile.ts",
+      "import": "./src/pathwayProjectFile.ts"
     },
-    "./pendingInteractions": {
-      "types": "./src/pendingInteractions.ts",
-      "import": "./src/pendingInteractions.ts"
+    "./orchestrationTiming": {
+      "types": "./src/orchestrationTiming.ts",
+      "import": "./src/orchestrationTiming.ts"
     },
-    "./projectContainers": {
-      "types": "./src/projectContainers.ts",
-      "import": "./src/projectContainers.ts"
+    "./orchestrationV2Timeline": {
+      "types": "./src/orchestrationV2Timeline.ts",
+      "import": "./src/orchestrationV2Timeline.ts"
     },
-    "./projectDirectoryName": {
-      "types": "./src/projectDirectoryName.ts",
-      "import": "./src/projectDirectoryName.ts"
+    "./orchestrationV2PendingBackgroundWork": {
+      "types": "./src/orchestrationV2PendingBackgroundWork.ts",
+      "import": "./src/orchestrationV2PendingBackgroundWork.ts"
     },
-    "./pinnedMessages": {
-      "types": "./src/pinnedMessages.ts",
-      "import": "./src/pinnedMessages.ts"
+    "./remote": {
+      "types": "./src/remote.ts",
+      "import": "./src/remote.ts"
     },
-    "./threadWorkspace": {
-      "types": "./src/threadWorkspace.ts",
-      "import": "./src/threadWorkspace.ts"
+    "./relaySigning": {
+      "types": "./src/relaySigning.ts",
+      "import": "./src/relaySigning.ts"
     },
-    "./threadHierarchy": {
-      "types": "./src/threadHierarchy.ts",
-      "import": "./src/threadHierarchy.ts"
+    "./dpop": {
+      "types": "./src/dpop.ts",
+      "import": "./src/dpop.ts"
     },
-    "./subagents": {
-      "types": "./src/subagents.ts",
-      "import": "./src/subagents.ts"
+    "./dpopCommon": {
+      "types": "./src/dpopCommon.ts",
+      "import": "./src/dpopCommon.ts"
     },
-    "./agentMentions": {
-      "types": "./src/agentMentions.ts",
-      "import": "./src/agentMentions.ts"
+    "./relayAuth": {
+      "types": "./src/relayAuth.ts",
+      "import": "./src/relayAuth.ts"
     },
-    "./automationCompletionPolicy": {
-      "types": "./src/automationCompletionPolicy.ts",
-      "import": "./src/automationCompletionPolicy.ts"
+    "./relayUrl": {
+      "types": "./src/relayUrl.ts",
+      "import": "./src/relayUrl.ts"
     },
-    "./automationMode": {
-      "types": "./src/automationMode.ts",
-      "import": "./src/automationMode.ts"
+    "./relayJwt": {
+      "types": "./src/relayJwt.ts",
+      "import": "./src/relayJwt.ts"
     },
-    "./worktreeHandoff": {
-      "types": "./src/worktreeHandoff.ts",
-      "import": "./src/worktreeHandoff.ts"
+    "./oauthScope": {
+      "types": "./src/oauthScope.ts",
+      "import": "./src/oauthScope.ts"
+    },
+    "./searchRanking": {
+      "types": "./src/searchRanking.ts",
+      "import": "./src/searchRanking.ts"
+    },
+    "./qrCode": {
+      "types": "./src/qrCode.ts",
+      "import": "./src/qrCode.ts"
+    },
+    "./cliArgs": {
+      "types": "./src/cliArgs.ts",
+      "import": "./src/cliArgs.ts"
+    },
+    "./connectAuth": {
+      "types": "./src/connectAuth.ts",
+      "import": "./src/connectAuth.ts"
     },
     "./path": {
       "types": "./src/path.ts",
       "import": "./src/path.ts"
     },
-    "./text": {
-      "types": "./src/text.ts",
-      "import": "./src/text.ts"
+    "./keybindings": {
+      "types": "./src/keybindings.ts",
+      "import": "./src/keybindings.ts"
     },
-    "./toolOutputSummary": {
-      "types": "./src/toolOutputSummary.ts",
-      "import": "./src/toolOutputSummary.ts"
+    "./composerTrigger": {
+      "types": "./src/composerTrigger.ts",
+      "import": "./src/composerTrigger.ts"
     },
-    "./workspaceFileWrite": {
-      "types": "./src/workspaceFileWrite.ts",
-      "import": "./src/workspaceFileWrite.ts"
+    "./composerInlineTokens": {
+      "types": "./src/composerInlineTokens.ts",
+      "import": "./src/composerInlineTokens.ts"
     },
-    "./localPreviewFiles": {
-      "types": "./src/localPreviewFiles.ts",
-      "import": "./src/localPreviewFiles.ts"
+    "./terminalLabels": {
+      "types": "./src/terminalLabels.ts",
+      "import": "./src/terminalLabels.ts"
     },
-    "./binaryTransfer": {
-      "types": "./src/binaryTransfer.ts",
-      "import": "./src/binaryTransfer.ts"
+    "./relayClient": {
+      "types": "./src/relayClient.ts",
+      "import": "./src/relayClient.ts"
     },
-    "./outboundHttpPolicy": {
-      "types": "./src/outboundHttpPolicy.ts",
-      "import": "./src/outboundHttpPolicy.ts"
-    },
-    "./outboundHttp": {
-      "types": "./src/outboundHttp.ts",
-      "import": "./src/outboundHttp.ts"
-    },
-    "./chatGptVoiceTranscription": {
-      "types": "./src/chatGptVoiceTranscription.ts",
-      "import": "./src/chatGptVoiceTranscription.ts"
-    },
-    "./composerSlashCommands": {
-      "types": "./src/composerSlashCommands.ts",
-      "import": "./src/composerSlashCommands.ts"
-    },
-    "./threadExport": {
-      "types": "./src/threadExport.ts",
-      "import": "./src/threadExport.ts"
-    },
-    "./editorIcons": {
-      "types": "./src/editorIcons.ts",
-      "import": "./src/editorIcons.ts"
-    },
-    "./providerUsage": {
-      "types": "./src/providerUsage.ts",
-      "import": "./src/providerUsage.ts"
-    },
-    "./providerMetadata": {
-      "types": "./src/providerMetadata.ts",
-      "import": "./src/providerMetadata.ts"
-    },
-    "./formatBytes": {
-      "types": "./src/formatBytes.ts",
-      "import": "./src/formatBytes.ts"
-    },
-    "./cli": {
-      "types": "./src/cli.ts",
-      "import": "./src/cli.ts"
-    },
-    "./migrationRecovery": {
-      "types": "./src/migrationRecovery.ts",
-      "import": "./src/migrationRecovery.ts"
-    },
-    "./threadMentions": {
-      "types": "./src/threadMentions.ts",
-      "import": "./src/threadMentions.ts"
-    },
-    "./browserAutomationCatalogue": {
-      "types": "./src/browserAutomationCatalogue.ts",
-      "import": "./src/browserAutomationCatalogue.ts"
-    },
-    "./browserAutomationPresentation": {
-      "types": "./src/browserAutomationPresentation.ts",
-      "import": "./src/browserAutomationPresentation.ts"
-    },
-    "./browserAutomationErrors": {
-      "types": "./src/browserAutomationErrors.ts",
-      "import": "./src/browserAutomationErrors.ts"
-    },
-    "./browserAutomationMcpError": {
-      "types": "./src/browserAutomationMcpError.ts",
-      "import": "./src/browserAutomationMcpError.ts"
-    },
-    "./providerDeliveryBlock": {
-      "types": "./src/providerDeliveryBlock.ts",
-      "import": "./src/providerDeliveryBlock.ts"
-    },
-    "./browserAnnotations": {
-      "types": "./src/browserAnnotations.ts",
-      "import": "./src/browserAnnotations.ts"
-    },
-    "./deviceFrame": {
-      "types": "./src/deviceFrame.ts",
-      "import": "./src/deviceFrame.ts"
-    },
-    "./jsonrpc-stdio": {
-      "types": "./src/jsonrpc-stdio.ts",
-      "import": "./src/jsonrpc-stdio.ts"
-    },
-    "./frameTransport": {
-      "types": "./src/frameTransport.ts",
-      "import": "./src/frameTransport.ts"
+    "./relayTracing": {
+      "types": "./src/relayTracing.ts",
+      "import": "./src/relayTracing.ts"
     },
     "./computerFrame": {
       "types": "./src/computerFrame.ts",
       "import": "./src/computerFrame.ts"
     },
-    "./deviceHelperCache": {
-      "types": "./src/deviceHelperCache.ts",
-      "import": "./src/deviceHelperCache.ts"
+    "./computerGrants": {
+      "types": "./src/computerGrants.ts",
+      "import": "./src/computerGrants.ts"
+    },
+    "./computerInvocation": {
+      "types": "./src/computerInvocation.ts",
+      "import": "./src/computerInvocation.ts"
     },
     "./computerKeyNames": {
       "types": "./src/computerKeyNames.ts",
       "import": "./src/computerKeyNames.ts"
     },
-    "./computerGrants": {
-      "types": "./src/computerGrants.ts",
-      "import": "./src/computerGrants.ts"
-    },
-    "./lengthPrefixedRecords": {
-      "types": "./src/lengthPrefixedRecords.ts",
-      "import": "./src/lengthPrefixedRecords.ts"
-    },
-    "./uiTreeTargeting": {
-      "types": "./src/uiTreeTargeting.ts",
-      "import": "./src/uiTreeTargeting.ts"
-    },
-    "./searchQuery": {
-      "types": "./src/searchQuery.ts",
-      "import": "./src/searchQuery.ts"
+    "./cuaActionDiagnostics": {
+      "types": "./src/cuaActionDiagnostics.ts",
+      "import": "./src/cuaActionDiagnostics.ts"
     },
     "./cuaDriverProtocol": {
       "types": "./src/cuaDriverProtocol.ts",
       "import": "./src/cuaDriverProtocol.ts"
     },
-    "./desktopOperationQueue": {
-      "types": "./src/desktopOperationQueue.ts",
-      "import": "./src/desktopOperationQueue.ts"
+    "./frameTransport": {
+      "types": "./src/frameTransport.ts",
+      "import": "./src/frameTransport.ts"
     },
-    "./asyncUserInput": {
-      "types": "./src/asyncUserInput.ts",
-      "import": "./src/asyncUserInput.ts"
+    "./preview": {
+      "types": "./src/preview.ts",
+      "import": "./src/preview.ts"
+    },
+    "./previewViewport": {
+      "types": "./src/previewViewport.ts",
+      "import": "./src/previewViewport.ts"
+    },
+    "./filePreview": {
+      "types": "./src/filePreview.ts",
+      "import": "./src/filePreview.ts"
+    },
+    "./chatList": {
+      "types": "./src/chatList.ts",
+      "import": "./src/chatList.ts"
+    },
+    "./hostProcess": {
+      "types": "./src/hostProcess.ts",
+      "import": "./src/hostProcess.ts"
+    },
+    "./httpReadiness": {
+      "types": "./src/httpReadiness.ts",
+      "import": "./src/httpReadiness.ts"
+    },
+    "./devHome": {
+      "types": "./src/devHome.ts",
+      "import": "./src/devHome.ts"
+    },
+    "./devProxy": {
+      "types": "./src/devProxy.ts",
+      "import": "./src/devProxy.ts"
+    },
+    "./usageMerge": {
+      "types": "./src/usageMerge.ts",
+      "import": "./src/usageMerge.ts"
+    },
+    "./usageFormat": {
+      "types": "./src/usageFormat.ts",
+      "import": "./src/usageFormat.ts"
+    },
+    "./issuesCsv": {
+      "types": "./src/issuesCsv.ts",
+      "import": "./src/issuesCsv.ts"
+    },
+    "./mailSlug": {
+      "types": "./src/mailSlug.ts",
+      "import": "./src/mailSlug.ts"
+    },
+    "./modelImageBudget": {
+      "types": "./src/modelImageBudget.ts",
+      "import": "./src/modelImageBudget.ts"
+    },
+    "./uiTreeTargeting": {
+      "types": "./src/uiTreeTargeting.ts",
+      "import": "./src/uiTreeTargeting.ts"
     }
   },
   "scripts": {
-    "prepare": "effect-language-service patch",
-    "typecheck": "node ../../node_modules/@typescript/native/bin/tsc --noEmit",
-    "typecheck:native": "bun run typecheck",
-    "typecheck:legacy": "tsc --noEmit",
-    "test": "vitest run"
+    "typecheck": "tsgo --noEmit",
+    "test": "vp test run"
   },
   "dependencies": {
-    "@synara/contracts": "workspace:*",
-    "effect": "catalog:"
+    "@noble/curves": "catalog:",
+    "@noble/hashes": "catalog:",
+    "@spiritdevs/contracts": "workspace:*",
+    "effect": "catalog:",
+    "jose": "catalog:",
+    "yaml": "catalog:"
   },
   "devDependencies": {
-    "@effect/language-service": "catalog:",
+    "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
-    "typescript": "catalog:",
-    "vitest": "catalog:"
+    "vite-plus": "catalog:"
   }
 }
