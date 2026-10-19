@@ -38,6 +38,8 @@ export const Focus = Schema.Struct({
   name: FocusName,
   iconName: FocusIconName,
   accentColor: FocusAccentColor,
+  /** Personal projectless conversations can appear in several Focuses. Missing means false. */
+  includeConversations: Schema.optionalKey(Schema.Boolean),
   orderKey: TrimmedNonEmptyString,
   createdAt: CloudTimestamp,
   updatedAt: CloudTimestamp,
@@ -63,9 +65,10 @@ export type AttentionEventKind = typeof AttentionEventKind.Type;
 
 export const AttentionEvent = Schema.Struct({
   alertProjectKey: Schema.optionalKey(Schema.String),
+  ownerUserId: Schema.optionalKey(Schema.String),
   eventId: AttentionEventId,
   threadId: ThreadId,
-  projectKey: FocusProjectKey,
+  projectKey: Schema.NullOr(FocusProjectKey),
   eventKind: AttentionEventKind,
 });
 export type AttentionEvent = typeof AttentionEvent.Type;
@@ -79,7 +82,7 @@ export const FocusNotification = Schema.Struct({
   eventId: AttentionEventId,
   environmentId: EnvironmentId,
   threadId: ThreadId,
-  projectKey: FocusProjectKey,
+  projectKey: Schema.NullOr(FocusProjectKey),
   eventKind: AttentionEventKind,
   createdAt: CloudTimestamp,
 });

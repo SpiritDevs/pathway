@@ -26,6 +26,7 @@ export class CloudSession extends Context.Service<
   CloudSession,
   {
     readonly clerkToken: Effect.Effect<string, ConnectionAttemptError>;
+    readonly conversationConnectGrant?: (shareId: string) => Effect.Effect<string, ConnectionAttemptError>;
   }
 >()("@spiritdevs/client-runtime/platform/capabilities/CloudSession") {}
 

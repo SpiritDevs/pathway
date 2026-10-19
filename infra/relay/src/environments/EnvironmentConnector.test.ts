@@ -727,6 +727,58 @@ describe("EnvironmentConnector", () => {
   });
 
   it.effect(
+    "connects shared recipients through the owner's allocation and refuses another recipient",
+    () => {
+      let seenProof: RelayCloudMintCredentialProofPayload | undefined;
+      const execute = (request: HttpClientRequest.HttpClientRequest) =>
+        Effect.sync(() => {
+          const mintRequest = decodeMintRequestBody(requestBodyText(request));
+          seenProof = decodeRequestProof(mintRequest.proof);
+          return HttpClientResponse.fromWeb(
+            request,
+            Response.json(signMintResponse(mintRequest), { status: 200 }),
+          );
+        });
+      const links = makeLinks();
+      return Effect.gen(function* () {
+        const connector = yield* EnvironmentConnector.EnvironmentConnector;
+        const connectGrant = {
+          environmentId: "env-connector-test" as never,
+          membershipId: "membership-recipient" as never,
+          permission: "remoteAgents.control" as const,
+          conversationShareId: "share-a",
+          conversationUserId: "recipient",
+        };
+        yield* connector.connect({
+          userId: "recipient",
+          environmentId: "env-connector-test",
+          clientProofKeyThumbprint: "client-proof-key-thumbprint",
+          connectGrant,
+        });
+        expect(seenProof).toMatchObject({
+          sub: "recipient",
+          connectGrant: { conversationShareId: "share-a" },
+        });
+        const error = yield* Effect.flip(
+          connector.connect({
+            userId: "another-recipient",
+            environmentId: "env-connector-test",
+            clientProofKeyThumbprint: "client-proof-key-thumbprint",
+            connectGrant,
+          }),
+        );
+        expect(error).toMatchObject({ reason: "connect_grant_refused" });
+      }).pipe(
+        Effect.provide(
+          connectorTestLayer(execute, {
+            links: { ...links, listUsersForEnvironment: () => Effect.succeed(["link-owner-user"]) },
+          }),
+        ),
+      );
+    },
+  );
+
+  it.effect(
     "forwards the initiating environment and grant through an existing counted allocation",
     () => {
       let seenProof: RelayCloudMintCredentialProofPayload | undefined;

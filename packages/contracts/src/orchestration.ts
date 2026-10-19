@@ -595,7 +595,8 @@ const ThreadInteractionModeSetCommand = Schema.Struct({
 });
 
 const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
-  projectId: ProjectId,
+  projectId: Schema.NullOr(ProjectId),
+  temporary: Schema.optional(Schema.Boolean),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -1323,7 +1324,7 @@ export type OrchestrationSearchThreadsInput = typeof OrchestrationSearchThreadsI
 
 export const OrchestrationThreadSearchMatch = Schema.Struct({
   threadId: ThreadId,
-  projectId: ProjectId,
+  projectId: Schema.NullOr(ProjectId),
   source: OrchestrationThreadSearchSource,
   snippet: Schema.String.check(Schema.isMaxLength(240)),
   messageCreatedAt: Schema.NullOr(IsoDateTime),

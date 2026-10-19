@@ -33,13 +33,13 @@ export function policyChoices(
 }
 export function threadPolicyView(
   rows: readonly AlertPolicyRow[] | null,
-  projectKey: string,
+  projectKey: string | null,
   threadKey: string,
 ) {
   const choices = policyChoices(rows, "thread", threadKey);
   const inherited = resolveAlertPolicy(
     policyChoices(rows, "global", "global"),
-    policyChoices(rows, "project", projectKey),
+    projectKey === null ? null : policyChoices(rows, "project", projectKey),
   );
   const effective = resolveAlertPolicy(inherited, null, choices);
   const count = ALERT_EVENT_KEYS.filter((key) => effective[key]).length;

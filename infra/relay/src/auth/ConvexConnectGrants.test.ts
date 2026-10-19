@@ -36,6 +36,27 @@ function testLayer(
 }
 
 describe("ConvexConnectGrants", () => {
+  it.effect("retains recipient and conversation identity from a validated share grant", () =>
+    Effect.gen(function* () {
+      const grants = yield* ConvexConnectGrants.ConvexConnectGrants;
+      expect(
+        yield* grants.validateConnectGrant({
+          grant: "share-token",
+          environmentId: "environment-1",
+        }),
+      ).toMatchObject({ conversationShareId: "share-a", conversationUserId: "recipient" });
+    }).pipe(
+      Effect.provide(
+        testLayer(() =>
+          Effect.succeed({
+            ...accepted,
+            conversationShareId: "share-a",
+            conversationUserId: "recipient",
+          }),
+        ),
+      ),
+    ),
+  );
   it.effect("hashes and validates an accepted opaque grant through Convex", () => {
     let received: unknown;
     let functionName = "";

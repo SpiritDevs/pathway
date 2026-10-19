@@ -2,6 +2,7 @@ import { managedRelaySessionAtom } from "@spiritdevs/client-runtime/relay";
 import {
   ALL_FOCUS_ID,
   focusAssignmentsAtom,
+  focusIncludesConversations,
   focusReadModelAtom,
   resolveActiveFocusId,
   scopedProjectKeysForFocus,
@@ -32,6 +33,7 @@ import {
   threadAlertNotificationsReadyAtom,
 } from "../threadAlerts/state";
 import type { ConvexAuthTokenFetcher } from "./syncTransport";
+import { subscribePersonalConversations } from "./conversationSharing";
 
 export {
   ALL_FOCUS_ID,
@@ -56,6 +58,7 @@ export const FOCUS_FUNCTION_REFERENCES = {
       readonly accentColor: string;
       readonly orderKey?: string;
       readonly projectKeys?: ReadonlyArray<FocusProjectKey>;
+      readonly includeConversations?: boolean;
     },
     Focus
   >("focuses:create"),
@@ -65,6 +68,7 @@ export const FOCUS_FUNCTION_REFERENCES = {
       readonly name?: string;
       readonly iconName?: string;
       readonly accentColor?: string;
+      readonly includeConversations?: boolean;
     },
     Focus
   >("focuses:update"),
@@ -95,12 +99,14 @@ export interface FocusMutations {
     readonly accentColor: string;
     readonly orderKey?: string;
     readonly projectKeys?: ReadonlyArray<FocusProjectKey>;
+    readonly includeConversations?: boolean;
   }) => Promise<Focus>;
   readonly update: (input: {
     readonly focusId: FocusId;
     readonly name?: string;
     readonly iconName?: string;
     readonly accentColor?: string;
+    readonly includeConversations?: boolean;
   }) => Promise<Focus>;
   readonly reorder: (input: {
     readonly focusId: FocusId;
@@ -286,6 +292,10 @@ export const activeFocusProjectKeysAtom = Atom.make((get) =>
   scopedProjectKeysForFocus(get(focusAssignmentsAtom), get(activeFocusIdAtom)),
 ).pipe(Atom.withLabel("focuses:active-project-keys"));
 
+export const activeFocusIncludesConversationsAtom = Atom.make((get) =>
+  focusIncludesConversations(get(focusReadModelAtom)?.focuses ?? [], get(activeFocusIdAtom)),
+).pipe(Atom.withLabel("focuses:active-includes-conversations"));
+
 export function useFocusReadModelRuntime(options: {
   readonly enabled: boolean;
   readonly accountScope: string | null;
@@ -308,6 +318,7 @@ export function useFocusReadModelRuntime(options: {
     const mutations = makeFocusMutations(client);
     appAtomRegistry.set(focusMutationsAtom, mutations);
     const unsubscribes = [
+      subscribePersonalConversations(client),
       subscribeThreadAlertPolicies(client, options.accountScope, focusNotificationsAtom),
       client.onUpdate(
         FOCUS_FUNCTION_REFERENCES.readModel,

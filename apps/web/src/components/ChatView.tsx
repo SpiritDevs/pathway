@@ -1,3 +1,7 @@
+import { useAuth } from "@clerk/react";
+import { personalConversationsAtom } from "~/cloud/conversationSharing";
+import { usePersonalConversationConnection } from "~/cloud/usePersonalConversationConnection";
+import { ShareConversationDialog } from "./conversation/ShareConversationDialog";
 import { initialAsyncQuestionAnswers } from "./chat/ComposerAsyncQuestions";
 import {
   DEFAULT_MODEL,
@@ -817,11 +821,12 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
   const closeTerminalMutation = useAtomCommand(terminalEnvironment.close, "terminal close");
   const serverThread = useThreadShell(threadRef);
   const draftThread = useComposerDraftStore((store) => store.getDraftThreadByRef(threadRef));
-  const projectRef = serverThread
-    ? scopeProjectRef(serverThread.environmentId, serverThread.projectId)
-    : draftThread
-      ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
-      : null;
+  const projectRef =
+    serverThread && serverThread.projectId !== null
+      ? scopeProjectRef(serverThread.environmentId, serverThread.projectId)
+      : draftThread && draftThread.projectId !== null
+        ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
+        : null;
   const project = useProject(projectRef);
   const terminalUiState = useTerminalUiStateStore((state) =>
     selectThreadTerminalUiState(state.terminalUiStateByThreadKey, threadRef),
@@ -1235,11 +1240,12 @@ const PersistentThreadTerminalPanel = memo(function PersistentThreadTerminalPane
 }: PersistentThreadTerminalPanelProps) {
   const serverThread = useThreadShell(threadRef);
   const draftThread = useComposerDraftStore((store) => store.getDraftThreadByRef(threadRef));
-  const projectRef = serverThread
-    ? scopeProjectRef(serverThread.environmentId, serverThread.projectId)
-    : draftThread
-      ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
-      : null;
+  const projectRef =
+    serverThread && serverThread.projectId !== null
+      ? scopeProjectRef(serverThread.environmentId, serverThread.projectId)
+      : draftThread && draftThread.projectId !== null
+        ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
+        : null;
   const project = useProject(projectRef);
   const knownTerminalSessions = useKnownTerminalSessions({
     environmentId: threadRef.environmentId,
@@ -1403,6 +1409,10 @@ function ChatViewContent(props: ChatViewProps) {
     presentation = "page",
   } = props;
   const isPanelPresentation = presentation === "panel";
+  usePersonalConversationConnection(
+    routeKind === "server" ? environmentId : null,
+    routeKind === "server" ? threadId : null,
+  );
   const [localIssueDetailKey, setLocalIssueDetailKey] = useState<string | null>(null);
   const openIssueContext = useCallback(
     (context: IssueContextSelection) => {
@@ -1444,6 +1454,10 @@ function ChatViewContent(props: ChatViewProps) {
   const writeTerminal = useAtomCommand(terminalEnvironment.write, "terminal write");
   const closeTerminalMutation = useAtomCommand(terminalEnvironment.close, "terminal close");
   const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
+  const keepConversation = useAtomCommand(threadEnvironment.keep, { reportFailure: false });
+  const attachConversationProject = useAtomCommand(threadEnvironment.attachProject, {
+    reportFailure: false,
+  });
   const deleteThread = useAtomCommand(threadEnvironment.delete, { reportFailure: false });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
@@ -1504,6 +1518,20 @@ function ChatViewContent(props: ChatViewProps) {
         : null,
   );
   const serverThread = useThreadShell(routeThreadRef);
+  const { userId: signedInUserId } = useAuth();
+  const personalConversations = useAtomValue(personalConversationsAtom);
+  const conversationAccess = personalConversations.find(
+    (conversation) =>
+      conversation.environmentId === environmentId && conversation.threadId === threadId,
+  )?.access;
+  const ownsConversation =
+    conversationAccess === "owner" ||
+    Boolean(serverThread?.ownerUserId && serverThread.ownerUserId === signedInUserId);
+  const conversationReadOnly =
+    conversationAccess === "view" ||
+    Boolean(serverThread?.ownerUserId && !ownsConversation && conversationAccess !== "collaborate");
+  const [shareConversationOpen, setShareConversationOpen] = useState(false);
+
   const serverThreadStatus = useThreadStatus(routeThreadRef);
   const setThreadLoadEnabled = useAtomSet(
     environmentThreads.loadEnabledAtom(environmentId, threadId),
@@ -1777,9 +1805,10 @@ function ChatViewContent(props: ChatViewProps) {
     [mountedTerminalThreadKeys],
   );
 
-  const fallbackDraftProjectRef = draftThread
-    ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
-    : null;
+  const fallbackDraftProjectRef =
+    draftThread && draftThread.projectId !== null
+      ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
+      : null;
   const fallbackDraftProject = useProject(fallbackDraftProjectRef);
   const localDraftError = serverThread
     ? null
@@ -2196,9 +2225,10 @@ function ChatViewContent(props: ChatViewProps) {
     reconcile();
   }, [activeThreadKey, existingOpenTerminalThreadKeys, terminalUiState.terminalOpen]);
   const latestRunSettled = isLatestRunSettled(activeLatestRun, activeRuntime);
-  const activeProjectRef = activeThread
-    ? scopeProjectRef(activeThread.environmentId, activeThread.projectId)
-    : null;
+  const activeProjectRef =
+    activeThread && activeThread.projectId !== null
+      ? scopeProjectRef(activeThread.environmentId, activeThread.projectId)
+      : null;
   const activeProject = useProject(activeProjectRef);
   // Rootless projects stay selectable, so every surface below that needs a real directory —
   // terminals, project scripts, worktree bootstrap — resolves one through this rather than
@@ -2271,8 +2301,18 @@ function ChatViewContent(props: ChatViewProps) {
 
   useEffect(() => {
     if (!activeThreadRef || !activeEnvironmentBootstrapComplete) return;
-    useRightPanelStore.getState().reconcileFileSurfaces(activeThreadRef, activeProject !== null);
-  }, [activeEnvironmentBootstrapComplete, activeProject, activeThreadRef]);
+    useRightPanelStore
+      .getState()
+      .reconcileFileSurfaces(
+        activeThreadRef,
+        activeProject !== null || activeThread?.conversationDirectory !== undefined,
+      );
+  }, [
+    activeEnvironmentBootstrapComplete,
+    activeProject,
+    activeThreadRef,
+    activeThread?.conversationDirectory,
+  ]);
 
   // Compute the list of environments this logical project spans, used to
   // drive the environment picker in BranchToolbar.
@@ -3573,7 +3613,11 @@ function ChatViewContent(props: ChatViewProps) {
   const hasTimelineTopBanner = Boolean(visibleThreadError) || visibleProviderStatus !== null;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
-  const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
+  const activeWorkspaceRoot =
+    activeThreadWorktreePath ??
+    activeProjectCwd ??
+    activeThread?.conversationDirectory ??
+    undefined;
   const activeTerminalLaunchContext =
     terminalUiLaunchContext?.threadId === activeThreadId ? terminalUiLaunchContext : null;
   // Default true while loading to avoid toolbar flicker.
@@ -5325,9 +5369,14 @@ function ChatViewContent(props: ChatViewProps) {
     activeThread.worktreePath === null &&
     !envLocked,
   );
-  const envMode: DraftThreadEnvMode = canOverrideServerThreadEnvMode
-    ? (pendingServerThreadEnvMode ?? draftThread?.envMode ?? derivedEnvMode)
-    : derivedEnvMode;
+  const envMode: DraftThreadEnvMode =
+    activeThread?.temporary && activeThread.projectId !== null
+      ? "worktree"
+      : activeThread?.projectId === null
+        ? "local"
+        : canOverrideServerThreadEnvMode
+          ? (pendingServerThreadEnvMode ?? draftThread?.envMode ?? derivedEnvMode)
+          : derivedEnvMode;
   const activeServerThreadEnvironmentId = activeThread?.environmentId;
   const activeServerThreadId = activeThread?.id;
   const scopedPendingServerThreadBranch =
@@ -6449,7 +6498,56 @@ function ChatViewContent(props: ChatViewProps) {
   const projectSwitchInFlightRef = useRef(false);
   const canChangeHeaderProject =
     (isLocalDraftThread && timelineEntries.length === 0 && !isWorking) ||
-    (isServerThread && canReplaceInitialThreadProject(serverProjection) && !isWorking);
+    (isServerThread &&
+      !isWorking &&
+      (activeThread?.projectId === null
+        ? ownsConversation &&
+          !serverProjection?.runs.some((run) => run.status === "queued" || run.status === "running")
+        : !activeThread?.temporary && canReplaceInitialThreadProject(serverProjection)));
+  const handleSelectConversation = useCallback(() => {
+    if (!draftId || !activeThread || isServerThread || isWorking) return;
+    const store = useComposerDraftStore.getState();
+    const session = store.getDraftSession(draftId);
+    if (!session || session.pendingSend || session.promotedTo) return;
+    store.setLogicalProjectDraftThreadId(
+      `${activeThread.environmentId}:conversation`,
+      {
+        environmentId: activeThread.environmentId,
+        projectId: null,
+      },
+      draftId,
+      { envMode: "local", branch: null, worktreePath: null },
+    );
+  }, [activeThread, draftId, isServerThread, isWorking]);
+  const handleTemporaryChange = useCallback(
+    (temporary: boolean) => {
+      if (!draftId || !activeThread || isServerThread || isWorking) return;
+      const store = useComposerDraftStore.getState();
+      const session = store.getDraftSession(draftId);
+      if (!session || session.pendingSend || session.promotedTo) return;
+      store.setDraftThreadContext(draftId, {
+        temporary,
+        ...(temporary && session.projectId !== null
+          ? { envMode: "worktree", worktreePath: null }
+          : {}),
+      });
+    },
+    [activeThread, draftId, isServerThread, isWorking],
+  );
+  const handleKeepConversation = useCallback(async () => {
+    if (!activeThread?.temporary || !isServerThread || conversationReadOnly) return;
+    const result = await keepConversation({
+      environmentId: activeThread.environmentId,
+      input: { threadId: activeThread.id },
+    });
+    if (result._tag === "Failure") {
+      const error = squashAtomCommandFailure(result);
+      setThreadError(
+        activeThread.id,
+        error instanceof Error ? error.message : "Could not keep conversation.",
+      );
+    }
+  }, [activeThread, isServerThread, keepConversation, setThreadError, conversationReadOnly]);
   const handleHeaderProjectChange = useCallback(
     async (projectRef: { environmentId: EnvironmentId; projectId: ProjectId }) => {
       if (projectSwitchInFlightRef.current || !activeThread || !canChangeHeaderProject) return;
@@ -6479,6 +6577,40 @@ function ChatViewContent(props: ChatViewProps) {
         return;
       }
 
+      if (activeThread.projectId === null) {
+        if (projectRef.environmentId !== activeThread.environmentId) return;
+        projectSwitchInFlightRef.current = true;
+        try {
+          const targetProject = allProjects.find(
+            (project) =>
+              project.environmentId === projectRef.environmentId &&
+              project.id === projectRef.projectId,
+          );
+          if (
+            targetProject &&
+            (await ensureProjectWorkspaceRoot({
+              project: targetProject,
+              attachDirectory: attachProjectDirectory,
+              reason: "Choose a folder before attaching this project.",
+            })) === null
+          )
+            return;
+          const result = await attachConversationProject({
+            environmentId: activeThread.environmentId,
+            input: { threadId: activeThread.id, projectId: projectRef.projectId },
+          });
+          if (result._tag === "Failure") {
+            const error = squashAtomCommandFailure(result);
+            setThreadError(
+              activeThread.id,
+              error instanceof Error ? error.message : "Could not attach project.",
+            );
+          }
+        } finally {
+          projectSwitchInFlightRef.current = false;
+        }
+        return;
+      }
       if (!serverProjection) return;
       const firstUserMessage = serverProjection.messages.find((message) => message.role === "user");
       const initialRun = serverProjection.runs[0];
@@ -6634,6 +6766,7 @@ function ChatViewContent(props: ChatViewProps) {
       activeThread,
       allProjects,
       attachProjectDirectory,
+      attachConversationProject,
       canChangeHeaderProject,
       deleteThread,
       draftId,
@@ -7151,7 +7284,7 @@ function ChatViewContent(props: ChatViewProps) {
       }
       return;
     }
-    if (!activeProject) {
+    if (!activeProject && activeThread.projectId !== null) {
       toastManager.add(
         stackedThreadToast({
           type: "warning",
@@ -7165,9 +7298,11 @@ function ChatViewContent(props: ChatViewProps) {
     // a thread at all (the decider refuses `thread.create`), so the directory is resolved here,
     // before the draft is consumed — cancelling leaves the composer exactly as it was.
     const projectWorkspaceRootForSend =
-      activeProject.workspaceRoot ??
-      (await ensureActiveProjectWorkspaceRoot("An agent needs a directory to work in."));
-    if (projectWorkspaceRootForSend === null) {
+      activeProject === null
+        ? null
+        : (activeProject.workspaceRoot ??
+          (await ensureActiveProjectWorkspaceRoot("An agent needs a directory to work in.")));
+    if (activeProject !== null && projectWorkspaceRootForSend === null) {
       return;
     }
     const sendsToCurrentThread = target === "current";
@@ -7199,12 +7334,12 @@ function ChatViewContent(props: ChatViewProps) {
     if (target === "new-chat" && pendingDraftTarget !== null) {
       const store = useComposerDraftStore.getState();
       store.setProjectDraftThreadId(
-        scopeProjectRef(environmentId, activeProject.id),
+        { environmentId, projectId: activeThread.projectId },
         DraftId.make(threadIdForSend),
         {
           threadId: threadIdForSend,
           branch: activeThreadBranch,
-          worktreePath: activeThread.worktreePath,
+          worktreePath: activeThread.temporary ? null : activeThread.worktreePath,
           runtimeMode,
           interactionMode,
           createdAt: messageCreatedAt,
@@ -7394,7 +7529,7 @@ function ChatViewContent(props: ChatViewProps) {
     });
     const threadCreateModelSelection = createModelSelection(
       ctxSelectedModelSelection.instanceId,
-      ctxSelectedModel || activeProject.defaultModelSelection?.model || DEFAULT_MODEL,
+      ctxSelectedModel || activeProject?.defaultModelSelection?.model || DEFAULT_MODEL,
       ctxSelectedModelSelection.options,
     );
 
@@ -7472,14 +7607,14 @@ function ChatViewContent(props: ChatViewProps) {
         target === "new-chat"
           ? {
               createThread: {
-                projectId: activeProject.id,
+                projectId: activeThread.projectId,
                 title,
                 modelSelection: threadCreateModelSelection,
                 runtimeMode,
                 interactionMode,
                 locations: ["agents" as const],
-                branch: activeThreadBranch,
-                worktreePath: activeThread.worktreePath,
+                branch: activeThread.temporary ? null : activeThreadBranch,
+                worktreePath: activeThread.temporary ? null : activeThread.worktreePath,
                 createdAt: messageCreatedAt,
               },
             }
@@ -7488,7 +7623,8 @@ function ChatViewContent(props: ChatViewProps) {
                 ...(isLocalDraftThread
                   ? {
                       createThread: {
-                        projectId: activeProject.id,
+                        projectId: activeThread.projectId,
+                        temporary: activeThread.temporary ?? false,
                         title,
                         modelSelection: threadCreateModelSelection,
                         runtimeMode,
@@ -7500,7 +7636,7 @@ function ChatViewContent(props: ChatViewProps) {
                       },
                     }
                   : {}),
-                ...(baseBranchForWorktree
+                ...(baseBranchForWorktree && projectWorkspaceRootForSend
                   ? {
                       prepareWorktree: {
                         projectCwd: projectWorkspaceRootForSend,
@@ -8676,6 +8812,7 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const onEnvModeChange = useCallback(
     (mode: DraftThreadEnvMode) => {
+      if (activeThread?.temporary && activeThread.projectId !== null && mode !== "worktree") return;
       if (canOverrideServerThreadEnvMode) {
         setPendingServerThreadEnvMode(mode);
         scheduleComposerFocus();
@@ -8694,6 +8831,8 @@ function ChatViewContent(props: ChatViewProps) {
       scheduleComposerFocus();
     },
     [
+      activeThread?.temporary,
+      activeThread?.projectId,
       canOverrideServerThreadEnvMode,
       composerDraftTarget,
       draftThread?.worktreePath,
@@ -9031,6 +9170,14 @@ function ChatViewContent(props: ChatViewProps) {
       className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background"
       data-side-chat-surface={isPanelPresentation ? "true" : undefined}
     >
+      {ownsConversation ? (
+        <ShareConversationDialog
+          environmentId={environmentId}
+          threadId={threadId}
+          open={shareConversationOpen}
+          onOpenChange={setShareConversationOpen}
+        />
+      ) : null}
       {sideChatThreadPanelControl}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden">
         {/* Top bar */}
@@ -9057,6 +9204,17 @@ function ChatViewContent(props: ChatViewProps) {
                 ? panelLayoutControls
                 : null}
             <ChatHeader
+              {...(ownsConversation
+                ? { onShareConversation: () => setShareConversationOpen(true) }
+                : {})}
+              conversation={activeThread.projectId === null}
+              temporary={activeThread.temporary ?? false}
+              temporarySelectable={isLocalDraftThread && !draftThread?.pendingSend && !isWorking}
+              onTemporaryChange={handleTemporaryChange}
+              {...(!conversationReadOnly
+                ? { onKeepConversation: () => void handleKeepConversation() }
+                : {})}
+              {...(isLocalDraftThread ? { onSelectConversation: handleSelectConversation } : {})}
               activeThreadEnvironmentId={activeThread.environmentId}
               activeThreadId={activeThread.id}
               activeThreadTitle={activeThread.title}
@@ -9068,7 +9226,9 @@ function ChatViewContent(props: ChatViewProps) {
               rightPanelOpen={inlineRightPanelOwnsTitleBar}
               onProjectChange={handleHeaderProjectChange}
               onOpenThread={onOpenRelatedThread}
-              {...(isServerThread ? { onRenameThread: handleRenameActiveThread } : {})}
+              {...(isServerThread && !conversationReadOnly
+                ? { onRenameThread: handleRenameActiveThread }
+                : {})}
             />
           </header>
         ) : null}
@@ -9232,6 +9392,8 @@ function ChatViewContent(props: ChatViewProps) {
                         }
                       >
                         <DraftHeroHeadline
+                          conversation={activeThread.projectId === null}
+                          onSelectConversation={handleSelectConversation}
                           activeProjectRef={activeProjectRef}
                           activeProjectTitle={activeProject?.title ?? null}
                           onSelectProject={handleHeaderProjectChange}
@@ -9242,7 +9404,7 @@ function ChatViewContent(props: ChatViewProps) {
                   ) : (
                     <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
                   )}
-                  {isServerThread && activeThread ? (
+                  {isServerThread && activeThread && !conversationReadOnly ? (
                     <QueuedRunsControl
                       attachmentUrlById={serverAttachmentUrlById}
                       environmentId={activeThread.environmentId}
@@ -9319,100 +9481,111 @@ function ChatViewContent(props: ChatViewProps) {
                     <div className="chat-composer-glass-shell chat-composer-glass-shell-with-context chat-composer-content-sized-shell relative mx-auto w-full max-w-3xl">
                       <div className="relative z-10 w-full">
                         <div className="relative z-10">
-                          <ChatComposer
-                            composerRef={composerRef}
-                            composerDraftTarget={composerDraftTarget}
-                            environmentId={environmentId}
-                            maxFileAttachmentBytes={maxFileAttachmentBytes}
-                            routeKind={routeKind}
-                            routeThreadRef={routeThreadRef}
-                            draftId={draftId}
-                            activeThreadId={activeThreadId}
-                            activeThreadEnvironmentId={activeThread?.environmentId}
-                            activeThread={activeThread}
-                            isServerThread={isServerThread}
-                            isLocalDraftThread={isLocalDraftThread}
-                            projectSelectionRequired={isLocalDraftThread && activeProject === null}
-                            phase={phase}
-                            isConnecting={isConnecting}
-                            isSendBusy={isSendBusy}
-                            isPreparingWorktree={isPreparingWorktree}
-                            environmentUnavailable={activeEnvironmentUnavailableState}
-                            activePendingApproval={activePendingApproval}
-                            pendingApprovals={pendingApprovals}
-                            pendingUserInputs={pendingUserInputs}
-                            onDismissAsyncQuestion={
-                              activePendingUserInput?.isBlocking === false
-                                ? closeAsyncQuestion
-                                : undefined
-                            }
-                            activePendingProgress={activePendingProgress}
-                            activePendingResolvedAnswers={activePendingResolvedAnswers}
-                            activePendingIsResponding={activePendingIsResponding}
-                            activePendingDraftAnswers={activePendingDraftAnswers}
-                            activePendingQuestionIndex={activePendingQuestionIndex}
-                            respondingRequestIds={respondingRequestIds}
-                            showPlanFollowUpPrompt={showPlanFollowUpPrompt}
-                            activeProposedPlan={activeProposedPlan}
-                            runtimeMode={runtimeMode}
-                            interactionMode={interactionMode}
-                            composerControlsLocked={composerControlsLocked}
-                            contextCompactionInProgress={isContextCompacting}
-                            lockedProvider={modelPickerLockedProvider}
-                            providerCatalogLoaded={serverConfig !== null}
-                            providerStatuses={providerStatuses as ServerProvider[]}
-                            activeProjectDefaultModelSelection={
-                              activeProject?.defaultModelSelection
-                            }
-                            activeSubagentModelSelection={activeSubagentModelSelection}
-                            activeThreadModelSelection={activeThread?.modelSelection}
-                            activeContextWindow={activeContextWindow}
-                            compactDisabled={compactDisabled}
-                            compactDisabledReason={compactDisabledReason}
-                            resolvedTheme={resolvedTheme}
-                            settings={settings}
-                            keybindings={keybindings}
-                            shortcutScope={isPanelPresentation ? "side-chat" : "page"}
-                            terminalOpen={Boolean(terminalUiState.terminalOpen)}
-                            gitCwd={gitCwd}
-                            promptRef={promptRef}
-                            composerImagesRef={composerImagesRef}
-                            composerTerminalContextsRef={composerTerminalContextsRef}
-                            composerElementContextsRef={composerElementContextsRef}
-                            shouldAutoScrollRef={isAtEndRef}
-                            scheduleStickToBottom={scrollToEnd}
-                            onSend={onSend}
-                            onInterrupt={onInterrupt}
-                            onImplementPlanInNewThread={onImplementPlanInNewThread}
-                            sideChatAvailable={
-                              isServerThread &&
-                              latestSideChatSourceRun !== null &&
-                              !activeEnvironmentUnavailable
-                            }
-                            onStartInNewChat={onStartInNewChat}
-                            onStartInSideChat={onStartInSideChat}
-                            onRespondToApproval={onRespondToApproval}
-                            onSelectActivePendingUserInputOption={
-                              onSelectActivePendingUserInputOption
-                            }
-                            onAdvanceActivePendingUserInput={onAdvanceActivePendingUserInput}
-                            onPreviousActivePendingUserInputQuestion={
-                              onPreviousActivePendingUserInputQuestion
-                            }
-                            onChangeActivePendingUserInputCustomAnswer={
-                              onChangeActivePendingUserInputCustomAnswer
-                            }
-                            onProviderModelSelect={onProviderModelSelect}
-                            getModelDisabledReason={getModelDisabledReason}
-                            toggleInteractionMode={toggleInteractionMode}
-                            handleRuntimeModeChange={handleRuntimeModeChange}
-                            handleInteractionModeChange={handleInteractionModeChange}
-                            focusComposer={focusComposer}
-                            scheduleComposerFocus={scheduleComposerFocus}
-                            setThreadError={setThreadError}
-                            onExpandImage={onExpandTimelineImage}
-                            onOpenIssueContext={openIssueContext}
-                          />
+                          {conversationReadOnly ? (
+                            <p className="rounded-2xl border bg-background px-5 py-4 text-center text-sm text-muted-foreground">
+                              You can view this conversation. Ask its owner for permission to
+                              collaborate.
+                            </p>
+                          ) : (
+                            <ChatComposer
+                              composerRef={composerRef}
+                              composerDraftTarget={composerDraftTarget}
+                              environmentId={environmentId}
+                              maxFileAttachmentBytes={maxFileAttachmentBytes}
+                              routeKind={routeKind}
+                              routeThreadRef={routeThreadRef}
+                              draftId={draftId}
+                              activeThreadId={activeThreadId}
+                              activeThreadEnvironmentId={activeThread?.environmentId}
+                              activeThread={activeThread}
+                              isServerThread={isServerThread}
+                              isLocalDraftThread={isLocalDraftThread}
+                              projectSelectionRequired={
+                                isLocalDraftThread &&
+                                activeThread.projectId !== null &&
+                                activeProject === null
+                              }
+                              phase={phase}
+                              isConnecting={isConnecting}
+                              isSendBusy={isSendBusy}
+                              isPreparingWorktree={isPreparingWorktree}
+                              environmentUnavailable={activeEnvironmentUnavailableState}
+                              activePendingApproval={activePendingApproval}
+                              pendingApprovals={pendingApprovals}
+                              pendingUserInputs={pendingUserInputs}
+                              onDismissAsyncQuestion={
+                                activePendingUserInput?.isBlocking === false
+                                  ? closeAsyncQuestion
+                                  : undefined
+                              }
+                              activePendingProgress={activePendingProgress}
+                              activePendingResolvedAnswers={activePendingResolvedAnswers}
+                              activePendingIsResponding={activePendingIsResponding}
+                              activePendingDraftAnswers={activePendingDraftAnswers}
+                              activePendingQuestionIndex={activePendingQuestionIndex}
+                              respondingRequestIds={respondingRequestIds}
+                              showPlanFollowUpPrompt={showPlanFollowUpPrompt}
+                              activeProposedPlan={activeProposedPlan}
+                              runtimeMode={runtimeMode}
+                              interactionMode={interactionMode}
+                              composerControlsLocked={composerControlsLocked}
+                              contextCompactionInProgress={isContextCompacting}
+                              lockedProvider={modelPickerLockedProvider}
+                              providerCatalogLoaded={serverConfig !== null}
+                              providerStatuses={providerStatuses as ServerProvider[]}
+                              activeProjectDefaultModelSelection={
+                                activeProject?.defaultModelSelection
+                              }
+                              activeSubagentModelSelection={activeSubagentModelSelection}
+                              activeThreadModelSelection={activeThread?.modelSelection}
+                              activeContextWindow={activeContextWindow}
+                              compactDisabled={compactDisabled}
+                              compactDisabledReason={compactDisabledReason}
+                              resolvedTheme={resolvedTheme}
+                              settings={settings}
+                              keybindings={keybindings}
+                              shortcutScope={isPanelPresentation ? "side-chat" : "page"}
+                              terminalOpen={Boolean(terminalUiState.terminalOpen)}
+                              gitCwd={gitCwd}
+                              promptRef={promptRef}
+                              composerImagesRef={composerImagesRef}
+                              composerTerminalContextsRef={composerTerminalContextsRef}
+                              composerElementContextsRef={composerElementContextsRef}
+                              shouldAutoScrollRef={isAtEndRef}
+                              scheduleStickToBottom={scrollToEnd}
+                              onSend={onSend}
+                              onInterrupt={onInterrupt}
+                              onImplementPlanInNewThread={onImplementPlanInNewThread}
+                              sideChatAvailable={
+                                isServerThread &&
+                                latestSideChatSourceRun !== null &&
+                                !activeEnvironmentUnavailable
+                              }
+                              onStartInNewChat={onStartInNewChat}
+                              onStartInSideChat={onStartInSideChat}
+                              onRespondToApproval={onRespondToApproval}
+                              onSelectActivePendingUserInputOption={
+                                onSelectActivePendingUserInputOption
+                              }
+                              onAdvanceActivePendingUserInput={onAdvanceActivePendingUserInput}
+                              onPreviousActivePendingUserInputQuestion={
+                                onPreviousActivePendingUserInputQuestion
+                              }
+                              onChangeActivePendingUserInputCustomAnswer={
+                                onChangeActivePendingUserInputCustomAnswer
+                              }
+                              onProviderModelSelect={onProviderModelSelect}
+                              getModelDisabledReason={getModelDisabledReason}
+                              toggleInteractionMode={toggleInteractionMode}
+                              handleRuntimeModeChange={handleRuntimeModeChange}
+                              handleInteractionModeChange={handleInteractionModeChange}
+                              focusComposer={focusComposer}
+                              scheduleComposerFocus={scheduleComposerFocus}
+                              setThreadError={setThreadError}
+                              onExpandImage={onExpandTimelineImage}
+                              onOpenIssueContext={openIssueContext}
+                            />
+                          )}
                         </div>
                       </div>
                     </div>

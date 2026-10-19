@@ -15,6 +15,7 @@ import { backendError } from "./lib/errors.ts";
 import { requireUser } from "./lib/identity.ts";
 import { requireRelayControlPlane } from "./lib/relayIdentity.ts";
 import { policyForScope } from "./lib/threadAlertPolicy.ts";
+import { resolveConversationShare } from "./conversationShares.ts";
 
 const attentionEventKind = v.union(
   v.literal("finished-unsettled"),
@@ -28,7 +29,7 @@ const notificationResult = v.object({
   eventId: v.string(),
   environmentId: v.string(),
   threadId: v.string(),
-  projectKey: v.string(),
+  projectKey: v.union(v.string(), v.null()),
   eventKind: attentionEventKind,
   createdAt: v.number(),
   alertProjectKey: v.optional(v.string()),
@@ -134,7 +135,8 @@ export const record = mutation({
     environmentId: v.string(),
     environmentPublicKey: v.string(),
     threadId: v.string(),
-    projectKey: v.string(),
+    projectKey: v.union(v.string(), v.null()),
+    ownerUserId: v.optional(v.string()),
     alertProjectKey: v.optional(v.string()),
     eventKind: attentionEventKind,
   },
@@ -145,18 +147,20 @@ export const record = mutation({
     const environmentId = required(args.environmentId, "An environment id");
     const environmentPublicKey = required(args.environmentPublicKey, "An environment public key");
     const threadId = required(args.threadId, "A thread id");
-    const projectKey = focusProjectKey(args.projectKey);
+    const projectKey = args.projectKey === null ? null : focusProjectKey(args.projectKey);
     const projectPrefix = `${environmentId}:`;
-    if (!projectKey.startsWith(projectPrefix)) {
+    if (projectKey !== null && !projectKey.startsWith(projectPrefix)) {
       throw backendError(
         "invalid-arguments",
         "The project key must belong to the event environment.",
       );
     }
     const alertProjectKey =
-      args.alertProjectKey === undefined
-        ? alertProjectScopeKey(environmentId, projectKey.slice(projectPrefix.length))
-        : required(args.alertProjectKey, "An alert project key");
+      projectKey === null
+        ? undefined
+        : args.alertProjectKey === undefined
+          ? alertProjectScopeKey(environmentId, projectKey.slice(projectPrefix.length))
+          : required(args.alertProjectKey, "An alert project key");
     const now = Date.now();
     const links = await ctx.db
       .query("relayEnvironmentLinks")
@@ -167,7 +171,29 @@ export const record = mutation({
           .eq("revokedAt", null),
       )
       .collect();
-    const userIds = new Set(links.map((link) => link.userId));
+    let userIds = new Set(links.map((link) => link.userId));
+    if (projectKey === null) {
+      const conversation = await ctx.db
+        .query("personalConversations")
+        .withIndex("by_environment_and_thread", (q) =>
+          q.eq("environmentId", environmentId).eq("threadId", threadId),
+        )
+        .unique();
+      const owner = conversation === null ? null : await ctx.db.get(conversation.ownerUserId);
+      const ownerUserId = owner?.clerkSubject ?? args.ownerUserId;
+      if (ownerUserId === undefined || !userIds.has(ownerUserId)) return 0;
+      userIds = new Set([ownerUserId]);
+      if (conversation !== null) {
+        const shares = await ctx.db
+          .query("conversationShares")
+          .withIndex("by_conversation", (q) => q.eq("conversationId", conversation._id))
+          .collect();
+        for (const share of shares) {
+          const resolved = await resolveConversationShare(ctx, share._id);
+          if (resolved !== null) userIds.add(resolved.recipient.clerkSubject);
+        }
+      }
+    }
     let inserted = 0;
 
     for (const userId of userIds) {
@@ -182,7 +208,9 @@ export const record = mutation({
 
       const [globalPolicy, projectPolicy, threadPolicy] = await Promise.all([
         policyForScope(ctx, userId, "global", "global"),
-        policyForScope(ctx, userId, "project", alertProjectKey),
+        alertProjectKey === undefined
+          ? null
+          : policyForScope(ctx, userId, "project", alertProjectKey),
         policyForScope(ctx, userId, "thread", alertThreadScopeKey(environmentId, threadId)),
       ]);
       const alertEligibleAtCreation = resolveAlertPolicy(
@@ -198,7 +226,7 @@ export const record = mutation({
         threadId,
         projectKey,
         eventKind: args.eventKind,
-        alertProjectKey,
+        ...(alertProjectKey === undefined ? {} : { alertProjectKey }),
         alertEligibleAtCreation,
         createdAt,
       });

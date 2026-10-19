@@ -22,6 +22,7 @@ import { activeCompanyIdAtom } from "../cloud/activeCompany";
 import { ALL_FOCUS_ID } from "@spiritdevs/client-runtime/state/focuses";
 import {
   activeFocusIdAtom,
+  activeFocusIncludesConversationsAtom,
   focusAssignmentsAtom,
   focusMutationsAtom,
   focusNotificationsAtom,
@@ -100,7 +101,7 @@ export function ThreadAlertRuntime() {
     () =>
       rows.map((row): AlertDeliveryEvent => {
         const thread = threadMap.get(alertThreadScopeKey(row.environmentId, row.threadId));
-        const project = projectMap.get(row.projectKey);
+        const project = row.projectKey === null ? undefined : projectMap.get(row.projectKey);
         return {
           eventId: row.eventId,
           environmentId: row.environmentId,
@@ -108,7 +109,7 @@ export function ThreadAlertRuntime() {
           kind: row.eventKind,
           createdAt: row.createdAt,
           threadTitle: thread?.title ?? "Pathway thread",
-          projectName: project?.title ?? "",
+          projectName: row.projectKey === null ? "Conversation" : (project?.title ?? ""),
           alertEligibleAtCreation: row.alertEligibleAtCreation,
           ...(row.isRead === undefined ? {} : { isRead: row.isRead }),
         };
@@ -122,22 +123,27 @@ export function ThreadAlertRuntime() {
       if (!thread) return null;
       if (thread.settledAt !== null || thread.archivedAt !== null || thread.deletedAt !== null)
         return false;
-      const project = projectMap.get(`${thread.environmentId}:${thread.projectId}`);
+      const project =
+        thread.projectId === null
+          ? undefined
+          : projectMap.get(`${thread.environmentId}:${thread.projectId}`);
       const projectKey =
-        rowMap.get(event.eventId)?.alertProjectKey ??
-        alertProjectScopeKey(
-          thread.environmentId,
-          thread.projectId,
-          project?.repositoryIdentity?.canonicalKey,
-        );
+        thread.projectId === null
+          ? null
+          : (rowMap.get(event.eventId)?.alertProjectKey ??
+            alertProjectScopeKey(
+              thread.environmentId,
+              thread.projectId,
+              project?.repositoryIdentity?.canonicalKey,
+            ));
       if (
         !policyScopes?.threadKeys.includes(threadKey) ||
-        !policyScopes.projectKeys.includes(projectKey)
+        (projectKey !== null && !policyScopes.projectKeys.includes(projectKey))
       )
         return null;
       return resolveAlertPolicy(
         policyMap.get("global:global"),
-        policyMap.get(`project:${projectKey}`),
+        projectKey === null ? undefined : policyMap.get(`project:${projectKey}`),
         policyMap.get(`thread:${threadKey}`),
       )[alertEventKey(event.kind)];
     },
@@ -156,10 +162,19 @@ export function ThreadAlertRuntime() {
         target.threadId,
       );
       if (companyId !== null) appAtomRegistry.set(activeCompanyIdAtom, companyId);
-      const assignment = assignments.find(
-        (value) => value.projectKey === `${target.environmentId}:${thread?.projectId}`,
-      );
-      appAtomRegistry.set(activeFocusIdAtom, assignment?.focusId ?? ALL_FOCUS_ID);
+      if (thread?.projectId === null) {
+        if (!appAtomRegistry.get(activeFocusIncludesConversationsAtom)) {
+          appAtomRegistry.set(activeFocusIdAtom, ALL_FOCUS_ID);
+        }
+      } else {
+        const assignment =
+          thread === undefined
+            ? undefined
+            : assignments.find(
+                (value) => value.projectKey === `${target.environmentId}:${thread.projectId}`,
+              );
+        appAtomRegistry.set(activeFocusIdAtom, assignment?.focusId ?? ALL_FOCUS_ID);
+      }
       try {
         await navigate({
           to: "/threads/$environmentId/$threadId",

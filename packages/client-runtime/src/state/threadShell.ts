@@ -31,6 +31,8 @@ const EMPTY_THREAD_REFS_BY_PROJECT: ReadonlyMap<
 
 export function createEnvironmentThreadShellAtoms(input: {
   readonly catalogValueAtom: Atom.Atom<EnvironmentCatalogState>;
+  /** Discover shared threads before an environment has been connected on this device. */
+  readonly discoveryEnvironmentIdsAtom?: Atom.Atom<ReadonlyArray<EnvironmentId>>;
   readonly snapshotAtom: (
     environmentId: EnvironmentId,
   ) => Atom.Atom<OrchestrationV2ShellSnapshot | null>;
@@ -82,6 +84,7 @@ export function createEnvironmentThreadShellAtoms(input: {
     return Atom.make((get) => {
       const grouped = new Map<ProjectId, ScopedThreadRef[]>();
       for (const thread of get(environmentThreadsAtom(environmentId))) {
+        if (thread.projectId === null) continue;
         const refs = grouped.get(thread.projectId);
         const ref = { environmentId, threadId: thread.id };
         if (refs === undefined) {
@@ -156,7 +159,11 @@ export function createEnvironmentThreadShellAtoms(input: {
   let previousThreadRefs: ReadonlyArray<ScopedThreadRef> = [];
   const threadRefsAtom = Atom.make((get) => {
     const refs: ScopedThreadRef[] = [];
-    for (const environmentId of get(input.catalogValueAtom).entries.keys()) {
+    const environmentIds = new Set([
+      ...get(input.catalogValueAtom).entries.keys(),
+      ...(input.discoveryEnvironmentIdsAtom ? get(input.discoveryEnvironmentIdsAtom) : []),
+    ]);
+    for (const environmentId of environmentIds) {
       refs.push(...get(environmentThreadRefsAtom(environmentId)));
     }
     if (threadRefsEqual(previousThreadRefs, refs)) {

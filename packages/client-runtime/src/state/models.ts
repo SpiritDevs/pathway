@@ -69,7 +69,10 @@ export function threadRunStatusIsActive(status: ThreadRuntimeSummary["status"]):
 export interface EnvironmentThreadShell {
   readonly environmentId: EnvironmentId;
   readonly id: ThreadId;
-  readonly projectId: ProjectId;
+  readonly projectId: ProjectId | null;
+  readonly temporary?: boolean | undefined;
+  readonly ownerUserId?: string | undefined;
+  readonly conversationDirectory?: string | undefined;
   readonly title: string;
   readonly providerInstanceId: ProviderInstanceId;
   readonly modelSelection: OrchestrationV2ThreadShell["modelSelection"];
@@ -189,6 +192,9 @@ export function presentThreadShell(
     environmentId,
     id: thread.id,
     projectId: thread.projectId,
+    temporary: thread.temporary,
+    ownerUserId: thread.ownerUserId,
+    conversationDirectory: thread.conversationDirectory,
     title: thread.title,
     providerInstanceId: thread.providerInstanceId,
     modelSelection: thread.modelSelection,

@@ -13,7 +13,10 @@ import {
   failEnvironmentInternal,
   failEnvironmentNotFound,
   requireEnvironmentScope,
+  failEnvironmentScopeRequired,
 } from "../auth/http.ts";
+import { makeThreadAccessRequest } from "../conversationSharing/ThreadAccess.ts";
+import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as OrchestrationEventStore from "../persistence/Services/OrchestrationEventStore.ts";
 import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.ts";
@@ -42,6 +45,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
     const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
     const projectEnrichment = yield* ProjectEnrichmentService.ProjectEnrichmentService;
+    const environment = yield* ServerEnvironment;
 
     const enrichProjectShells = Effect.fn("http.orchestration.enrichProjectShells")(
       (projects: ReadonlyArray<OrchestrationProjectShell>) =>
@@ -64,7 +68,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
         ),
     );
 
-    const loadShellSnapshot = Effect.fn("http.orchestration.loadShellSnapshot")(function* () {
+    const loadShellSnapshot = Effect.fn("http.orchestration.loadShellSnapshot")(function* (includeProjects: boolean) {
       const base = yield* sql.withTransaction(
         Effect.gen(function* () {
           const projects = yield* projectionSnapshotQuery.getShellSnapshotWithoutEnrichment();
@@ -78,7 +82,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           } as const;
         }),
       );
-      const projects = yield* enrichProjectShells(base.projects);
+      const projects = includeProjects ? yield* enrichProjectShells(base.projects) : [];
       return { ...base, projects };
     });
 
@@ -87,19 +91,35 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
         "shellSnapshot",
         Effect.fn("environment.orchestration.shellSnapshot")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
-          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
-          return yield* loadShellSnapshot().pipe(
+          const session = yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          const access = yield* makeThreadAccessRequest(
+            { ...session, scopes: [...session.scopes] },
+            yield* environment.getEnvironmentId,
+          );
+          const snapshot = yield* loadShellSnapshot(!access.restricted).pipe(
             Effect.catch((cause) =>
               failEnvironmentInternal("orchestration_snapshot_failed", cause),
             ),
           );
+          return {
+            ...snapshot,
+            projects: access.restricted ? [] : snapshot.projects,
+            threads: snapshot.threads.filter((thread) => access.canAccess(thread, "read")),
+            archivedThreads: snapshot.archivedThreads.filter((thread) =>
+              access.canAccess(thread, "read"),
+            ),
+          };
         }),
       )
       .handle(
         "threadSnapshot",
         Effect.fn("environment.orchestration.threadSnapshot")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
-          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          const session = yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          const access = yield* makeThreadAccessRequest(
+            { ...session, scopes: [...session.scopes] },
+            yield* environment.getEnvironmentId,
+          );
           const snapshot = yield* threadManagement.getThreadSnapshot(args.params.threadId).pipe(
             Effect.catch(
               Effect.fnUntraced(function* (error) {
@@ -113,6 +133,8 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
               }),
             ),
           );
+          if (!access.canAccess(snapshot.projection.thread, "read"))
+            return yield* failEnvironmentScopeRequired(AuthOrchestrationReadScope);
           return {
             snapshotSequence: snapshot.snapshotSequence,
             projection: snapshot.projection,

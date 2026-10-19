@@ -14,6 +14,7 @@ const focusResult = v.object({
   name: v.string(),
   iconName: v.string(),
   accentColor: v.string(),
+  includeConversations: v.boolean(),
   orderKey: v.string(),
   createdAt: v.number(),
   updatedAt: v.number(),
@@ -79,6 +80,7 @@ function encodeFocus(row: Doc<"focuses">) {
     name: row.name,
     iconName: row.iconName,
     accentColor: row.accentColor,
+    includeConversations: row.includeConversations ?? false,
     orderKey: row.orderKey,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -172,6 +174,7 @@ export const create = mutation({
     accentColor: v.string(),
     orderKey: v.optional(v.string()),
     projectKeys: v.optional(v.array(v.string())),
+    includeConversations: v.optional(v.boolean()),
   },
   returns: focusResult,
   handler: async (ctx, args) => {
@@ -199,6 +202,7 @@ export const create = mutation({
       name: focusName(args.name),
       iconName: trimRequired(args.iconName, "A Focus icon"),
       accentColor: accentColor(args.accentColor),
+      includeConversations: args.includeConversations ?? false,
       orderKey:
         args.orderKey === undefined
           ? `${last?.orderKey ?? ""}n`
@@ -221,6 +225,7 @@ export const update = mutation({
     name: v.optional(v.string()),
     iconName: v.optional(v.string()),
     accentColor: v.optional(v.string()),
+    includeConversations: v.optional(v.boolean()),
   },
   returns: focusResult,
   handler: async (ctx, args) => {
@@ -232,6 +237,9 @@ export const update = mutation({
         ? {}
         : { iconName: trimRequired(args.iconName, "A Focus icon") }),
       ...(args.accentColor === undefined ? {} : { accentColor: accentColor(args.accentColor) }),
+      ...(args.includeConversations === undefined
+        ? {}
+        : { includeConversations: args.includeConversations }),
       updatedAt: Date.now(),
     };
     await ctx.db.patch(row._id, patch);

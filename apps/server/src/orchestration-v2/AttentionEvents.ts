@@ -44,7 +44,10 @@ export function detectAttentionEventTransition(input: {
   readonly environmentId: EnvironmentId;
   readonly event: OrchestrationV2DomainEvent;
   readonly repositoryCanonicalKey?: string;
-  readonly thread: Pick<OrchestrationV2ThreadShell, "id" | "projectId" | "settledAt">;
+  readonly thread: Pick<
+    OrchestrationV2ThreadShell,
+    "id" | "projectId" | "settledAt" | "ownerUserId"
+  >;
 }): AttentionEvent | null {
   const transition = attentionTransitionForEvent(input.event);
   if (
@@ -59,12 +62,20 @@ export function detectAttentionEventTransition(input: {
       `attention:${input.environmentId}:${input.thread.id}:${transition.transitionId}:${transition.eventKind}`,
     ),
     threadId: input.thread.id,
-    projectKey: FocusProjectKey.make(`${input.environmentId}:${input.thread.projectId}`),
-    alertProjectKey: alertProjectScopeKey(
-      input.environmentId,
-      input.thread.projectId,
-      input.repositoryCanonicalKey,
-    ),
+    ...(input.thread.ownerUserId === undefined ? {} : { ownerUserId: input.thread.ownerUserId }),
+    projectKey:
+      input.thread.projectId === null
+        ? null
+        : FocusProjectKey.make(`${input.environmentId}:${input.thread.projectId}`),
+    ...(input.thread.projectId === null
+      ? {}
+      : {
+          alertProjectKey: alertProjectScopeKey(
+            input.environmentId,
+            input.thread.projectId,
+            input.repositoryCanonicalKey,
+          ),
+        }),
     eventKind: transition.eventKind,
   };
 }

@@ -1,15 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
-import {
-  scopedProjectKey,
-  scopeProjectRef,
-  scopeThreadRef,
-} from "@spiritdevs/client-runtime/environment";
-import {
-  DEFAULT_RUNTIME_MODE,
-  type ScopedProjectRef,
-  type ThreadId,
-  type ThreadLocation,
-} from "@spiritdevs/contracts";
+import { scopeProjectRef, scopeThreadRef } from "@spiritdevs/client-runtime/environment";
+import { DEFAULT_RUNTIME_MODE, type ThreadId, type ThreadLocation } from "@spiritdevs/contracts";
 import { useParams, useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
 import {
@@ -18,6 +9,7 @@ import {
   type DraftId,
   type DraftThreadEnvMode,
   type DraftThreadState,
+  type DraftProjectRef,
   useComposerDraftStore,
 } from "../composerDraftStore";
 import { newDraftId, newThreadId } from "../lib/utils";
@@ -35,6 +27,7 @@ import { resolveDefaultProviderModelSelection } from "../providerInstances";
 import { primaryServerSettingsAtom } from "../state/server";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { legacyProjectCwdPreferenceKeys, useUiStateStore } from "../uiStateStore";
+import { usePrimaryEnvironmentId } from "../state/environments";
 import { useClientSettings } from "./useSettings";
 
 interface NewThreadWorkspaceOptions {
@@ -80,7 +73,7 @@ export function useNewThreadHandler() {
 
   return useCallback(
     (
-      projectRef: ScopedProjectRef,
+      projectRef: DraftProjectRef,
       options?: {
         branch?: string | null;
         worktreePath?: string | null;
@@ -147,6 +140,7 @@ export function useNewThreadHandler() {
       // skipped entirely when a higher-priority source decides, and its
       // query atom caches per project after the first call.
       const resolveDefaultEnvMode = async (): Promise<DraftThreadEnvMode> => {
+        if (projectRef.projectId === null) return "local";
         // pathway.json is read out of the project directory; a rootless project has none to read.
         const consultProjectFile =
           project !== undefined &&
@@ -165,7 +159,7 @@ export function useNewThreadHandler() {
       };
       const logicalProjectKey = project
         ? deriveLogicalProjectKeyFromSettings(project, projectGroupingSettings)
-        : scopedProjectKey(projectRef);
+        : `${projectRef.environmentId}:conversation`;
       const hasBranchOption = options?.branch !== undefined;
       const hasWorktreePathOption = options?.worktreePath !== undefined;
       const hasEnvModeOption = options?.envMode !== undefined;
@@ -421,6 +415,7 @@ export function useNewThreadHandler() {
 }
 
 export function useHandleNewThread() {
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const routeTarget = useParams({
     strict: false,
@@ -455,7 +450,9 @@ export function useHandleNewThread() {
     activeThread,
     defaultProjectRef: orderedProjects[0]
       ? scopeProjectRef(orderedProjects[0].environmentId, orderedProjects[0].id)
-      : null,
+      : primaryEnvironmentId
+        ? { environmentId: primaryEnvironmentId, projectId: null }
+        : null,
     handleNewThread,
     routeThreadRef,
   };

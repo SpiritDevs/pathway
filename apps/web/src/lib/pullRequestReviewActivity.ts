@@ -25,6 +25,7 @@ export function deriveActivePullRequestReviewKeys(
   const keys = new Set<string>();
   for (const thread of threads) {
     if (
+      thread.projectId === null ||
       thread.environmentId !== environmentId ||
       thread.deletedAt !== null ||
       !threadRuntimeIsActive(thread.runtime)

@@ -29,6 +29,7 @@ import { backendError } from "./lib/errors.ts";
 import { membershipAuthorization, requireCompanyActor, requirePermission } from "./lib/identity.ts";
 import { requireRelayControlPlane } from "./lib/relayIdentity.ts";
 import { domainIdArg } from "./lib/validators.ts";
+import { consumeConversationConnectGrant } from "./conversationShares.ts";
 
 export const CONNECT_GRANT_REFUSAL_CODE = "connect-grant-refused";
 
@@ -49,6 +50,8 @@ const validationResult = v.union(
     membershipId: domainIdArg,
     permission: v.string(),
     expiresAt: v.number(),
+    conversationShareId: v.optional(v.string()),
+    conversationUserId: v.optional(v.string()),
   }),
   v.object({
     status: v.literal("refused"),
@@ -176,6 +179,8 @@ export const validate = mutation({
       .query("connectGrants")
       .withIndex("by_token_hash", (q) => q.eq("tokenHash", args.tokenHash))
       .take(2);
+    if (grants.length === 0)
+      return (await consumeConversationConnectGrant(ctx, args.tokenHash)) ?? REFUSED;
     if (grants.length !== 1) return REFUSED;
     const grant = grants[0]!;
     const now = Date.now();

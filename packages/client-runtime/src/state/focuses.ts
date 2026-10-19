@@ -60,12 +60,24 @@ export function scopedProjectKeysForFocus(
   );
 }
 
-/** A Focus hides only when its assignments all fall outside the visible projects; an empty Focus stays visible. */
+export function focusIncludesConversations(
+  focuses: ReadonlyArray<Pick<Focus, "id" | "includeConversations">>,
+  activeFocusId: ActiveFocusId,
+): boolean {
+  return (
+    activeFocusId === ALL_FOCUS_ID ||
+    focuses.some((focus) => focus.id === activeFocusId && focus.includeConversations === true)
+  );
+}
+
+/** Personal conversations keep a Focus visible across companies, as does an empty Focus. */
 export function focusIsVisible(input: {
   readonly focusId: FocusId;
+  readonly includeConversations?: boolean;
   readonly assignments: ReadonlyArray<Pick<FocusAssignment, "focusId" | "projectKey">>;
   readonly visibleProjectKeys: ReadonlySet<string>;
 }): boolean {
+  if (input.includeConversations === true) return true;
   let assigned = false;
   for (const assignment of input.assignments) {
     if (assignment.focusId !== input.focusId) continue;
@@ -83,6 +95,7 @@ export function visibleFocuses(input: {
   return sortFocuses(input.focuses).filter((focus) =>
     focusIsVisible({
       focusId: focus.id,
+      includeConversations: focus.includeConversations === true,
       assignments: input.assignments,
       visibleProjectKeys: input.visibleProjectKeys,
     }),
@@ -91,7 +104,7 @@ export function visibleFocuses(input: {
 
 export function resolveActiveFocusId(input: {
   readonly preferredId: ActiveFocusId;
-  readonly focuses: ReadonlyArray<Pick<Focus, "id">>;
+  readonly focuses: ReadonlyArray<Pick<Focus, "id" | "includeConversations">>;
   readonly assignments: ReadonlyArray<Pick<FocusAssignment, "focusId" | "projectKey">>;
   readonly visibleProjectKeys: ReadonlySet<string>;
 }): ActiveFocusId {
@@ -99,6 +112,7 @@ export function resolveActiveFocusId(input: {
   if (!input.focuses.some((focus) => focus.id === input.preferredId)) return ALL_FOCUS_ID;
   return focusIsVisible({
     focusId: input.preferredId,
+    includeConversations: focusIncludesConversations(input.focuses, input.preferredId),
     assignments: input.assignments,
     visibleProjectKeys: input.visibleProjectKeys,
   })
@@ -111,7 +125,8 @@ export function groupSearchResultsByFocus<Result>(input: {
   readonly focuses: ReadonlyArray<Focus>;
   readonly assignments: ReadonlyArray<FocusAssignment>;
   readonly activeFocusId: ActiveFocusId;
-  readonly projectKey: (result: Result) => string;
+  readonly projectKey: (result: Result) => string | null;
+  readonly isConversation?: (result: Result) => boolean;
 }): ReadonlyArray<FocusSearchGroup<Result>> {
   const orderedFocuses = sortFocuses(input.focuses);
   const focusById = new Map(orderedFocuses.map((focus) => [focus.id, focus] as const));
@@ -119,13 +134,19 @@ export function groupSearchResultsByFocus<Result>(input: {
     input.assignments.map((assignment) => [assignment.projectKey, assignment.focusId] as const),
   );
   const resultsByFocus = new Map<ActiveFocusId, Result[]>();
+  const conversationFocusId = focusIncludesConversations(input.focuses, input.activeFocusId)
+    ? input.activeFocusId
+    : ALL_FOCUS_ID;
 
   for (const result of input.results) {
-    const assignedFocusId = focusIdByProject.get(input.projectKey(result));
+    const projectKey = input.projectKey(result);
+    const assignedFocusId = projectKey === null ? undefined : focusIdByProject.get(projectKey);
     const focusId =
-      assignedFocusId !== undefined && focusById.has(assignedFocusId)
-        ? assignedFocusId
-        : ALL_FOCUS_ID;
+      projectKey === null || input.isConversation?.(result) === true
+        ? conversationFocusId
+        : assignedFocusId !== undefined && focusById.has(assignedFocusId)
+          ? assignedFocusId
+          : ALL_FOCUS_ID;
     const group = resultsByFocus.get(focusId) ?? [];
     group.push(result);
     resultsByFocus.set(focusId, group);

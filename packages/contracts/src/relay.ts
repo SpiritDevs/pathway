@@ -908,6 +908,8 @@ export const RelayValidatedConnectGrantIdentity = Schema.Struct({
   environmentId: EnvironmentId,
   membershipId: MembershipId,
   permission: CompanyPermission,
+  conversationShareId: Schema.optionalKey(TrimmedNonEmptyString),
+  conversationUserId: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type RelayValidatedConnectGrantIdentity = typeof RelayValidatedConnectGrantIdentity.Type;
 

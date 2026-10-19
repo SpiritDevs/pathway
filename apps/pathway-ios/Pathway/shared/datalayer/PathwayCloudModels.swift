@@ -111,7 +111,7 @@ struct PathwayPullRequestAttachment: Codable, Equatable, Sendable {
 
 struct PathwayAgentThreadShell: Codable, Equatable, Sendable {
     let id: String
-    let projectId: String
+    let projectId: String?
     let title: String
     let providerInstanceId: String
     let modelSelection: PathwayModelSelection
@@ -146,6 +146,9 @@ struct PathwayAgentThreadShell: Codable, Equatable, Sendable {
     let pinOrderKey: String?
     let lastVisitedAt: String?
     let deletedAt: String?
+    var temporary: Bool? = nil
+    var conversationDirectory: String? = nil
+    var ownerUserId: String? = nil
 }
 
 struct PathwayAgentThread: Equatable, Identifiable, Sendable {

@@ -28,6 +28,17 @@ const event = (type: OrchestrationV2DomainEvent["type"], payload: Record<string,
     payload,
   }) as OrchestrationV2DomainEvent;
 
+it("emits conversation Attention Events without a project or project alert scope", () => {
+  const result = detectAttentionEventTransition({
+    environmentId,
+    thread: { ...thread, projectId: null },
+    event: event("run.updated", { id: "run:completed", status: "completed" }),
+  });
+  assert.equal(result?.projectKey, null);
+  assert.isUndefined(result?.alertProjectKey);
+  assert.equal(result?.eventKind, "finished-unsettled");
+});
+
 it("detects each Attention Event from committed state transitions", () => {
   const transitions = [
     event("run.updated", { id: "run:completed", status: "completed" }),

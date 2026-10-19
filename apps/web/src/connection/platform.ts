@@ -1,3 +1,4 @@
+import { conversationSharingMutationsAtom } from "../cloud/conversationSharing";
 import {
   ApplicationActivity,
   ClientPresentation,
@@ -205,6 +206,14 @@ const capabilitiesLayer = Layer.effectContext(
       scopes: AuthStandardClientScopes,
     });
     const cloudSession = CloudSession.of({
+      conversationConnectGrant: (shareId) => Effect.tryPromise({
+        try: async () => {
+          const sharing = appAtomRegistry.get(conversationSharingMutationsAtom);
+          if (sharing === null) throw new Error("Sign in to open this shared conversation.");
+          return (await sharing.issueConnectGrant(shareId)).token;
+        },
+        catch: (cause) => new ConnectionBlockedError({ reason: "authentication", detail: cause instanceof Error ? cause.message : "Could not open the shared conversation." }),
+      }),
       clerkToken: Effect.gen(function* () {
         const session = appAtomRegistry.get(managedRelaySessionAtom);
         if (session === null) {

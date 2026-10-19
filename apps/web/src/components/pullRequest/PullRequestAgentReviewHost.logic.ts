@@ -163,6 +163,7 @@ export function reconcilePullRequestReviewPublisherTargets(
   );
 
   for (const { thread, review } of reviews) {
+    if (thread.projectId === null) continue;
     const key = `${thread.environmentId}\u0000${thread.id}`;
     const active = threadRuntimeIsActive(thread.runtime);
     if (!active && !targets.has(key) && !recoveryKeys.has(key)) continue;

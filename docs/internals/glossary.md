@@ -2,39 +2,6 @@
 
 Project-specific vocabulary beyond the small glossary in `AGENTS.md`. Be opinionated: one canonical word per concept; alternates go under _Avoid_.
 
-## Connected mail
-
-**Mail account**:
-One member's connected Gmail mailbox within a workspace. Its messages, drafts and sender knowledge are private to that member. The relay owns synchronization and encrypted OAuth credentials. See [connected mail architecture](connected-mail.md).
-
-**Mail brain**:
-The selected environment, provider instance and model that analyze a mail account. An optional backup environment has its own provider selection. Ingestion continues while analysis environments are offline.
-
-**Bucket**:
-A message's Priority or Noise classification, accompanied by a reason. A pending analysis status distinguishes provisional placement from completed analysis.
-
-**Briefing**:
-The model's concise summary of a Priority message, including concrete actions or deadlines. Promoting Noise to Priority requests a briefing.
-
-**Sender rule**:
-The owner's remembered bucket choice for an address within one mail account. Removing it lets subsequent analysis choose the bucket again.
-
-**Sender knowledge**:
-Private accumulated information about a sender within a mail account. It is separate from the shared contact directory; saving a contact copies only the explicitly confirmed contact fields.
-
-## Time tracking
-
-These terms describe [concurrent agent tracking](../adr/0032-concurrent-agent-time-adds-to-project-totals.md).
-
-**Agent work time**:
-The sum of tracked agent durations. Concurrent agents each contribute their own duration to the project total.
-
-**Elapsed activity time**:
-The duration covered by tracked activity, counting overlapping intervals once within the selected scope. Eight agents working simultaneously for 30 minutes yield 30 minutes of elapsed activity and four hours of agent work.
-
-**Issue creation credit**:
-The greater of one minute or measured active composer time, recorded when a human issue creation succeeds. Any minimum credit above measured time does not add elapsed activity.
-
 ## Agent questions
 
 The following terms support the [Astra design record](../adr/0014-astra-questions-and-browser-scope.md). They describe the design under discussion, not shipped support.
@@ -58,6 +25,22 @@ The runtime that owns the automated browser, its live tabs, and its cookies. It 
 A versioned data file used for model metadata and classification. It does not prove that an account or installed provider can use a model.
 
 ## Thread workspaces
+
+The following four terms describe the [conversation and temporary-thread draft](../adr/0015-conversations-and-temporary-threads.md), not shipped support.
+
+**Conversation**:
+A thread without an attached project. It appears in the normal thread list and in All by default. The Conversations checkbox can independently include projectless conversations in several Focuses. Conversations are personal across company selections and may be shared with specific company users with view or collaborate access. Attachment to a project is allowed on the same environment while no work is running or queued; the attached thread then follows its project's Focus.
+
+**Conversation folder**:
+The dedicated working folder created for a projectless conversation beneath its owning environment's Pathway userdata. After project attachment, its files stay there and the agent retains explicit access to both this folder and the project workspace. Thread deletion and normal thread cleanup remove it; ordinary settlement of a retained conversation does not.
+
+**Temporary thread**:
+A thread selected as temporary before its first message is sent and deleted upon manual settlement, settlement after a merged PR, or an explicit settle-after-completion request. Failed or unfinished work blocks automatic deletion. It may have an attached project or be a Conversation. It skips inactivity settlement. Uncommitted changes and unpushed commits block automatic settlement; manual settling offers Review changes, Cancel, and Discard and delete. Conversation files outside Git are deleted without an extra warning.
+
+A temporary thread attached to a project always uses a new dedicated worktree, whether attached at creation or later.
+
+**Keep conversation**:
+The action that makes a temporary thread permanent before settlement. It preserves its history, files, and workspace references. Attaching a project does not implicitly perform this action. After its first message has been sent, a kept thread cannot be made temporary again.
 
 **Workspace move**:
 The durable server workflow that moves an existing thread and the source checkout's tracked and untracked non-ignored changes into a new linked Git worktree. It is not a client-side sequence of Git calls.
@@ -139,34 +122,3 @@ _Avoid_: Association, Tag, Reference
 **Mirror Window**:
 The rolling range of Google history copied into Convex — 90 days back, 365 days forward. Events outside it are not replicated and not rendered.
 _Avoid_: Sync range, Horizon
-
-## Thread alerts
-
-**Alert Subscription**:
-The global, project, or thread preference that determines whether an Attention Event is eligible for sound or operating-system notification delivery. It does not filter the Notification Tray. Global is explicitly enabled or disabled; project and thread subscriptions can inherit, enable, or disable.
-
-**Effective Alert Subscription**:
-The four resolved event choices for a thread after applying the global -> project -> thread cascade independently to completion, permission, user-input, and failure. The closest explicit value for each event wins, so a thread can have a mixed effective state.
-_Avoid_: Bell state, Notification status
-
-**Alert Menu**:
-The popup for editing a thread's four event choices or restoring project defaults. Control/Command-hover, right-click, Control/Command+Enter on the focused bell, and long-press on touch open the same menu.
-_Avoid_: Bell popup, Notification popup
-
-**Alert Policy**:
-The cloud-synced global, project, thread, and per-event choices that determine which Attention Events may interrupt the user. Repository-backed project policy uses stable repository identity across worktrees, environments, and client grouping modes. Non-repository project policy uses environment-scoped project identity. Alert Policy does not include a client's sound, OS-notification, or sound-file settings.
-
-**Alert Delivery Settings**:
-The device-local sound toggle, OS-notification toggle, and sound choice used after an Attention Event passes the Alert Policy.
-
-**Quiet Hours**:
-A device-local weekly schedule that suppresses sound and OS-notification delivery without filtering the Notification Tray.
-
-**Quiet-hours Summary**:
-One notification produced when Quiet Hours end. It groups subscribed Attention Events that remain unread by thread, plays at most one sound, and opens the Notification Tray instead of replaying each event.
-
-**Event Acknowledgement**:
-A cloud-synced record that marks one Attention Event read after the user selects its OS notification. It composes with the Notification Tray's all-read watermark without clearing unrelated events.
-
-**Notifications Settings**:
-The settings page for global thread-alert events, logical-project overrides, this client's delivery channels and sound, and this client's Quiet Hours.

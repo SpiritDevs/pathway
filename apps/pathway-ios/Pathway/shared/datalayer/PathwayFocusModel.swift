@@ -7,6 +7,7 @@ struct PathwayFocus: Codable, Identifiable, Equatable {
     let iconName: String
     let accentColor: String
     let orderKey: String
+    var includeConversations: Bool? = nil
 }
 
 struct PathwayFocusAssignment: Decodable {
@@ -18,7 +19,7 @@ struct PathwayFocusNotification: Decodable, Identifiable {
     let id: String
     let environmentId: String
     let threadId: String
-    let projectKey: String
+    let projectKey: String?
     let eventKind: String
     let createdAt: Double
     var title: String {
@@ -42,7 +43,11 @@ struct PathwayFocusNotification: Decodable, Identifiable {
     @ObservationIgnored private var observationGeneration = 0
 
     func includes(_ thread: PathwayAgentThread) -> Bool {
-        selectedID == "all" || assignments.contains { $0.focusId == selectedID && $0.projectKey == "\(thread.environmentId):\(thread.shell.projectId)" }
+        if selectedID == "all" { return true }
+        guard let projectID = thread.shell.projectId else {
+            return focuses.first { $0.id == selectedID }?.includeConversations == true
+        }
+        return assignments.contains { $0.focusId == selectedID && $0.projectKey == "\(thread.environmentId):\(projectID)" }
     }
 
     func move(_ focus: PathwayFocus, offset: Int, cloud: PathwayCloudModel) async {

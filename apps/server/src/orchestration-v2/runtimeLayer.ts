@@ -251,6 +251,7 @@ const browserTakeoverProvided = browserTakeoverServiceLayer.pipe(
 const effectExecutorProvided = effectExecutorLayer.pipe(
   Layer.provide(
     Layer.mergeAll(
+      projectionStoreLayer,
       runFinalizationServiceProvided,
       checkpointRollbackServiceProvided,
       providerSessionManagerProvided,

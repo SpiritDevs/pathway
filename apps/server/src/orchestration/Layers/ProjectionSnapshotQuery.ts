@@ -123,7 +123,7 @@ const ProjectionThreadSearchRequest = Schema.Struct({
 });
 const ProjectionThreadSearchRow = Schema.Struct({
   threadId: ThreadId,
-  projectId: ProjectId,
+  projectId: Schema.NullOr(ProjectId),
   source: OrchestrationThreadSearchSource,
   matchText: Schema.String,
   messageCreatedAt: Schema.NullOr(IsoDateTime),
@@ -804,11 +804,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           FROM orchestration_v2_projection_messages AS v2_messages
           INNER JOIN orchestration_v2_projection_threads AS v2_threads
             ON v2_threads.thread_id = v2_messages.thread_id
-          INNER JOIN projection_projects AS projects
+          LEFT JOIN projection_projects AS projects
             ON projects.project_id = v2_threads.project_id
           WHERE v2_threads.deleted_at IS NULL
             AND v2_threads.archived_at IS NULL
-            AND projects.deleted_at IS NULL
+            AND (v2_threads.project_id IS NULL OR (projects.project_id IS NOT NULL AND projects.deleted_at IS NULL))
             AND v2_messages.streaming = 0
             AND v2_messages.role IN ('user', 'assistant')
             AND json_extract(v2_messages.payload_json, '$.text') LIKE ${pattern} ESCAPE '!'

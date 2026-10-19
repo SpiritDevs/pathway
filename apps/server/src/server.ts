@@ -150,6 +150,8 @@ import {
   registerPreviewAutomationFence,
 } from "./orchestration-v2/BrowserTakeoverService.ts";
 import * as ResourceCleanupService from "./orchestration-v2/ResourceCleanupService.ts";
+import * as ThreadProjectAttachment from "./orchestration-v2/ThreadProjectAttachment.ts";
+import * as TemporaryThreadSettlement from "./orchestration-v2/TemporaryThreadSettlement.ts";
 import * as RunFinalizationService from "./orchestration-v2/RunFinalizationService.ts";
 import {
   clearPersistedServerRuntimeState,
@@ -467,7 +469,18 @@ const RunFinalizationObserverLayerLive = RunFinalizationService.observerLive.pip
 const OrchestrationV2RuntimeLayerLive = OrchestrationV2ProductionLayerLive.pipe(
   Layer.provide(questionAnswerDeliveryLayer),
   Layer.provide(CheckpointStoreLayerLive),
-  Layer.provide(ResourceCleanupService.live),
+  Layer.provide(
+    ThreadProjectAttachment.layer.pipe(
+      Layer.provide(GitWorkflowLayerLive),
+      Layer.provide(ProjectionProjectRepositoryLive),
+    ),
+  ),
+  Layer.provide(
+    ResourceCleanupService.live.pipe(
+      Layer.provide(GitWorkflowLayerLive),
+      Layer.provide(ProjectionProjectRepositoryLive),
+    ),
+  ),
   Layer.provide(RunFinalizationObserverLayerLive),
 );
 
@@ -508,7 +521,12 @@ const IssueMentionLinkerLayerLive = IssueMentionLinker.layer.pipe(
   Layer.provide(RuntimeCoreDependenciesBaseLive),
 );
 
+const TemporaryThreadSettlementLayerLive = TemporaryThreadSettlement.workerLive.pipe(
+  Layer.provide(RuntimeCoreDependenciesBaseLive),
+);
+
 const RuntimeCoreDependenciesLive = RuntimeCoreDependenciesBaseLive.pipe(
+  Layer.provideMerge(TemporaryThreadSettlementLayerLive),
   Layer.provideMerge(IssueAutomationCoordinatorLayerLive),
   Layer.provideMerge(IssueMentionLinkerLayerLive),
   // Shared native/canonical NDJSON writers used by both the per-instance

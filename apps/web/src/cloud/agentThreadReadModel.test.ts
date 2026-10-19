@@ -522,3 +522,16 @@ describe("cloud Agent Thread read model", () => {
     );
   });
 });
+
+it("keeps projectless conversations visible across company selections", () => {
+  const conversation = {
+    ...agentThread.shell,
+    id: ThreadId.make("personal-conversation"),
+    projectId: null,
+  };
+  const rows = [agentThread.shell, conversation];
+  expect(
+    companyScopedEnvironmentThreads(rows, OTHER_COMPANY_ID, new Map(), ENVIRONMENT_ID),
+  ).toEqual([conversation]);
+  expect(companyScopedEnvironmentThreads(rows, null, new Map(), ENVIRONMENT_ID)).toBe(rows);
+});

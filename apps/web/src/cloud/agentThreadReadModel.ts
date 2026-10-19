@@ -147,15 +147,18 @@ export function companyScopedEnvironmentThreads(
 ): ReadonlyArray<OrchestrationV2ThreadShell> {
   if (companyId === null) return threads;
   const replica = replicas.get(companyId);
-  if (replica === undefined) return EMPTY_THREADS;
-  if (!hasPathwayEnvironmentRegistration(replica, environmentId)) return EMPTY_THREADS;
+  if (replica === undefined || !hasPathwayEnvironmentRegistration(replica, environmentId)) {
+    return threads.filter((thread) => thread.projectId === null);
+  }
   const threadIds = new Set<string>();
   for (const value of replica.view.values()) {
     if (isAgentThread(value) && value.environmentId === environmentId) {
       threadIds.add(value.shell.id);
     }
   }
-  const filtered = threads.filter((thread) => threadIds.has(thread.id));
+  const filtered = threads.filter(
+    (thread) => thread.projectId === null || threadIds.has(thread.id),
+  );
   return filtered.length === threads.length ? threads : filtered;
 }
 

@@ -416,9 +416,20 @@ const make = Effect.gen(function* () {
     function* (
       input: {
         readonly environmentId: string;
+        readonly connectGrant?: RelayValidatedConnectGrantIdentity;
       } & EnvironmentConnectIdentity,
     ) {
-      if (input.userId !== undefined) {
+      if (
+        input.connectGrant?.conversationShareId !== undefined &&
+        input.connectGrant.conversationUserId !== input.userId
+      ) {
+        return yield* new EnvironmentConnectNotAuthorized({
+          environmentId: input.environmentId,
+          operation: "connect",
+          reason: "connect_grant_refused",
+        });
+      }
+      if (input.userId !== undefined && input.connectGrant?.conversationShareId === undefined) {
         return yield* Effect.all(
           {
             link: links.getForUser({ userId: input.userId, environmentId: input.environmentId }),

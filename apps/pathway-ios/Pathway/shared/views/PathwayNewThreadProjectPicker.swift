@@ -9,6 +9,7 @@ struct PathwayNewThreadDraft {
     let baseReference: String
     let branch: String
     let startFromOrigin: Bool
+    let temporary: Bool
 
     init(model: PathwayAgentThreadCreationModel) {
         prompt = model.prompt
@@ -18,6 +19,7 @@ struct PathwayNewThreadDraft {
         baseReference = model.baseReference
         branch = model.branch
         startFromOrigin = model.startFromOrigin
+        temporary = model.temporary
     }
 
     func apply(to model: PathwayAgentThreadCreationModel) {
@@ -28,19 +30,20 @@ struct PathwayNewThreadDraft {
         model.baseReference = baseReference
         model.branch = branch
         model.startFromOrigin = startFromOrigin
+        model.temporary = temporary
     }
 }
 
 struct PathwayNewThreadBindingOption: Identifiable {
-    let binding: PathwayCompanyEnvironmentBinding
+    let binding: PathwayCompanyEnvironmentBinding?
     let environment: PathwayCompanyEnvironment
     let projectID: String
     let projectName: String
     let companyName: String
 
-    var id: String { binding.id }
+    var id: String { binding?.id ?? "conversation:\(environment.environment.environmentId)" }
     var label: String { environment.environment.label }
-    var workspacePath: String { binding.binding.localWorkspaceRoot }
+    var workspacePath: String { binding?.binding.localWorkspaceRoot ?? "Personal conversation folder" }
 }
 
 struct PathwayNewThreadProjectOption: Identifiable {
@@ -48,6 +51,8 @@ struct PathwayNewThreadProjectOption: Identifiable {
     let name: String
     let companyName: String
     let bindings: [PathwayNewThreadBindingOption]
+
+    var isConversation: Bool { bindings.first?.binding == nil }
 
     var locationDescription: String {
         if bindings.count == 1 {
@@ -84,7 +89,7 @@ struct PathwayNewThreadProjectPicker: View {
 
     private func projectLabel(_ project: PathwayNewThreadProjectOption) -> some View {
         HStack(spacing: 14) {
-            Image(systemName: "folder")
+            Image(systemName: project.isConversation ? "bubble.left" : "folder")
                 .font(.title3)
                 .foregroundStyle(.secondary)
                 .frame(width: 28)

@@ -22,7 +22,7 @@ import {
 export class RuntimePolicyResolveError extends Schema.TaggedErrorClass<RuntimePolicyResolveError>()(
   "RuntimePolicyResolveError",
   {
-    projectId: ProjectId,
+    projectId: Schema.NullOr(ProjectId),
     providerInstanceId: ProviderInstanceId,
     cause: Schema.optional(Schema.Defect()),
   },
@@ -65,7 +65,8 @@ export const layer: Layer.Layer<RuntimePolicyV2> = Layer.succeed(RuntimePolicyV2
     Effect.succeed({
       runtimeMode: input.thread.runtimeMode,
       interactionMode: input.thread.interactionMode,
-      cwd: input.thread.worktreePath,
+      cwd: input.thread.worktreePath ?? input.thread.conversationDirectory ?? null,
+      ...(input.thread.conversationDirectory === undefined ? {} : { additionalDirectories: [input.thread.conversationDirectory] }),
     }),
 });
 
@@ -81,7 +82,9 @@ export const layerFromProjectRepository: Layer.Layer<
       resolve: Effect.fn("RuntimePolicyV2.resolve")(function* (input) {
         const cwd =
           input.thread.worktreePath ??
-          (yield* projects.getById({ projectId: input.thread.projectId }).pipe(
+          (input.thread.projectId === null
+            ? input.thread.conversationDirectory ?? null
+            : (yield* projects.getById({ projectId: input.thread.projectId }).pipe(
             Effect.mapError(
               (cause) =>
                 new RuntimePolicyResolveError({
@@ -103,11 +106,13 @@ export const layerFromProjectRepository: Layer.Layer<
                 onSome: (project) => Effect.succeed(project.workspaceRoot),
               }),
             ),
-          ));
+          )));
+        if (cwd === null) return yield* new RuntimePolicyResolveError({ projectId: input.thread.projectId, providerInstanceId: input.modelSelection.instanceId, cause: "Thread has no working directory." });
         return ProviderAdapterV2RuntimePolicy.make({
           runtimeMode: input.thread.runtimeMode,
           interactionMode: input.thread.interactionMode,
           cwd,
+          ...(input.thread.conversationDirectory === undefined ? {} : { additionalDirectories: [input.thread.conversationDirectory] }),
         });
       }),
     });

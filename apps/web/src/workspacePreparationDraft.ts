@@ -17,7 +17,7 @@ export function restoreWorkspacePreparationDraft(input: {
   logicalProjectKey: string;
   thread: Pick<
     OrchestrationV2AppThread,
-    "runtimeMode" | "interactionMode" | "locations" | "modelSelection"
+    "runtimeMode" | "interactionMode" | "locations" | "modelSelection" | "temporary"
   >;
   preparation: OrchestrationV2WorkspacePreparation | undefined;
   text: string;
@@ -27,6 +27,7 @@ export function restoreWorkspacePreparationDraft(input: {
   const draftId = newDraftId();
   store.setLogicalProjectDraftThreadId(input.logicalProjectKey, input.projectRef, draftId, {
     threadId: newThreadId(),
+    temporary: input.thread.temporary ?? false,
     createdAt: new Date().toISOString(),
     runtimeMode: input.thread.runtimeMode,
     interactionMode: input.thread.interactionMode,

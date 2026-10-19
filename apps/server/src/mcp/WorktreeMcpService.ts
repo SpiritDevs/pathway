@@ -152,6 +152,7 @@ const make = Effect.gen(function* () {
       );
     }
 
+    if (projection.thread.projectId === null) return yield* failure("invalid_request", "Attach a project before using worktree tools.");
     const project = yield* loadProject(scope, projection.thread.projectId);
     if (project.workspaceRoot === null) {
       return yield* failure(
@@ -371,7 +372,7 @@ const make = Effect.gen(function* () {
               ? Effect.succeed<WorktreeMcpContinuationStatus>({ status: "skipped" })
               : threadManagement
                   .sendToThread({
-                    projectId: projection.thread.projectId,
+                    projectId: project.id,
                     commandId: ids.continuationCommandId,
                     threadId: scope.threadId,
                     messageId: ids.continuationMessageId,
@@ -405,7 +406,7 @@ const make = Effect.gen(function* () {
           setupScript = yield* setupScriptRunner
             .runForThread({
               threadId: scope.threadId,
-              projectId: projection.thread.projectId,
+              projectId: project.id,
               projectCwd,
               worktreePath,
               project: {
@@ -478,7 +479,8 @@ const make = Effect.gen(function* () {
     function* (scope) {
       yield* requireCapability(scope);
       const projection = yield* loadThread(scope);
-      const project = yield* loadProject(scope, projection.thread.projectId);
+      if (projection.thread.projectId === null) return yield* failure("invalid_request", "Attach a project before using worktree tools.");
+    const project = yield* loadProject(scope, projection.thread.projectId);
       if (project.workspaceRoot === null) {
         return yield* failure(
           "invalid_request",

@@ -1,3 +1,4 @@
+import { MessageCircleIcon, Share2Icon, TimerIcon } from "lucide-react";
 import { type EnvironmentId, type ScopedProjectRef, type ThreadId } from "@spiritdevs/contracts";
 import {
   memo,
@@ -18,6 +19,13 @@ interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
   activeThreadId: ThreadId;
   activeThreadTitle: string;
+  conversation?: boolean;
+  temporary?: boolean;
+  temporarySelectable?: boolean;
+  onTemporaryChange?: (temporary: boolean) => void;
+  onKeepConversation?: () => void;
+  onSelectConversation?: () => void;
+  onShareConversation?: () => void;
   activeProjectName: string | undefined;
   activeProjectCwd: string | null;
   activeProjectRef: ScopedProjectRef | null;
@@ -82,6 +90,12 @@ export const ChatHeader = memo(function ChatHeader({
   activeThreadId,
   activeThreadTitle,
   activeProjectName,
+  conversation = false,
+  temporary = false,
+  temporarySelectable = false,
+  onTemporaryChange,
+  onKeepConversation,
+  onSelectConversation,
   activeProjectCwd,
   activeProjectRef,
   projectSelectionEnabled,
@@ -146,22 +160,31 @@ export const ChatHeader = memo(function ChatHeader({
           {/* The project always leads the header: knowing which project a
               thread lives in is priority zero, and the thread title alone
               doesn't answer it. */}
-          {activeProjectName ? (
+          {activeProjectName || conversation ? (
             <li className="inline-flex shrink-0 items-center gap-2">
               {projectSelectionEnabled ? (
                 <WorkspaceProjectSelector
+                  conversation={conversation}
+                  onSelectConversation={onSelectConversation}
+                  {...(conversation && !onSelectConversation
+                    ? { environmentId: activeThreadEnvironmentId }
+                    : {})}
                   activeProjectRef={activeProjectRef}
-                  activeProjectTitle={activeProjectName}
+                  activeProjectTitle={activeProjectName ?? null}
                   ariaLabel="Change project"
                   triggerClassName="inline-flex min-w-0 cursor-pointer items-center gap-1.5 rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                   menuAlign="start"
                   renderTrigger={(displayName) => (
                     <>
-                      <ProjectFavicon
-                        environmentId={activeThreadEnvironmentId}
-                        cwd={activeProjectCwd ?? ""}
-                        className="size-3.5"
-                      />
+                      {conversation ? (
+                        <MessageCircleIcon className="size-3.5" />
+                      ) : (
+                        <ProjectFavicon
+                          environmentId={activeThreadEnvironmentId}
+                          cwd={activeProjectCwd ?? ""}
+                          className="size-3.5"
+                        />
+                      )}
                       <span className="max-w-40 truncate text-sm font-medium">{displayName}</span>
                     </>
                   )}
@@ -172,13 +195,17 @@ export const ChatHeader = memo(function ChatHeader({
                   <TooltipTrigger
                     render={<span className="inline-flex min-w-0 items-center gap-1.5" />}
                   >
-                    <ProjectFavicon
-                      environmentId={activeThreadEnvironmentId}
-                      cwd={activeProjectCwd ?? ""}
-                      className="size-3.5"
-                    />
+                    {conversation ? (
+                      <MessageCircleIcon className="size-3.5" />
+                    ) : (
+                      <ProjectFavicon
+                        environmentId={activeThreadEnvironmentId}
+                        cwd={activeProjectCwd ?? ""}
+                        className="size-3.5"
+                      />
+                    )}
                     <span className="max-w-40 truncate text-sm font-medium text-muted-foreground">
-                      {activeProjectName}
+                      {conversation ? "Conversation" : activeProjectName}
                     </span>
                   </TooltipTrigger>
                   <TooltipPopup side="top">{activeProjectName}</TooltipPopup>
@@ -259,6 +286,56 @@ export const ChatHeader = memo(function ChatHeader({
           </li>
         </ol>
       </nav>
+      {onShareConversation ? (
+        <button
+          type="button"
+          aria-label="Share conversation"
+          title="Share conversation"
+          onClick={onShareConversation}
+          className="inline-flex shrink-0 items-center justify-center rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground [-webkit-app-region:no-drag]"
+        >
+          <Share2Icon className="size-4" />
+        </button>
+      ) : null}
+      {temporarySelectable || temporary ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                aria-label={
+                  temporarySelectable
+                    ? "Temporary conversation"
+                    : onKeepConversation
+                      ? "Keep conversation"
+                      : "Temporary conversation"
+                }
+                disabled={!temporarySelectable && !onKeepConversation}
+                aria-pressed={temporarySelectable ? temporary : undefined}
+                onClick={() =>
+                  temporarySelectable ? onTemporaryChange?.(!temporary) : onKeepConversation?.()
+                }
+                className={cn(
+                  "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs [-webkit-app-region:no-drag]",
+                  temporary
+                    ? "border-foreground/25 text-foreground"
+                    : "border-transparent text-muted-foreground hover:bg-accent",
+                )}
+              />
+            }
+          >
+            <TimerIcon className="size-3.5" />
+            Temporary
+          </TooltipTrigger>
+          <TooltipPopup>
+            {temporarySelectable
+              ? "Delete this conversation when it settles"
+              : onKeepConversation
+                ? "Keep conversation"
+                : "Temporary conversation"}
+          </TooltipPopup>
+        </Tooltip>
+      ) : null}
     </div>
   );
 });

@@ -262,7 +262,7 @@ export function resolveAgentAwarenessRelayActiveThreadIds(input: {
   const projectById = new Map(input.projects.map((project) => [project.id, project]));
   return input.threads
     .filter((thread) => {
-      const project = projectById.get(thread.projectId);
+      const project = thread.projectId === null ? undefined : projectById.get(thread.projectId);
       if (!project) {
         return false;
       }
@@ -399,7 +399,7 @@ export const make = Effect.gen(function* () {
       threadShell === null || threadShell.archivedAt !== null
         ? Option.none<OrchestrationV2ThreadShell>()
         : Option.some(threadShell);
-    const project = Option.isSome(thread)
+    const project = Option.isSome(thread) && thread.value.projectId !== null
       ? yield* projects.getById(thread.value.projectId)
       : Option.none<Project>();
     const snapshot = resolveAgentAwarenessRelayPublishSnapshot({
@@ -687,7 +687,7 @@ export const make = Effect.gen(function* () {
             if (transition !== null) {
               const thread = yield* threads.getThreadShell(threadId);
               if (thread !== null) {
-                const project = yield* projects.getById(thread.projectId);
+                const project = thread.projectId === null ? Option.none<Project>() : yield* projects.getById(thread.projectId);
                 attentionEvent = detectAttentionEventTransition({
                   environmentId,
                   event,

@@ -84,6 +84,13 @@ import {
 } from "./config.ts";
 import { relayUrlConfig } from "./publicConfig.ts";
 import {
+  conversationShareSubject,
+  type ConversationShareSession,
+  AuthOrchestrationReadScope,
+  AuthOrchestrationOperateScope,
+} from "@spiritdevs/contracts";
+import { resolveConversationShareForEnvironment } from "../conversationSharing/ThreadAccess.ts";
+import {
   readCliDesiredCloudLink,
   readCliDesiredLinkMode,
   setCliDesiredCloudLink,
@@ -417,6 +424,10 @@ export interface CloudHttpDependencies {
     readonly environmentId: RelayCloudMintCredentialProofPayload["environmentId"];
     readonly connectGrant: RelayValidatedConnectGrantIdentity;
   }) => Effect.Effect<string | null, never, SqlClient.SqlClient>;
+  readonly resolveConversationShare?: (input: {
+    environmentId: RelayCloudMintCredentialProofPayload["environmentId"];
+    shareId: string;
+  }) => Effect.Effect<ConversationShareSession | null>;
 }
 
 const cloudHttpDependencies = Effect.gen(function* () {
@@ -436,6 +447,11 @@ const cloudHttpDependencies = Effect.gen(function* () {
       ),
     resolveConnectGrantActor: (input) =>
       resolveConnectGrantActorFromLocalReplica(input).pipe(
+        Effect.provideService(ServerSecretStore.ServerSecretStore, secrets),
+        Effect.provideService(HttpClient.HttpClient, httpClient),
+      ),
+    resolveConversationShare: (input) =>
+      resolveConversationShareForEnvironment(input).pipe(
         Effect.provideService(ServerSecretStore.ServerSecretStore, secrets),
         Effect.provideService(HttpClient.HttpClient, httpClient),
       ),
@@ -1146,46 +1162,67 @@ export const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCrede
       });
     }
     const proof = proofOption.value;
-    const sessionIdentity = yield* proof.initiatingEnvironmentId === undefined
+    const sessionIdentity = yield* proof.connectGrant?.conversationShareId !== undefined
       ? Effect.gen(function* () {
-          const linkedCloudUserId = yield* readInstalledCloudUserId(dependencies.secrets);
-          if (proof.sub !== linkedCloudUserId) {
-            return yield* new EnvironmentHttpUnauthorizedError({
-              message: "Invalid cloud mint request.",
-            });
-          }
-          yield* requireCloudMintConnectGrantAuthorization(dependencies, proof, environmentId);
-          return {
-            subject: "cloud-connect",
-            ...(proof.clientEnvironmentId
-              ? { initiatingEnvironmentId: proof.clientEnvironmentId }
-              : {}),
-          } as const;
-        })
-      : Effect.gen(function* () {
+          const shareId = proof.connectGrant!.conversationShareId!;
+          const share = yield* (
+            dependencies.resolveConversationShare?.({ environmentId, shareId }) ??
+              Effect.succeed(null)
+          );
+          const linkedOwner = yield* readInstalledCloudUserId(dependencies.secrets);
           if (
-            proof.clientEnvironmentId !== undefined ||
-            proof.sub !== proof.initiatingEnvironmentId ||
-            proof.connectGrant === undefined
+            share === null ||
+            proof.initiatingEnvironmentId !== undefined ||
+            share.userId !== proof.sub ||
+            proof.connectGrant!.conversationUserId !== share.userId ||
+            share.ownerUserId !== linkedOwner
           ) {
             return yield* new EnvironmentHttpUnauthorizedError({
-              message: "Invalid cloud mint request.",
+              message: "Invalid conversation connect grant.",
             });
           }
-          const actingUserId = yield* dependencies.resolveConnectGrantActor({
-            environmentId,
-            connectGrant: proof.connectGrant,
+          return { subject: conversationShareSubject(shareId) } as const;
+        })
+      : proof.initiatingEnvironmentId === undefined
+        ? Effect.gen(function* () {
+            const linkedCloudUserId = yield* readInstalledCloudUserId(dependencies.secrets);
+            if (proof.sub !== linkedCloudUserId) {
+              return yield* new EnvironmentHttpUnauthorizedError({
+                message: "Invalid cloud mint request.",
+              });
+            }
+            yield* requireCloudMintConnectGrantAuthorization(dependencies, proof, environmentId);
+            return {
+              subject: "cloud-connect",
+              ...(proof.clientEnvironmentId
+                ? { initiatingEnvironmentId: proof.clientEnvironmentId }
+                : {}),
+            } as const;
+          })
+        : Effect.gen(function* () {
+            if (
+              proof.clientEnvironmentId !== undefined ||
+              proof.sub !== proof.initiatingEnvironmentId ||
+              proof.connectGrant === undefined
+            ) {
+              return yield* new EnvironmentHttpUnauthorizedError({
+                message: "Invalid cloud mint request.",
+              });
+            }
+            const actingUserId = yield* dependencies.resolveConnectGrantActor({
+              environmentId,
+              connectGrant: proof.connectGrant,
+            });
+            if (actingUserId === null) {
+              return yield* new EnvironmentHttpUnauthorizedError({
+                message: "Invalid cloud mint request.",
+              });
+            }
+            return {
+              subject: actingUserId,
+              initiatingEnvironmentId: proof.initiatingEnvironmentId,
+            } as const;
           });
-          if (actingUserId === null) {
-            return yield* new EnvironmentHttpUnauthorizedError({
-              message: "Invalid cloud mint request.",
-            });
-          }
-          return {
-            subject: actingUserId,
-            initiatingEnvironmentId: proof.initiatingEnvironmentId,
-          } as const;
-        });
 
     const jtiSecretName = `${CLOUD_MINT_JTI_PREFIX}${proof.jti}`;
     const nonceSecretName = `${CLOUD_MINT_NONCE_PREFIX}${proof.nonce}`;
@@ -1202,7 +1239,10 @@ export const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCrede
 
     const keyPair = yield* getOrCreateEnvironmentKeyPairFromSecretStore(dependencies.secrets);
     const issued = yield* dependencies.environmentAuth.createPairingLink({
-      scopes: AuthStandardClientScopes,
+      scopes:
+        proof.connectGrant?.conversationShareId === undefined
+          ? AuthStandardClientScopes
+          : [AuthOrchestrationReadScope, AuthOrchestrationOperateScope],
       ...sessionIdentity,
       ttl: Duration.minutes(2),
       label: "Pathway Connect connect",

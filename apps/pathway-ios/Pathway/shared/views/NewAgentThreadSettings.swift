@@ -40,10 +40,12 @@ struct NewAgentThreadSettings: View {
                         }
                     }
 
+                    if !model.isConversation {
                     Picker("Workspace", selection: $model.workspaceMode) {
                         Text("Current checkout").tag("local")
                         Text("New worktree").tag("worktree")
                     }
+                    .disabled(model.temporary)
 
                     if model.workspaceMode == "worktree" {
                         TextField("Base branch or ref", text: $model.baseReference)
@@ -53,6 +55,7 @@ struct NewAgentThreadSettings: View {
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                         Toggle("Start from origin", isOn: $model.startFromOrigin)
+                    }
                     }
                 }
             }

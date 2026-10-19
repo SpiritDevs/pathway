@@ -1,15 +1,14 @@
-import { scopeProjectRef } from "@spiritdevs/client-runtime/environment";
-import type { EnvironmentId, ProjectId, ScopedProjectRef } from "@spiritdevs/contracts";
-import type { DraftThreadEnvMode } from "../composerDraftStore";
+import type { EnvironmentId, ProjectId } from "@spiritdevs/contracts";
+import type { DraftProjectRef, DraftThreadEnvMode } from "../composerDraftStore";
 
 interface ThreadContextLike {
   environmentId: EnvironmentId;
-  projectId: ProjectId;
+  projectId: ProjectId | null;
 }
 
 interface NewThreadHandler {
   (
-    projectRef: ScopedProjectRef,
+    projectRef: DraftProjectRef,
     options?: {
       branch?: string | null;
       worktreePath?: string | null;
@@ -23,7 +22,7 @@ interface NewThreadHandler {
 export interface ChatThreadActionContext {
   readonly activeDraftThread: ThreadContextLike | null;
   readonly activeThread: ThreadContextLike | undefined;
-  readonly defaultProjectRef: ScopedProjectRef | null;
+  readonly defaultProjectRef: DraftProjectRef | null;
   readonly handleNewThread: NewThreadHandler;
 }
 
@@ -36,15 +35,18 @@ export function resolveNewDraftStartFromOrigin(input: {
 
 export function resolveThreadActionProjectRef(
   context: ChatThreadActionContext,
-): ScopedProjectRef | null {
+): DraftProjectRef | null {
   if (context.activeThread) {
-    return scopeProjectRef(context.activeThread.environmentId, context.activeThread.projectId);
+    return {
+      environmentId: context.activeThread.environmentId,
+      projectId: context.activeThread.projectId,
+    };
   }
   if (context.activeDraftThread) {
-    return scopeProjectRef(
-      context.activeDraftThread.environmentId,
-      context.activeDraftThread.projectId,
-    );
+    return {
+      environmentId: context.activeDraftThread.environmentId,
+      projectId: context.activeDraftThread.projectId,
+    };
   }
   return context.defaultProjectRef;
 }

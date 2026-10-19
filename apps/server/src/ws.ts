@@ -13,7 +13,11 @@ import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import {
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
+  DEFAULT_SERVER_SETTINGS,
   AuthAccessStreamError,
+  AuthOrchestrationReadScope,
+  type OrchestrationV2Command,
+  type OrchestrationV2ThreadShell,
   type AuthAccessStreamEvent,
   type ApplicationStoredEvent,
   type AuthEnvironmentScope,
@@ -75,6 +79,8 @@ import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/uns
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { makeThreadAccessSession, type ThreadAccessAction } from "./conversationSharing/ThreadAccess.ts";
+import { isConversationRpcAllowed, conversationCommandAction } from "./conversationSharing/RpcAccess.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
@@ -616,6 +622,31 @@ const makeWsRpcLayer = (
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+      const threadAccess = yield* makeThreadAccessSession(currentSession, yield* serverEnvironment.getEnvironmentId);
+      const visibleThreadIds = new Set<ThreadId>();
+      const filterVisibleShells = <T extends OrchestrationV2ThreadShell>(shells: ReadonlyArray<T>) =>
+        Effect.filter(shells, (shell) => threadAccess.canAccess(shell, "read")).pipe(
+          Effect.tap((visible) => Effect.sync(() => { for (const shell of visible) visibleThreadIds.add(shell.id); })),
+        );
+      const assertThreadAccess = Effect.fn("ws.conversation.assertThreadAccess")(function* (threadId: ThreadId, action: ThreadAccessAction = "read") {
+        const shell = yield* threadManagement.getThreadShell(threadId);
+        if (shell === null) return yield* new EnvironmentAuthorizationError({ requiredScope: AuthOrchestrationReadScope, message: "The conversation is unavailable." });
+        yield* threadAccess.assertAccess(shell, action);
+      });
+      const authorizeCommand = Effect.fn("ws.conversation.authorizeCommand")(function* (command: OrchestrationV2Command) {
+        const action = conversationCommandAction(command);
+        if (threadAccess.restricted && action === "manage") {
+          return yield* new EnvironmentAuthorizationError({ requiredScope: AuthOrchestrationReadScope, message: "Only the owner can change this conversation." });
+        }
+        if (command.type === "thread.create") {
+          yield* threadAccess.assertAccess({ id: command.threadId, projectId: command.projectId }, "manage");
+          return;
+        }
+        if ("threadId" in command) yield* assertThreadAccess(command.threadId, action);
+        if ("sourceThreadId" in command) yield* assertThreadAccess(command.sourceThreadId, action);
+        if ("parentThreadId" in command) yield* assertThreadAccess(command.parentThreadId, action);
+        if ("targetThreadId" in command && command.type !== "thread.fork") yield* assertThreadAccess(command.targetThreadId, action);
+      });
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
       const rpcClientIds = yield* Ref.make(new Set<RpcClientId>());
       const currentIssueClient = yield* Ref.make(false);
@@ -686,7 +717,8 @@ const makeWsRpcLayer = (
       ) =>
         instrumentRpcEffect(
           method,
-          authorizeEffect(requiredScopeForRpcMethod(method), effect),
+          authorizeEffect<A, E | EnvironmentAuthorizationError, R>(requiredScopeForRpcMethod(method), threadAccess.restricted && !isConversationRpcAllowed(method)
+            ? Effect.fail(authorizationError(requiredScopeForRpcMethod(method))) : effect),
           traceAttributes,
         );
       const issueRpcEffect = <A, R>(
@@ -713,7 +745,8 @@ const makeWsRpcLayer = (
       ) =>
         instrumentRpcStream(
           method,
-          authorizeStream(requiredScopeForRpcMethod(method), stream),
+          authorizeStream<A, E | EnvironmentAuthorizationError, R>(requiredScopeForRpcMethod(method), threadAccess.restricted && !isConversationRpcAllowed(method)
+            ? Stream.fail(authorizationError(requiredScopeForRpcMethod(method))) : stream.pipe(Stream.interruptWhen(threadAccess.revoked))),
           traceAttributes,
         );
       const observeRpcStreamEffect = <A, StreamError, StreamContext, EffectError, EffectContext>(
@@ -727,7 +760,8 @@ const makeWsRpcLayer = (
       ) =>
         instrumentRpcStreamEffect(
           method,
-          authorizeEffect(requiredScopeForRpcMethod(method), effect),
+          authorizeEffect<Stream.Stream<A, StreamError, StreamContext>, EffectError | EnvironmentAuthorizationError, EffectContext>(requiredScopeForRpcMethod(method), threadAccess.restricted && !isConversationRpcAllowed(method)
+            ? Effect.fail(authorizationError(requiredScopeForRpcMethod(method))) : effect.pipe(Effect.map((stream) => stream.pipe(Stream.interruptWhen(threadAccess.revoked))))),
           traceAttributes,
         );
       const loadAuthAccessSnapshot = () =>
@@ -747,7 +781,7 @@ const makeWsRpcLayer = (
         const keybindingsConfig = yield* keybindings.loadConfigState;
         const providers = yield* providerRegistry.getProviders;
         const settings = ServerSettings.redactServerSettingsForClient(
-          yield* serverSettings.getSettings,
+          threadAccess.restricted ? DEFAULT_SERVER_SETTINGS : yield* serverSettings.getSettings,
         );
         const environment = yield* serverEnvironment.getDescriptor;
         const auth = yield* serverAuth.getDescriptor();
@@ -755,8 +789,8 @@ const makeWsRpcLayer = (
         return {
           environment,
           auth,
-          cwd: config.cwd,
-          keybindingsConfigPath: config.keybindingsConfigPath,
+          cwd: threadAccess.restricted ? "" : config.cwd,
+          keybindingsConfigPath: threadAccess.restricted ? "" : config.keybindingsConfigPath,
           keybindings: keybindingsConfig.keybindings,
           issues: keybindingsConfig.issues,
           providers,
@@ -764,14 +798,14 @@ const makeWsRpcLayer = (
             externalLauncher.resolveAvailableEditors(),
           ),
           observability: {
-            logsDirectoryPath: config.logsDir,
+            logsDirectoryPath: threadAccess.restricted ? "" : config.logsDir,
             localTracingEnabled: true,
-            ...(config.otlpTracesUrl !== undefined ? { otlpTracesUrl: config.otlpTracesUrl } : {}),
-            otlpTracesEnabled: config.otlpTracesUrl !== undefined,
-            ...(config.otlpMetricsUrl !== undefined
+            ...(!threadAccess.restricted && config.otlpTracesUrl !== undefined ? { otlpTracesUrl: config.otlpTracesUrl } : {}),
+            otlpTracesEnabled: !threadAccess.restricted && config.otlpTracesUrl !== undefined,
+            ...(!threadAccess.restricted && config.otlpMetricsUrl !== undefined
               ? { otlpMetricsUrl: config.otlpMetricsUrl }
               : {}),
-            otlpMetricsEnabled: config.otlpMetricsUrl !== undefined,
+            otlpMetricsEnabled: !threadAccess.restricted && config.otlpMetricsUrl !== undefined,
           },
           settings,
           shellResumeCompletionMarker: true,
@@ -813,6 +847,7 @@ const makeWsRpcLayer = (
           readonly afterSequence?: number;
           readonly requestCompletionMarker?: boolean;
         }) {
+          yield* assertThreadAccess(input.threadId);
           yield* Effect.annotateCurrentSpan({
             "orchestration_v2.thread_id": input.threadId,
           });
@@ -934,9 +969,9 @@ const makeWsRpcLayer = (
                 return {
                   schemaVersion: threads.schemaVersion,
                   snapshotSequence: yield* applicationEvents.latestApplicationSequence,
-                  projects: projects.projects,
-                  threads: threads.threads,
-                  archivedThreads: threads.archivedThreads,
+                  projects: threadAccess.restricted ? [] : projects.projects,
+                  threads: yield* filterVisibleShells(threads.threads),
+                  archivedThreads: yield* filterVisibleShells(threads.archivedThreads),
                 } as const;
               }),
             );
@@ -985,9 +1020,14 @@ const makeWsRpcLayer = (
               (stored) =>
                 Effect.gen(function* () {
                   if ("aggregateKind" in stored) {
+                    if (threadAccess.restricted) return null;
                     return yield* projectItem(stored);
                   }
                   const shell = yield* threadManagement.getThreadShell(stored.event.threadId);
+                  if (shell !== null) {
+                    if (!(yield* threadAccess.canAccess(shell, "read"))) return null;
+                    visibleThreadIds.add(shell.id);
+                  } else if (!visibleThreadIds.has(stored.event.threadId)) return null;
                   return shellStreamItemFromThreadShell({ stored, shell });
                 }),
               { concurrency: 8 },
@@ -999,6 +1039,7 @@ const makeWsRpcLayer = (
               Stream.groupedWithin(512, Duration.millis(50)),
               Stream.mapEffect((events) => projectShellItems(Array.from(events))),
               Stream.flatMap(Stream.fromIterable),
+              Stream.filter((item) => item !== null),
             );
 
           const liveFrom = (afterSequence: number) =>
@@ -1117,8 +1158,8 @@ const makeWsRpcLayer = (
             return {
               schemaVersion: threads.schemaVersion,
               snapshotSequence: yield* applicationEvents.latestApplicationSequence,
-              projects: projects.projects,
-              threads: threads.archivedThreads,
+              projects: threadAccess.restricted ? [] : projects.projects,
+              threads: yield* filterVisibleShells(threads.archivedThreads),
             } as const;
           }),
         )
@@ -1152,9 +1193,13 @@ const makeWsRpcLayer = (
                   threadManagement
                     .getThreadShell(stored.event.threadId)
                     .pipe(
-                      Effect.map((shell) =>
-                        archivedShellStreamItemFromThreadShell({ stored, shell }),
-                      ),
+                      Effect.flatMap((shell) => Effect.gen(function* () {
+                        if (shell !== null) {
+                          if (!(yield* threadAccess.canAccess(shell, "read"))) return null;
+                          visibleThreadIds.add(shell.id);
+                        } else if (!visibleThreadIds.has(stored.event.threadId)) return null;
+                        return archivedShellStreamItemFromThreadShell({ stored, shell });
+                      })),
                     ),
                 { concurrency: 8 },
               ),
@@ -1244,6 +1289,7 @@ const makeWsRpcLayer = (
                     cause,
                   });
                 }),
+                (effect) => Effect.andThen(authorizeCommand(command), effect),
               ),
             {
               "rpc.aggregate": "orchestrationV2",
@@ -1273,7 +1319,7 @@ const makeWsRpcLayer = (
         [ORCHESTRATION_V2_WS_METHODS.getTurnDiff]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_V2_WS_METHODS.getTurnDiff,
-            checkpointDiffQuery.getTurnDiff(input).pipe(
+            Effect.andThen(assertThreadAccess(input.threadId), checkpointDiffQuery.getTurnDiff(input)).pipe(
               Effect.mapError(
                 (cause) =>
                   new OrchestrationGetTurnDiffError({
@@ -1287,7 +1333,7 @@ const makeWsRpcLayer = (
         [ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff,
-            checkpointDiffQuery.getFullThreadDiff(input).pipe(
+            Effect.andThen(assertThreadAccess(input.threadId), checkpointDiffQuery.getFullThreadDiff(input)).pipe(
               Effect.mapError(
                 (cause) =>
                   new OrchestrationGetFullThreadDiffError({
@@ -1302,6 +1348,9 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             ORCHESTRATION_V2_WS_METHODS.searchThreads,
             projectionSnapshotQuery.searchThreads(input).pipe(
+              Effect.flatMap((result) => Effect.filter(result.matches, (match) => threadManagement.getThreadShell(match.threadId).pipe(
+                Effect.flatMap((shell) => shell === null ? Effect.succeed(false) : threadAccess.canAccess(shell, "read")),
+              )).pipe(Effect.map((matches) => ({ ...result, matches })))),
               Effect.mapError(
                 (cause) =>
                   new OrchestrationSearchThreadsError({
@@ -1321,7 +1370,7 @@ const makeWsRpcLayer = (
         [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_V2_WS_METHODS.getThreadProjection,
-            threadManagement.getThreadProjection(input.threadId).pipe(
+            Effect.andThen(assertThreadAccess(input.threadId), threadManagement.getThreadProjection(input.threadId)).pipe(
               Effect.mapError(
                 (cause) =>
                   new OrchestrationV2GetThreadProjectionError({
@@ -1414,6 +1463,7 @@ const makeWsRpcLayer = (
                     ? {}
                     : { reuseExistingThread: input.reuseExistingThread }),
                   projectId: input.projectId,
+                  ...(input.temporary === undefined ? {} : { temporary: input.temporary }),
                   title: input.title,
                   ...(input.generateTitle === undefined
                     ? {}
@@ -2056,6 +2106,9 @@ const makeWsRpcLayer = (
                       }),
                   ),
                 );
+              if (thread.thread.projectId === null) {
+                return yield* issueAssetUrl({ resource: input.resource });
+              }
               const project = yield* projectService.getById(thread.thread.projectId).pipe(
                 Effect.mapError(
                   (cause) =>
@@ -2304,7 +2357,7 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.previewOpen, previewManager.open(input), {
             "rpc.aggregate": "preview",
           }),
-        ...remoteBrowserRpcHandlers(currentSession.scopes, remoteBrowser),
+        ...remoteBrowserRpcHandlers(threadAccess.restricted ? [] : currentSession.scopes, remoteBrowser),
         [WS_METHODS.previewNavigate]: (input) =>
           observeRpcEffect(WS_METHODS.previewNavigate, previewManager.navigate(input), {
             "rpc.aggregate": "preview",
@@ -2399,7 +2452,7 @@ const makeWsRpcLayer = (
                 })),
                 Stream.debounce(Duration.millis(PROVIDER_STATUS_DEBOUNCE_MS)),
               );
-              const settingsUpdates = serverSettings.streamChanges.pipe(
+              const settingsUpdates = (threadAccess.restricted ? Stream.empty : serverSettings.streamChanges).pipe(
                 Stream.map((settings) => ServerSettings.redactServerSettingsForClient(settings)),
                 Stream.map((settings) => ({
                   version: 1 as const,

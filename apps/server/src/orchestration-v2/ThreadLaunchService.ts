@@ -67,7 +67,8 @@ export interface ThreadLaunchInput {
   readonly commandId: CommandId;
   readonly threadId?: ThreadId;
   readonly reuseExistingThread?: boolean;
-  readonly projectId: ProjectId;
+  readonly temporary?: boolean;
+  readonly projectId: ProjectId | null;
   readonly title: string;
   readonly generateTitle?: boolean;
   readonly modelSelection: ModelSelection;
@@ -104,7 +105,7 @@ export class ThreadLaunchError extends Schema.TaggedErrorClass<ThreadLaunchError
       "cleanup-worktree",
     ]),
     commandId: CommandId,
-    projectId: ProjectId,
+    projectId: Schema.NullOr(ProjectId),
     threadId: Schema.optional(ThreadId),
     cause: Schema.Defect(),
   },
@@ -303,6 +304,11 @@ export const make = Effect.gen(function* () {
       const current = yield* threads
         .getThreadProjection(control.threadId)
         .pipe(Effect.mapError(() => rejected("Could not read this thread.")));
+      if (control.action === "work_locally" && current.thread.temporary === true) {
+        return yield* rejected(
+          "Temporary project threads must use a dedicated worktree. Retry preparation or keep the conversation first.",
+        );
+      }
       const run = current.runs.find((run) => run.id === control.runId);
       if (run?.status === "failed") {
         // Let the old worker finish its finalizers before replacing its preparation entry.
@@ -414,6 +420,12 @@ export const make = Effect.gen(function* () {
     runId: RunId | null,
     entry: ActivePreparation,
   ) {
+    if (input.projectId === null)
+      return yield* mapError(
+        input,
+        "resolve-project",
+        threadId,
+      )("A conversation does not prepare a project worktree.");
     const project = yield* projects.getById(input.projectId).pipe(
       Effect.mapError(mapError(input, "resolve-project", threadId)),
       Effect.flatMap(
@@ -747,6 +759,75 @@ export const make = Effect.gen(function* () {
 
   const launch: ThreadLaunchService["Service"]["launch"] = Effect.fn("ThreadLaunchService.launch")(
     function* (input) {
+      if (input.projectId === null) {
+        if (input.workspaceStrategy.type !== "root") {
+          return yield* mapError(
+            input,
+            "resolve-project",
+          )("Choose a project before selecting a Git worktree.");
+        }
+        const threadId =
+          input.threadId ??
+          (yield* ids.allocate.thread({}).pipe(Effect.mapError(mapError(input, "create-thread"))));
+        const receipt = yield* readReceipt(input, input.commandId);
+        if (input.reuseExistingThread === true) {
+          yield* validateReusableThread(input, threadId);
+        } else {
+          yield* threads
+            .dispatch({
+              type: "thread.create",
+              commandId: input.commandId,
+              threadId,
+              projectId: null,
+              temporary: input.temporary ?? false,
+              title: input.title,
+              modelSelection: input.modelSelection,
+              runtimeMode: input.runtimeMode,
+              interactionMode: input.interactionMode,
+              ...(input.locations === undefined ? {} : { locations: input.locations }),
+              branch: null,
+              worktreePath: null,
+              createdBy: input.createdBy,
+              creationSource: input.creationSource,
+            })
+            .pipe(Effect.mapError(mapError(input, "create-thread", threadId)));
+        }
+        if (input.initialMessage !== undefined) {
+          const messageId =
+            input.initialMessage.messageId ??
+            (yield* ids.allocate
+              .message({ threadId, ordinal: 1 })
+              .pipe(Effect.mapError(mapError(input, "dispatch-message", threadId))));
+          yield* threads
+            .dispatch({
+              type: "message.dispatch",
+              commandId: CommandId.make(`${input.commandId}:initial-message`),
+              threadId,
+              messageId,
+              text: input.initialMessage.text,
+              attachments: input.initialMessage.attachments,
+              ...(input.generateTitle === true ? { titleSeed: input.title } : {}),
+              modelSelection: input.modelSelection,
+              dispatchMode: { type: "start_immediately" },
+              createdBy: input.createdBy,
+              creationSource: input.creationSource,
+            })
+            .pipe(Effect.mapError(mapError(input, "dispatch-message", threadId)));
+        }
+        const projection = yield* threads
+          .getThreadProjection(threadId)
+          .pipe(Effect.mapError(mapError(input, "create-thread", threadId)));
+        return { threadId, projection, resumed: Option.isSome(receipt) };
+      }
+      if (input.temporary === true && input.workspaceStrategy.type !== "worktree") {
+        input = {
+          ...input,
+          workspaceStrategy: {
+            type: "worktree",
+            baseRef: input.workspaceStrategy.branch ?? "HEAD",
+          },
+        };
+      }
       const project = yield* projects.getById(input.projectId).pipe(
         Effect.mapError(mapError(input, "resolve-project")),
         Effect.flatMap(
@@ -768,7 +849,7 @@ export const make = Effect.gen(function* () {
         const candidateThreadId =
           input.threadId ??
           (yield* ids.allocate
-            .thread({ projectId: input.projectId })
+            .thread(input.projectId === null ? {} : { projectId: input.projectId })
             .pipe(Effect.mapError(mapError(input, "create-thread"))));
 
         if (input.reuseExistingThread === true && Option.isNone(launchReceipt)) {
@@ -792,6 +873,7 @@ export const make = Effect.gen(function* () {
                 commandId: input.commandId,
                 threadId: candidateThreadId,
                 projectId: input.projectId,
+                temporary: input.temporary ?? false,
                 title: input.title,
                 modelSelection: input.modelSelection,
                 runtimeMode: input.runtimeMode,

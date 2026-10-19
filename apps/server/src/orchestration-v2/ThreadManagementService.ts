@@ -59,7 +59,7 @@ export type ThreadManagementTerminalRunStatus = Extract<
 >;
 
 export interface ThreadManagementSendInput {
-  readonly projectId: ProjectId;
+  readonly projectId: ProjectId | null;
   readonly commandId: CommandId;
   readonly threadId: ThreadId;
   readonly messageId: MessageId;
@@ -82,7 +82,7 @@ export interface ThreadManagementSendResult {
 }
 
 export interface ThreadManagementWaitInput {
-  readonly projectId: ProjectId;
+  readonly projectId: ProjectId | null;
   readonly threadId: ThreadId;
   readonly runId?: RunId;
   readonly timeoutMs: number;
@@ -96,7 +96,7 @@ export interface ThreadManagementWaitResult {
 }
 
 export interface ThreadManagementInterruptInput {
-  readonly projectId: ProjectId;
+  readonly projectId: ProjectId | null;
   readonly commandId: CommandId;
   readonly threadId: ThreadId;
   readonly runId?: RunId;
@@ -118,7 +118,7 @@ export type ThreadManagementInterruptResult =
 export class ThreadManagementThreadNotFoundError extends Schema.TaggedErrorClass<ThreadManagementThreadNotFoundError>()(
   "ThreadManagementThreadNotFoundError",
   {
-    projectId: ProjectId,
+    projectId: Schema.NullOr(ProjectId),
     threadId: ThreadId,
   },
 ) {
@@ -177,7 +177,7 @@ export class ThreadManagementThreadNotInterruptibleError extends Schema.TaggedEr
 export class ThreadManagementProjectionLoadError extends Schema.TaggedErrorClass<ThreadManagementProjectionLoadError>()(
   "ThreadManagementProjectionLoadError",
   {
-    projectId: ProjectId,
+    projectId: Schema.NullOr(ProjectId),
     threadId: ThreadId,
     cause: Schema.Defect(),
   },
@@ -190,7 +190,7 @@ export class ThreadManagementProjectionLoadError extends Schema.TaggedErrorClass
 export class ThreadManagementProjectThreadsListError extends Schema.TaggedErrorClass<ThreadManagementProjectThreadsListError>()(
   "ThreadManagementProjectThreadsListError",
   {
-    projectId: ProjectId,
+    projectId: Schema.NullOr(ProjectId),
     cause: Schema.Defect(),
   },
 ) {
@@ -234,7 +234,7 @@ export interface ThreadManagementServiceShape {
   ) => Effect.Effect<OrchestrationV2ThreadProjection, OrchestratorV2Error>;
   readonly getThreadSnapshot: OrchestratorV2["Service"]["getThreadSnapshot"];
   readonly getProjectThread: (input: {
-    readonly projectId: ProjectId;
+    readonly projectId: ProjectId | null;
     readonly threadId: ThreadId;
   }) => Effect.Effect<OrchestrationV2ThreadProjection, ThreadManagementError>;
   readonly getShellSnapshot: () => Effect.Effect<
@@ -243,7 +243,7 @@ export interface ThreadManagementServiceShape {
   >;
   readonly getThreadShell: OrchestratorV2["Service"]["getThreadShell"];
   readonly listProjectThreads: (input: {
-    readonly projectId: ProjectId;
+    readonly projectId: ProjectId | null;
     readonly includeSubagents: boolean;
   }) => Effect.Effect<ReadonlyArray<OrchestrationV2ThreadShell>, ThreadManagementError>;
   readonly sendToThread: (

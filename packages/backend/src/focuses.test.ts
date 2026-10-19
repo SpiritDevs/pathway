@@ -53,6 +53,57 @@ const createFocus = (id: string, name: string, orderKey?: string) => ({
 });
 
 describe("Focus definitions", () => {
+  it("defaults conversations to excluded and opts into multiple Focuses independently", async () => {
+    const t = harness();
+    await seedUser(t, "user-one");
+    await seedUser(t, "user-two");
+    const owner = asUser(t, "user-one");
+    const created = await owner.mutation(api.focuses.create, createFocus(WORK, "Work", "a"));
+    expect(created.includeConversations).toBe(false);
+    await owner.mutation(api.focuses.create, {
+      ...createFocus(PERSONAL, "Personal", "b"),
+      includeConversations: true,
+    });
+    await owner.mutation(api.focuses.update, { focusId: WORK, includeConversations: true });
+    await owner.mutation(api.focuses.assignProject, { focusId: WORK, projectKey: PROJECT });
+    await owner.mutation(api.focuses.assignProject, { focusId: PERSONAL, projectKey: PROJECT });
+    const enabled = await owner.query(api.focuses.list, {});
+    expect(enabled.focuses.map((focus) => focus.includeConversations)).toEqual([true, true]);
+    expect(enabled.assignments).toEqual([
+      expect.objectContaining({ focusId: PERSONAL, projectKey: PROJECT }),
+    ]);
+
+    await owner.mutation(api.focuses.update, { focusId: WORK, includeConversations: false });
+    await owner.mutation(api.focuses.update, { focusId: PERSONAL, name: "Home" });
+    const disabled = await owner.query(api.focuses.list, {});
+    expect(disabled.focuses.map((focus) => focus.includeConversations)).toEqual([false, true]);
+    await expect(
+      asUser(t, "user-two").mutation(api.focuses.update, {
+        focusId: PERSONAL,
+        includeConversations: false,
+      }),
+    ).rejects.toThrow("No such Focus");
+  });
+
+  it("reads existing Focuses without a conversations setting as excluded", async () => {
+    const t = harness();
+    await seedUser(t, "user-one");
+    await t.run(async (ctx) => {
+      const user = await ctx.db.query("users").first();
+      if (user === null) throw new Error("Missing test user");
+      await ctx.db.insert("focuses", {
+        ...createFocus(WORK, "Work", "a"),
+        orderKey: "a",
+        userId: user._id,
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+    });
+    await expect(asUser(t, "user-one").query(api.focuses.list, {})).resolves.toMatchObject({
+      focuses: [{ id: WORK, includeConversations: false }],
+    });
+  });
+
   it("isolates each user's Focuses and supports create, update, and reorder", async () => {
     const t = harness();
     await seedUser(t, "user-one");

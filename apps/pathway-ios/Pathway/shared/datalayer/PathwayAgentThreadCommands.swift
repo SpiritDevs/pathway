@@ -1,7 +1,7 @@
 import Foundation
 
 struct PathwayThreadLaunchDraft: Sendable {
-    let projectID: String
+    let projectID: String?
     let prompt: String
     let modelSelection: PathwayModelSelection
     let runtimeMode: String
@@ -11,6 +11,7 @@ struct PathwayThreadLaunchDraft: Sendable {
     let branch: String
     let startFromOrigin: Bool
     var attachments: [JSONValue] = []
+    var temporary = false
 }
 
 enum PathwayAgentThreadCommands {
@@ -21,7 +22,7 @@ enum PathwayAgentThreadCommands {
     ) -> JSONValue {
         let trimmedBranch = draft.branch.trimmingCharacters(in: .whitespacesAndNewlines)
         let workspaceStrategy: JSONValue
-        if draft.workspaceMode == "worktree" {
+        if draft.projectID != nil && (draft.temporary || draft.workspaceMode == "worktree") {
             var fields: [String: JSONValue] = [
                 "type": .string("worktree"),
                 "baseRef": .string(
@@ -50,8 +51,9 @@ enum PathwayAgentThreadCommands {
         var payload: [String: JSONValue] = [
             "commandId": .string(identifier),
             "creationSource": .string("mobile"),
-            "projectId": .string(draft.projectID),
-            "title": .string("New thread"),
+            "projectId": draft.projectID.map(JSONValue.string) ?? .null,
+            "temporary": .bool(draft.temporary),
+            "title": .string(draft.projectID == nil ? "New conversation" : "New thread"),
             "generateTitle": .bool(true),
             "modelSelection": .object(selection),
             "runtimeMode": .string(draft.runtimeMode),

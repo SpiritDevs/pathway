@@ -345,7 +345,7 @@ export const OrchestratorMcpThreadListItem = Schema.Struct({
 export type OrchestratorMcpThreadListItem = typeof OrchestratorMcpThreadListItem.Type;
 
 export const OrchestratorMcpThreadListResult = Schema.Struct({
-  projectId: ProjectId,
+  projectId: Schema.NullOr(ProjectId),
   currentThreadId: ThreadId,
   threads: Schema.Array(OrchestratorMcpThreadListItem),
   nextCursor: Schema.NullOr(NonNegativeInt),
@@ -365,7 +365,7 @@ export type OrchestratorMcpThreadReadInput = typeof OrchestratorMcpThreadReadInp
 
 export const OrchestratorMcpThreadDetail = Schema.Struct({
   threadId: ThreadId,
-  projectId: ProjectId,
+  projectId: Schema.NullOr(ProjectId),
   title: Schema.String,
   createdBy: OrchestrationV2Actor,
   creationSource: OrchestrationV2CreationSource,
@@ -547,7 +547,7 @@ export const OrchestratorMcpScheduledTask = Schema.Struct({
   title: Schema.String,
   prompt: Schema.String,
   enabled: Schema.Boolean,
-  projectId: ProjectId,
+  projectId: Schema.NullOr(ProjectId),
   boundThreadId: Schema.NullOr(ThreadId),
   schedule: ScheduledTaskSchedule,
   nextRunAt: Schema.NullOr(IsoDateTime),

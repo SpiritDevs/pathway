@@ -1323,7 +1323,10 @@ export const layer: Layer.Layer<
               attemptId: input.attemptId,
               rootNodeId: input.rootNode.id,
               providerThread: input.providerThread,
-              message: input.message,
+              message: input.appThread.conversationDirectory === undefined ? input.message : {
+                ...input.message,
+                text: `${input.message.text}\n\n<pathway_workspace>\nConversation files: ${input.appThread.conversationDirectory}\nCurrent workspace: ${input.runtimePolicy.cwd}\nBoth directories are available for this thread. Existing conversation files stay in the conversation directory.\n</pathway_workspace>`,
+              },
               modelSelection: input.modelSelection,
               runtimePolicy: input.runtimePolicy,
             })

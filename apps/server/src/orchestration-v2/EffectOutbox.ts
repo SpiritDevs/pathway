@@ -8,6 +8,7 @@ import {
   ProviderApprovalDecision,
   ProviderUserInputAnswers,
   ProviderThreadId,
+  ProjectId,
   ProviderTurnId,
   RunId,
   RuntimeRequestId,
@@ -100,6 +101,15 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     attachmentIds: Schema.Array(Schema.String),
   }),
   Schema.Struct({
+    type: Schema.Literal("workspace.cleanup"),
+    projectId: Schema.NullOr(ProjectId),
+    conversationDirectory: Schema.optional(Schema.String),
+    worktreePath: Schema.optional(Schema.String),
+    discardChanges: Schema.optional(Schema.Boolean),
+    providerSessionIds: Schema.Array(ProviderSessionId),
+    ownedBranch: Schema.optional(Schema.Struct({ name: Schema.String, commitSha: Schema.String })),
+  }),
+  Schema.Struct({
     type: Schema.Literal("thread-title.generate"),
     kind: Schema.Union([
       Schema.Struct({ type: Schema.Literal("initial"), messageId: MessageId }),
@@ -138,6 +148,7 @@ export const REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS = [
   "checkpoint.capture",
   "terminal.cleanup",
   "attachment.cleanup",
+  "workspace.cleanup",
   "thread-title.generate",
   "workspace-move.execute",
 ] as const satisfies ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
