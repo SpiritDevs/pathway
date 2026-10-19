@@ -1552,6 +1552,31 @@ export const OrchestrationV2ThreadProjectionWire = Schema.Union([
 ]);
 export type OrchestrationV2ThreadProjectionWire = typeof OrchestrationV2ThreadProjectionWire.Type;
 
+/**
+ * Store each item body once: visible rows keep references, and only items absent from canonical
+ * `turnItems` (inherited and synthetic rows) go to the separate pool. Clients undo this with
+ * `resolveThreadProjectionPayload`.
+ */
+export function compactThreadProjection(
+  projection: OrchestrationV2ThreadProjection,
+  payloadFormat: OrchestrationV2ThreadPayloadFormat,
+  projectItem: (item: OrchestrationV2TurnItem) => OrchestrationV2TurnItem = (item) => item,
+): OrchestrationV2CompactThreadProjection {
+  const canonicalIds = new Set(projection.turnItems.map((item) => item.id));
+  const referencedItems = new Map<TurnItemId, OrchestrationV2TurnItem>();
+  const visibleTurnItems = projection.visibleTurnItems.map(({ item, ...reference }) => {
+    if (!canonicalIds.has(item.id)) referencedItems.set(item.id, item);
+    return reference;
+  });
+  return {
+    ...projection,
+    payloadFormat,
+    turnItems: projection.turnItems.map(projectItem),
+    referencedTurnItems: [...referencedItems.values()].map(projectItem),
+    visibleTurnItems,
+  };
+}
+
 const REPLACEABLE_INITIAL_THREAD_SIDE_EFFECT_ITEM_TYPES = new Set([
   "command_execution",
   "dynamic_tool",
