@@ -124,9 +124,13 @@ it("skips fresh history on repeated remounts and revalidates after five minutes"
   expect(mocks.command).not.toHaveBeenCalled();
   // Even a merged branch answer can be joined by a PR opened outside Pathway.
   vi.mocked(Date.now).mockReturnValue(1_300_000);
+  const beforeRecheck = retainedStates;
   await run();
   expect(onResult).toHaveBeenCalledTimes(106);
   expect(mocks.command).toHaveBeenCalledTimes(1);
+  // Unchanged answers only advance freshness: no copy of the cache, no sidebar repartition.
+  expect(retainedStates).toBe(beforeRecheck);
+  expect([...retainedStates.values()].every((value) => value.checkedAt === 1_300_000)).toBe(true);
   await run();
   expect(mocks.command).toHaveBeenCalledTimes(1);
 });

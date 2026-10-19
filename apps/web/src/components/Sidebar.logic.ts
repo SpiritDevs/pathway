@@ -417,6 +417,20 @@ export function orderItemsByPreferredIds<TItem, TId>(input: {
   return [...ordered, ...remaining];
 }
 
+// dnd-kit's SortableContext rebuilds its items, and every sortable row re-slices its suffix of
+// them, whenever the items array changes identity. Keep the previous array while the keys match.
+export function retainSameKeys(previous: string[], next: string[]): string[] {
+  return previous.length === next.length && previous.every((key, index) => key === next[index])
+    ? previous
+    : next;
+}
+
+export function useSameKeys(keys: string[]): string[] {
+  const retained = React.useRef(keys);
+  retained.current = retainSameKeys(retained.current, keys);
+  return retained.current;
+}
+
 export function mergeActiveThreadOrderPreference(input: {
   readonly savedOrder: readonly string[];
   readonly visibleOrder: readonly string[];

@@ -223,6 +223,7 @@ import {
   filterSidebarWorkspaceProjectsForFocus,
   intersectSidebarProjectScopes,
   resolveSidebarThreadModels,
+  useSameKeys,
   useThreadJumpHintVisibility,
   detailsCardReturnFocus,
   nextSidebarThreadDetailsState,
@@ -2877,6 +2878,15 @@ export default function Sidebar() {
       }),
     ];
   }, [activeOrderPreference, activeThreads]);
+  const activeSortableKeys = useSameKeys(
+    useMemo(
+      () =>
+        orderedActiveThreads.map((thread) =>
+          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        ),
+      [orderedActiveThreads],
+    ),
+  );
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
@@ -3588,6 +3598,15 @@ export default function Sidebar() {
         : orderedPinnedThreads,
     [orderedPinnedThreads, pinnedShelfCollapsed, routeThreadKey],
   );
+  const pinnedSortableKeys = useSameKeys(
+    useMemo(
+      () =>
+        visibleOrderedPinnedThreads
+          .map((thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)))
+          .filter((threadKey) => reorderablePinnedKeys.has(threadKey)),
+      [visibleOrderedPinnedThreads, reorderablePinnedKeys],
+    ),
+  );
   useEffect(() => {
     if (optimisticPinnedOrder === null) return;
     const canonical = pinnedThreads.filter((thread) =>
@@ -3740,21 +3759,18 @@ export default function Sidebar() {
       const activeKey = String(event.active.id);
       const overKey = event.over === null ? null : String(event.over.id);
       if (overKey === null || activeKey === overKey) return;
-      const keys = orderedActiveThreads.map((thread) =>
-        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-      );
-      const fromIndex = keys.indexOf(activeKey);
-      const toIndex = keys.indexOf(overKey);
+      const fromIndex = activeSortableKeys.indexOf(activeKey);
+      const toIndex = activeSortableKeys.indexOf(overKey);
       if (fromIndex === -1 || toIndex === -1) return;
       setActiveOrderPreference(
         mergeActiveThreadOrderPreference({
           savedOrder: activeOrderPreference,
-          visibleOrder: arrayMove(keys, fromIndex, toIndex),
+          visibleOrder: arrayMove(activeSortableKeys, fromIndex, toIndex),
           scoped: scopedProjectKeys !== null,
         }),
       );
     },
-    [activeOrderPreference, orderedActiveThreads, scopedProjectKeys, setActiveOrderPreference],
+    [activeOrderPreference, activeSortableKeys, scopedProjectKeys, setActiveOrderPreference],
   );
   // One snooze per thread at a time — same double-dispatch guard as settle.
   const snoozingThreadKeysRef = useRef(new Set<string>());
@@ -5168,11 +5184,7 @@ export default function Sidebar() {
                           onDragEnd={handlePinnedDragEnd}
                         >
                           <SortableContext
-                            items={visibleOrderedPinnedThreads
-                              .map((thread) =>
-                                scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-                              )
-                              .filter((threadKey) => reorderablePinnedKeys.has(threadKey))}
+                            items={pinnedSortableKeys}
                             strategy={verticalListSortingStrategy}
                           >
                             <ul
@@ -5242,9 +5254,7 @@ export default function Sidebar() {
                         onDragEnd={handleActiveDragEnd}
                       >
                         <SortableContext
-                          items={orderedActiveThreads.map((thread) =>
-                            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-                          )}
+                          items={activeSortableKeys}
                           strategy={verticalListSortingStrategy}
                         >
                           {orderedActiveThreads.map((thread) => {
