@@ -20,14 +20,16 @@ import {
   CalendarDaysIcon,
   Clock3Icon,
   ContactRoundIcon,
+  EllipsisIcon,
   FolderKanbanIcon,
   GitPullRequestIcon,
-  LayoutDashboardIcon,
+  HouseIcon,
   ListTodoIcon,
   MailIcon,
   MessagesSquareIcon,
   PanelLeftCloseIcon,
   PanelLeftIcon,
+  PinIcon,
   SettingsIcon,
   type LucideIcon,
 } from "lucide-react";
@@ -51,6 +53,7 @@ import { useEmailUnreadTotal } from "../../state/email";
 import { SidebarProviderUpdatePill } from "../sidebar/SidebarProviderUpdatePill";
 import { SidebarUpdatePill } from "../sidebar/SidebarUpdatePill";
 import { Button } from "../ui/button";
+import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 export const PRIMARY_NAVIGATION_COMPACT_WIDTH = "3.5rem";
@@ -71,6 +74,25 @@ export const PRIMARY_NAVIGATION_MOVABLE_DESTINATIONS = [
 
 export type MovablePrimaryNavigationDestination =
   (typeof PRIMARY_NAVIGATION_MOVABLE_DESTINATIONS)[number];
+
+export const PRIMARY_NAVIGATION_PINNABLE_DESTINATIONS = [
+  "projects",
+  "issues",
+  "pull-requests",
+  "calendar",
+  "email",
+  "contacts",
+  "time-tracker",
+] as const;
+
+export type PinnablePrimaryNavigationDestination =
+  (typeof PRIMARY_NAVIGATION_PINNABLE_DESTINATIONS)[number];
+
+export function resolvePinnedPrimaryNavigationDestinations(preference: readonly string[]) {
+  return PRIMARY_NAVIGATION_PINNABLE_DESTINATIONS.filter((destination) =>
+    preference.includes(destination),
+  );
+}
 
 export function resolvePrimaryNavigationViewOrder(
   preference: readonly string[],
@@ -196,7 +218,7 @@ export function resolvePrimaryNavigationDestination(
   return "threads";
 }
 
-type NavigationRailButtonProps = {
+type NavigationRailButtonProps = Omit<ComponentProps<typeof Button>, "children"> & {
   active?: boolean;
   expanded: boolean;
   icon: LucideIcon;
@@ -232,6 +254,7 @@ function NavigationRailButton({
   badgeCount = 0,
   onClick,
   onContextMenu,
+  ...buttonProps
 }: NavigationRailButtonProps) {
   const badgeLabel = badgeCount > 0 ? formatNavigationBadgeCount(badgeCount) : null;
 
@@ -240,14 +263,15 @@ function NavigationRailButton({
       <TooltipTrigger
         render={
           <Button
+            {...buttonProps}
             aria-current={active ? "page" : undefined}
             aria-label={badgeLabel === null ? label : `${label}, ${badgeCount} unread`}
             className={cn(
               "relative h-9! overflow-hidden [-webkit-app-region:no-drag] [--control-icon-color:var(--sidebar-muted-foreground)]",
-              "hover:[--control-icon-color:var(--sidebar-foreground)]",
+              "hover:[--control-icon-color:var(--sidebar-foreground)] [:hover,[data-pressed]]:bg-sidebar-foreground/6 data-pressed:bg-sidebar-foreground/6",
               expanded ? "w-full justify-start gap-2 px-2.5" : "w-9 gap-0 px-0",
               active &&
-                "bg-sidebar-accent text-sidebar-accent-foreground [--control-icon-color:var(--sidebar-accent-foreground)]",
+                "bg-sidebar-foreground/10 text-sidebar-foreground [--control-icon-color:var(--sidebar-foreground)] [:hover,[data-pressed]]:bg-sidebar-foreground/10 data-pressed:bg-sidebar-foreground/10",
             )}
             onClick={onClick}
             onContextMenu={onContextMenu}
@@ -260,7 +284,7 @@ function NavigationRailButton({
               <span className="min-w-0 flex-1 truncate text-left text-sm">{label}</span>
             ) : null}
             {badgeLabel === null ? null : expanded ? (
-              <span className="shrink-0 rounded-full bg-sidebar-accent px-1.5 text-[11px] leading-4 font-medium text-sidebar-accent-foreground tabular-nums">
+              <span className="shrink-0 rounded-full bg-sidebar-foreground/10 px-1.5 text-[11px] leading-4 font-medium text-sidebar-foreground tabular-nums">
                 {badgeLabel}
               </span>
             ) : (
@@ -278,6 +302,89 @@ function NavigationRailButton({
         {reorderable ? " · Drag to reorder" : null}
       </TooltipPopup>
     </Tooltip>
+  );
+}
+
+function PrimaryNavigationOverflowMenu({
+  activeDestination,
+  expanded,
+  items,
+  pinnedDestinations,
+  onTogglePin,
+}: {
+  activeDestination: PrimaryNavigationDestination;
+  expanded: boolean;
+  items: readonly (MobileNavigationItem & { destination: PinnablePrimaryNavigationDestination })[];
+  pinnedDestinations: readonly PinnablePrimaryNavigationDestination[];
+  onTogglePin: (destination: PinnablePrimaryNavigationDestination) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const hiddenItems = items.filter((item) => !pinnedDestinations.includes(item.destination));
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        render={
+          <NavigationRailButton
+            active={hiddenItems.some((item) => item.destination === activeDestination)}
+            badgeCount={hiddenItems.reduce((total, item) => total + (item.badgeCount ?? 0), 0)}
+            expanded={expanded}
+            icon={EllipsisIcon}
+            label="More"
+          />
+        }
+      />
+      <PopoverPopup
+        align="start"
+        aria-label="More pages"
+        className="w-64 rounded-2xl"
+        side="right"
+        sideOffset={10}
+        viewportClassName="p-1.5"
+      >
+        {items.map(({ destination, icon: Icon, label, badgeCount, onNavigate }) => {
+          const pinned = pinnedDestinations.includes(destination);
+          return (
+            <div
+              className={cn(
+                "flex items-center rounded-lg hover:bg-foreground/6",
+                activeDestination === destination && "bg-foreground/10 hover:bg-foreground/10",
+              )}
+              key={destination}
+            >
+              <button
+                aria-current={activeDestination === destination ? "page" : undefined}
+                className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={() => {
+                  setOpen(false);
+                  onNavigate();
+                }}
+                type="button"
+              >
+                <Icon className="size-4.5 shrink-0" />
+                <span className="flex-1 truncate">{label}</span>
+                {badgeCount ? (
+                  <span className="text-xs text-muted-foreground tabular-nums">
+                    {formatNavigationBadgeCount(badgeCount)}
+                  </span>
+                ) : null}
+              </button>
+              <Button
+                aria-label={`${pinned ? "Unpin" : "Pin"} ${label}`}
+                aria-pressed={pinned}
+                className="mr-1 shrink-0"
+                onClick={() => onTogglePin(destination)}
+                size="icon-sm"
+                title={`${pinned ? "Unpin" : "Pin"} ${label}`}
+                variant="ghost"
+              >
+                <PinIcon className={cn("size-4", pinned && "fill-current text-foreground")} />
+              </Button>
+            </div>
+          );
+        })}
+      </PopoverPopup>
+    </Popover>
   );
 }
 
@@ -302,7 +409,7 @@ function SortableNavigationRailButton({
     <div
       ref={setNodeRef}
       {...listeners}
-      className={cn("w-full touch-none", isDragging && "z-10 opacity-70")}
+      className={cn("flex w-full touch-none justify-center", isDragging && "z-10 opacity-70")}
       style={{ transform: CSS.Transform.toString(transform), transition }}
     >
       <NavigationRailButton
@@ -433,9 +540,9 @@ export function MobileNavigationToolbar({
                 title={label}
                 data-mobile-navigation-item=""
                 className={cn(
-                  "relative size-11! shrink-0 rounded-full [-webkit-app-region:no-drag] [--control-icon-color:var(--muted-foreground)] hover:[--control-icon-color:var(--foreground)]",
+                  "relative size-11! shrink-0 rounded-full [-webkit-app-region:no-drag] [--control-icon-color:var(--muted-foreground)] hover:[--control-icon-color:var(--foreground)] [:hover,[data-pressed]]:bg-foreground/6 data-pressed:bg-foreground/6",
                   activeDestination === destination &&
-                    "bg-accent text-accent-foreground [--control-icon-color:var(--accent-foreground)]",
+                    "bg-foreground/10 text-foreground [--control-icon-color:var(--foreground)] [:hover,[data-pressed]]:bg-foreground/10 data-pressed:bg-foreground/10",
                 )}
                 onClick={() => {
                   collapse();
@@ -473,6 +580,13 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
   // Captured mail is the one destination that accumulates unread work while you are elsewhere.
   const emailUnreadCount = useEmailUnreadTotal();
   const preferredViewOrder = useClientSettings((settings) => settings.primaryNavigationViewOrder);
+  const preferredPinnedDestinations = useClientSettings(
+    (settings) => settings.primaryNavigationPinnedDestinations,
+  );
+  const pinnedDestinations = useMemo(
+    () => resolvePinnedPrimaryNavigationDestinations(preferredPinnedDestinations),
+    [preferredPinnedDestinations],
+  );
   const updateClientSettings = useUpdateClientSettings();
   const viewOrder = useMemo(
     () => resolvePrimaryNavigationViewOrder(preferredViewOrder),
@@ -563,7 +677,7 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
     () => ({
       dashboard: {
         destination: "dashboard",
-        icon: LayoutDashboardIcon,
+        icon: HouseIcon,
         label: "Dashboard",
         onNavigate: navigateToDashboard,
       },
@@ -652,7 +766,13 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
   const visibleViewOrder = viewOrder.filter(
     (destination) => destination !== "calendar" || calendarAccess !== false,
   );
-  const movableNavigationItems = visibleViewOrder.map(
+  const overflowItems = PRIMARY_NAVIGATION_PINNABLE_DESTINATIONS.filter(
+    (destination) => destination !== "calendar" || calendarAccess !== false,
+  ).map((destination) => navigationItemsByDestination[destination]);
+  const pinnedViewOrder = visibleViewOrder.filter(
+    (destination) => destination !== "threads" && pinnedDestinations.includes(destination),
+  );
+  const movableNavigationItems = pinnedViewOrder.map(
     (destination) => navigationItemsByDestination[destination],
   );
   const fixedBottomNavigationItems = [
@@ -661,15 +781,31 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
   ];
   const navigationItems = [
     navigationItemsByDestination.dashboard,
-    ...movableNavigationItems,
+    ...visibleViewOrder.map((destination) => navigationItemsByDestination[destination]),
     ...fixedBottomNavigationItems,
   ];
 
+  const togglePin = useCallback(
+    (destination: PinnablePrimaryNavigationDestination) => {
+      updateClientSettings({
+        primaryNavigationPinnedDestinations: pinnedDestinations.includes(destination)
+          ? pinnedDestinations.filter((pinned) => pinned !== destination)
+          : [...pinnedDestinations, destination],
+      });
+    },
+    [pinnedDestinations, updateClientSettings],
+  );
+
   const persistViewOrder = useCallback(
     (nextOrder: readonly MovablePrimaryNavigationDestination[]) => {
-      updateClientSettings({ primaryNavigationViewOrder: [...nextOrder] });
+      let index = 0;
+      updateClientSettings({
+        primaryNavigationViewOrder: viewOrder.map((destination) =>
+          nextOrder.includes(destination) ? (nextOrder[index++] ?? destination) : destination,
+        ),
+      });
     },
-    [updateClientSettings],
+    [updateClientSettings, viewOrder],
   );
 
   const clearDraggedDestinationAfterClick = useCallback(() => {
@@ -683,15 +819,15 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
       const destination = event.active.id as MovablePrimaryNavigationDestination;
       const overDestination = event.over?.id as MovablePrimaryNavigationDestination | undefined;
       if (overDestination && destination !== overDestination) {
-        const fromIndex = viewOrder.indexOf(destination);
-        const toIndex = viewOrder.indexOf(overDestination);
+        const fromIndex = pinnedViewOrder.indexOf(destination);
+        const toIndex = pinnedViewOrder.indexOf(overDestination);
         if (fromIndex >= 0 && toIndex >= 0) {
-          persistViewOrder(arrayMove([...viewOrder], fromIndex, toIndex));
+          persistViewOrder(arrayMove([...pinnedViewOrder], fromIndex, toIndex));
         }
       }
       clearDraggedDestinationAfterClick();
     },
-    [clearDraggedDestinationAfterClick, persistViewOrder, viewOrder],
+    [clearDraggedDestinationAfterClick, persistViewOrder, pinnedViewOrder],
   );
 
   const handleViewContextMenu = useCallback(
@@ -704,10 +840,10 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
       const api = readLocalApi();
       if (!api) return;
 
-      const index = viewOrder.indexOf(destination);
+      const index = pinnedViewOrder.indexOf(destination);
       const items: readonly ContextMenuItem<"move-up" | "move-down">[] = [
         { id: "move-up", label: "Move up", disabled: index <= 0 },
-        { id: "move-down", label: "Move down", disabled: index >= viewOrder.length - 1 },
+        { id: "move-down", label: "Move down", disabled: index >= pinnedViewOrder.length - 1 },
       ];
       const action = await api.contextMenu.show(items, {
         x: event.clientX,
@@ -716,13 +852,13 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
       if (!action) return;
       persistViewOrder(
         movePrimaryNavigationDestination(
-          viewOrder,
+          pinnedViewOrder,
           destination,
           action === "move-up" ? "up" : "down",
         ),
       );
     },
-    [persistViewOrder, viewOrder],
+    [persistViewOrder, pinnedViewOrder],
   );
 
   return (
@@ -748,6 +884,23 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
             label={navigationItemsByDestination.dashboard.label}
             onClick={navigationItemsByDestination.dashboard.onNavigate}
           />
+          <NavigationRailButton
+            active={activeDestination === "threads"}
+            expanded={expanded}
+            icon={navigationItemsByDestination.threads.icon}
+            label={navigationItemsByDestination.threads.label}
+            onClick={navigationItemsByDestination.threads.onNavigate}
+          />
+          <PrimaryNavigationOverflowMenu
+            activeDestination={activeDestination}
+            expanded={expanded}
+            items={overflowItems}
+            pinnedDestinations={pinnedDestinations}
+            onTogglePin={togglePin}
+          />
+          {movableNavigationItems.length > 0 ? (
+            <div aria-hidden="true" className="my-1 w-full border-t border-sidebar-border" />
+          ) : null}
           <DndContext
             collisionDetection={closestCenter}
             modifiers={[restrictToVerticalAxis]}
@@ -759,7 +912,7 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
                 .id as MovablePrimaryNavigationDestination;
             }}
           >
-            <SortableContext items={[...visibleViewOrder]} strategy={verticalListSortingStrategy}>
+            <SortableContext items={[...pinnedViewOrder]} strategy={verticalListSortingStrategy}>
               {movableNavigationItems.map((item) => (
                 <SortableNavigationRailButton
                   key={item.destination}
