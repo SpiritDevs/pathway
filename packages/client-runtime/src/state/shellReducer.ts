@@ -95,13 +95,37 @@ export function mergeShellSnapshotProjects(
   };
 }
 
+/**
+ * Sets the repository identity of every project whose workspace root the patch
+ * lists, exactly (including null). Structure and sequence never change.
+ */
+export function applyRepositoryIdentities(
+  snapshot: OrchestrationV2ShellSnapshot,
+  identities: Extract<
+    OrchestrationV2ShellStreamItem,
+    { readonly kind: "repositoryIdentities" }
+  >["identities"],
+): OrchestrationV2ShellSnapshot {
+  const byRoot = new Map(
+    identities.map((entry) => [entry.workspaceRoot, entry.repositoryIdentity] as const),
+  );
+  let changed = false;
+  const projects = snapshot.projects.map((project) => {
+    if (project.workspaceRoot === null || !byRoot.has(project.workspaceRoot)) return project;
+    const repositoryIdentity = byRoot.get(project.workspaceRoot) ?? null;
+    if (JSON.stringify(project.repositoryIdentity ?? null) === JSON.stringify(repositoryIdentity)) {
+      return project;
+    }
+    changed = true;
+    return { ...project, repositoryIdentity };
+  });
+  return changed ? { ...snapshot, projects } : snapshot;
+}
+
 /** Applies one committed V2 shell delta while preserving active/archive exclusivity. */
 export function applyShellStreamEvent(
   snapshot: OrchestrationV2ShellSnapshot,
-  event: Exclude<
-    OrchestrationV2ShellStreamItem,
-    { readonly kind: "snapshot" } | { readonly kind: "synchronized" }
-  >,
+  event: Extract<OrchestrationV2ShellStreamItem, { readonly sequence: number }>,
 ): OrchestrationV2ShellSnapshot {
   if (event.sequence <= snapshot.snapshotSequence) return snapshot;
 

@@ -32,6 +32,7 @@ import {
   type OrchestrationEventStoreError,
 } from "../Errors.ts";
 import {
+  type ApplicationAggregateChange,
   OrchestrationEventStore,
   type OrchestrationEventStoreShape,
 } from "../Services/OrchestrationEventStore.ts";
@@ -74,6 +75,23 @@ const ReadFromSequenceRequestSchema = Schema.Struct({
   sequenceExclusive: NonNegativeInt,
   limit: Schema.Number,
 });
+const AggregateChangeRowFields = {
+  sequence: NonNegativeInt,
+  eventType: Schema.String,
+  deletedArchivedAt: Schema.NullOr(Schema.String),
+} as const;
+const ApplicationAggregateChangeRowSchema = Schema.Union([
+  Schema.Struct({
+    ...AggregateChangeRowFields,
+    aggregateKind: Schema.Literal("project"),
+    aggregateId: ProjectId,
+  }),
+  Schema.Struct({
+    ...AggregateChangeRowFields,
+    aggregateKind: Schema.Literal("thread"),
+    aggregateId: ThreadId,
+  }),
+]);
 const DEFAULT_READ_FROM_SEQUENCE_LIMIT = 1_000;
 const READ_PAGE_SIZE = 500;
 
@@ -522,6 +540,68 @@ const makeEventStore = Effect.gen(function* () {
     ),
   );
 
+  // The partial index answers the scope and range without touching payloads;
+  // only the newest row per aggregate is read back for its type.
+  const listApplicationAggregateChanges = SqlSchema.findAll({
+    Request: Schema.Struct({ afterSequence: NonNegativeInt, throughSequence: NonNegativeInt }),
+    Result: ApplicationAggregateChangeRowSchema,
+    execute: (input) => sql`
+      SELECT
+        event.sequence AS "sequence",
+        event.aggregate_kind AS "aggregateKind",
+        event.stream_id AS "aggregateId",
+        event.event_type AS "eventType",
+        CASE
+          WHEN event.event_type = 'thread.deleted'
+            THEN json_extract(event.payload_json, '$.archivedAt')
+        END AS "deletedArchivedAt"
+      FROM (
+        SELECT MAX(sequence) AS sequence
+        FROM orchestration_events
+        INDEXED BY idx_orch_events_application_high_water
+        WHERE (
+            aggregate_kind = 'project'
+            OR (application_event_version = 2 AND aggregate_kind = 'thread')
+          )
+          AND sequence > ${input.afterSequence}
+          AND sequence <= ${input.throughSequence}
+        GROUP BY aggregate_kind, stream_id
+      ) AS latest
+      JOIN orchestration_events AS event ON event.sequence = latest.sequence
+      ORDER BY event.sequence ASC
+    `,
+  });
+
+  const readApplicationAggregateChanges: OrchestrationEventStoreShape["readApplicationAggregateChanges"] =
+    (input) =>
+      listApplicationAggregateChanges(input).pipe(
+        Effect.map((rows) =>
+          rows.map(
+            (row): ApplicationAggregateChange =>
+              row.aggregateKind === "project"
+                ? {
+                    aggregateKind: "project",
+                    projectId: row.aggregateId,
+                    sequence: row.sequence,
+                    deleted: row.eventType === "project.deleted",
+                  }
+                : {
+                    aggregateKind: "thread",
+                    threadId: row.aggregateId,
+                    sequence: row.sequence,
+                    deletedFromArchive:
+                      row.eventType === "thread.deleted" && row.deletedArchivedAt !== null,
+                  },
+          ),
+        ),
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "OrchestrationEventStore.readApplicationAggregateChanges:query",
+            "OrchestrationEventStore.readApplicationAggregateChanges:decodeRows",
+          ),
+        ),
+      );
+
   const readApplicationEventPage = (input: {
     readonly afterSequence: number;
     readonly throughSequence: number;
@@ -600,6 +680,7 @@ const makeEventStore = Effect.gen(function* () {
     latestAgentSequence,
     latestApplicationSequence,
     readApplicationEvents: catchUpApplicationEvents,
+    readApplicationAggregateChanges,
     publishCommitted: (events) => PubSub.publishAll(committedEvents, events).pipe(Effect.asVoid),
     streamApplicationEvents,
   } satisfies OrchestrationEventStoreShape;

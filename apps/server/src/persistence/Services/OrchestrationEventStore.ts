@@ -15,6 +15,7 @@ import type {
   CommandId,
   OrchestrationV2DomainEvent,
   OrchestrationV2StoredEvent,
+  ProjectId,
   ThreadId,
 } from "@spiritdevs/contracts";
 import type { OrchestrationEvent } from "@spiritdevs/contracts/legacy-orchestration";
@@ -23,6 +24,25 @@ import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 
 import type { OrchestrationEventStoreError } from "../Errors.ts";
+
+/**
+ * The newest retained event for one project or thread, without its payload.
+ * Shell catch-up only needs which aggregates changed, and how a thread left.
+ */
+export type ApplicationAggregateChange =
+  | {
+      readonly aggregateKind: "project";
+      readonly projectId: ProjectId;
+      readonly sequence: number;
+      readonly deleted: boolean;
+    }
+  | {
+      readonly aggregateKind: "thread";
+      readonly threadId: ThreadId;
+      readonly sequence: number;
+      /** The newest event deleted the thread while it was archived. */
+      readonly deletedFromArchive: boolean;
+    };
 
 /**
  * OrchestrationEventStoreShape - Service API for orchestration event persistence.
@@ -87,6 +107,15 @@ export interface OrchestrationEventStoreShape {
     readonly afterSequence: number;
     readonly throughSequence: number;
   }) => Stream.Stream<ApplicationStoredEvent, OrchestrationEventStoreError>;
+
+  /**
+   * The newest event per project/thread in `(afterSequence, throughSequence]`,
+   * ordered by sequence. Reads no event payloads beyond those newest rows.
+   */
+  readonly readApplicationAggregateChanges: (input: {
+    readonly afterSequence: number;
+    readonly throughSequence: number;
+  }) => Effect.Effect<ReadonlyArray<ApplicationAggregateChange>, OrchestrationEventStoreError>;
 
   /** Publish only after the surrounding event/projection transaction commits. */
   readonly publishCommitted: (events: ReadonlyArray<ApplicationStoredEvent>) => Effect.Effect<void>;

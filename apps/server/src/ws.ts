@@ -31,7 +31,6 @@ import {
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
   AuthAccessStreamError,
   type AuthAccessStreamEvent,
-  type ApplicationStoredEvent,
   type AuthEnvironmentScope,
   AuthOrchestrationOperateScope,
   AuthSessionId,
@@ -126,18 +125,19 @@ import * as ThreadWorkspaceMove from "./orchestration-v2/ThreadWorkspaceMoveServ
 import * as ContinuationLaunchService from "./orchestration-v2/ContinuationLaunchService.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import {
+  aggregateChangeFromApplicationEvent,
   archivedShellStreamItemFromThreadShell,
-  coalesceShellApplicationEvents,
+  coalesceAggregateChanges,
   coalesceStoredThreadEvents,
-  composeShellStreamWithEnrichment,
   enrichmentRefreshes as shellEnrichmentRefreshes,
   makeDeliveredRepositoryIdentities,
+  openShellSubscription,
   shellStreamItemFromEnrichmentRefresh,
   shellStreamItemFromThreadShell,
-  shellStreamItemsFromInitialSnapshot,
 } from "./orchestration-v2/ShellStream.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as OrchestrationEventStore from "./persistence/Services/OrchestrationEventStore.ts";
+import type { ApplicationAggregateChange } from "./persistence/Services/OrchestrationEventStore.ts";
 import { userFacingDispatchErrorMessage } from "./orchestration-v2/UserFacingErrors.ts";
 import { computerClearance } from "./computer/computerAccessPolicy.ts";
 import {
@@ -1233,17 +1233,22 @@ const makeWsRpcLayer = (
         function* (input: {
           readonly afterSequence?: number;
           readonly requestCompletionMarker?: boolean;
+          readonly repositoryIdentityPatches?: boolean;
         }) {
+          // Always attach the enrichment subscription before the first load so
+          // completions that race the HTTP snapshot fetch still push a refresh.
+          // Enrichment events published before this attached are dropped, so
+          // every subscription opens with the identities resolved by now.
           const enrichmentChanges = yield* projectEnrichment.subscribeChanges;
           const loadSnapshot = Effect.fn("ws.orchestrationV2.loadShellSnapshot")(function* () {
             const base = yield* sql.withTransaction(
               Effect.gen(function* () {
-                const projects = yield* projectionSnapshotQuery.getShellSnapshotWithoutEnrichment();
+                const projects = yield* projectionSnapshotQuery.listProjectShells();
                 const threads = yield* threadManagement.getShellSnapshot();
                 return {
                   schemaVersion: threads.schemaVersion,
                   snapshotSequence: yield* applicationEvents.latestApplicationSequence,
-                  projects: projects.projects,
+                  projects,
                   threads: threads.threads,
                   archivedThreads: threads.archivedThreads,
                 } as const;
@@ -1255,63 +1260,73 @@ const makeWsRpcLayer = (
               resolvedRepositoryIdentityRoots: enriched.resolvedRepositoryIdentityRoots,
             };
           });
-          const projectItem = Effect.fn("ws.orchestrationV2.projectShellItem")(function* (
-            stored: Extract<ApplicationStoredEvent, { readonly aggregateKind: "project" }>,
-          ) {
-            if (stored.type === "project.deleted") {
-              return {
-                kind: "project.removed" as const,
-                sequence: stored.sequence,
-                projectId: stored.payload.projectId,
-              };
-            }
-            const project = yield* projectionSnapshotQuery.getProjectShellById(
-              stored.payload.projectId,
-            );
-            return Option.match(project, {
-              onNone: () => ({
-                kind: "project.removed" as const,
-                sequence: stored.sequence,
-                projectId: stored.payload.projectId,
+          const loadProjects = Effect.fn("ws.orchestrationV2.loadShellProjects")(function* () {
+            const base = yield* sql.withTransaction(
+              Effect.gen(function* () {
+                const projects = yield* projectionSnapshotQuery.listProjectShells();
+                return {
+                  highWater: yield* applicationEvents.latestApplicationSequence,
+                  projects,
+                };
               }),
+            );
+            const enriched = yield* enrichProjectShells(base.projects);
+            return { highWater: base.highWater, ...enriched };
+          });
+          const projectItem = Effect.fn("ws.orchestrationV2.projectShellItem")(function* (
+            change: Extract<ApplicationAggregateChange, { readonly aggregateKind: "project" }>,
+          ) {
+            const removed = {
+              kind: "project.removed" as const,
+              sequence: change.sequence,
+              projectId: change.projectId,
+            };
+            if (change.deleted) return removed;
+            const project = yield* projectionSnapshotQuery.getProjectShellById(change.projectId);
+            return Option.match(project, {
+              onNone: () => removed,
               onSome: (value) => ({
                 kind: "project.updated" as const,
-                sequence: stored.sequence,
+                sequence: change.sequence,
                 project: value,
               }),
             });
           });
 
-          // Coalescing makes each per-thread shell read represent every event
-          // for that thread in the current window; reading only the affected
-          // threads keeps the cost of a busy stream independent of how many
-          // threads exist overall.
+          // Each item reads the aggregate's current shell, so one item stands
+          // for every change to it in the window; reading only the affected
+          // threads keeps a busy stream's cost independent of thread count.
           const projectShellItems = Effect.fn("ws.orchestrationV2.projectShellItems")(function* (
-            events: ReadonlyArray<ApplicationStoredEvent>,
+            changes: ReadonlyArray<ApplicationAggregateChange>,
           ) {
             return yield* Effect.forEach(
-              coalesceShellApplicationEvents(events),
-              (stored) =>
-                Effect.gen(function* () {
-                  if ("aggregateKind" in stored) {
-                    return yield* projectItem(stored);
-                  }
-                  const shell = yield* threadManagement.getThreadShell(stored.event.threadId);
-                  return shellStreamItemFromThreadShell({ stored, shell });
-                }),
+              coalesceAggregateChanges(changes),
+              (change) =>
+                change.aggregateKind === "project"
+                  ? projectItem(change)
+                  : threadManagement
+                      .getThreadShell(change.threadId)
+                      .pipe(Effect.map((shell) => shellStreamItemFromThreadShell({ change, shell }))),
               { concurrency: 8 },
             );
           });
 
-          const toShellStream = <E, R>(stream: Stream.Stream<ApplicationStoredEvent, E, R>) =>
-            stream.pipe(
+          // Catch-up reads only which aggregates changed, never event payloads.
+          const replay = (range: { readonly afterSequence: number; readonly throughSequence: number }) =>
+            Stream.fromEffect(
+              applicationEvents
+                .readApplicationAggregateChanges(range)
+                .pipe(Effect.flatMap(projectShellItems)),
+            ).pipe(Stream.flatMap(Stream.fromIterable));
+
+          const live = (afterSequence: number) =>
+            applicationEvents.streamApplicationEvents({ afterSequence }).pipe(
               Stream.groupedWithin(512, Duration.millis(50)),
-              Stream.mapEffect((events) => projectShellItems(Array.from(events))),
+              Stream.mapEffect((events) =>
+                projectShellItems(Array.from(events, aggregateChangeFromApplicationEvent)),
+              ),
               Stream.flatMap(Stream.fromIterable),
             );
-
-          const liveFrom = (afterSequence: number) =>
-            toShellStream(applicationEvents.streamApplicationEvents({ afterSequence }));
 
           // Only identities this subscriber does not hold yet cost a reload and
           // a full snapshot frame; unchanged re-resolutions are dropped here.
@@ -1327,84 +1342,18 @@ const makeWsRpcLayer = (
               ),
           });
 
-          // Always attach the enrichment subscription before the first load so
-          // completions that race HTTP snapshot fetch still push a refresh.
-          // When the client already holds a shell snapshot (cached, or loaded
-          // over HTTP) it passes that snapshot's sequence. We still emit one
-          // enriched snapshot up front: getAvailable may have been cold on the
-          // HTTP path (null identity), and enrichment PubSub events published
-          // before this subscribe attached are dropped. Rehydrating here fills
-          // repositoryIdentity for cross-environment project grouping even on
-          // afterSequence resumes. Application events after the sequence still
-          // stream as deltas; overlapping events are deduped by sequence on the
-          // client.
-          //
-          // After the unmarked authoritative frame, emit a same-sequence
-          // metadata-only frame for roots that already resolved successfully
-          // (including cached null); a resume sends that marked frame alone.
-          // Cold/failed roots stay unmarked and use the PubSub enrichment path
-          // when they complete later.
-          const completionMarker =
-            input.requestCompletionMarker === true
-              ? Stream.make({ kind: "synchronized" as const })
-              : Stream.empty;
-          const initialSnapshotItems = (
-            loaded: {
-              readonly snapshot: OrchestrationV2ShellSnapshot;
-              readonly resolvedRepositoryIdentityRoots: ReadonlyArray<string>;
-            },
-            resume: boolean,
-          ) => {
-            deliveredIdentities.recordSnapshot(
-              loaded.snapshot,
-              loaded.resolvedRepositoryIdentityRoots,
-            );
-            return Stream.fromIterable(
-              shellStreamItemsFromInitialSnapshot({
-                snapshot: loaded.snapshot,
-                resolvedRepositoryIdentityRoots: loaded.resolvedRepositoryIdentityRoots,
-                resume,
-              }),
-            );
-          };
-          // Initial unmarked (+ optional same-load marked) always drains first.
-          // Enrichment merges only with the post-prefix tail so a ready marked
-          // refresh cannot interleave before the authoritative initial frame.
-          const completionThenLive = (afterSequence: number) =>
-            Stream.concat(completionMarker, liveFrom(afterSequence));
-
-          const stream = yield* Effect.gen(function* () {
-            const loaded = yield* loadSnapshot();
-            if (input.afterSequence === undefined) {
-              return composeShellStreamWithEnrichment({
-                initial: initialSnapshotItems(loaded, false),
-                tail: completionThenLive(loaded.snapshot.snapshotSequence),
-                enrichment: enrichmentRefreshes,
-              });
-            }
-
-            const highWater = yield* applicationEvents.latestApplicationSequence;
-            const replayGap = highWater - input.afterSequence;
-            if (replayGap < 0 || replayGap > SHELL_RESUME_MAX_GAP) {
-              return composeShellStreamWithEnrichment({
-                initial: initialSnapshotItems(loaded, false),
-                tail: completionThenLive(loaded.snapshot.snapshotSequence),
-                enrichment: enrichmentRefreshes,
-              });
-            }
-            const initial = initialSnapshotItems(loaded, true);
-
-            const replay = toShellStream(
-              applicationEvents.readApplicationEvents({
-                afterSequence: input.afterSequence,
-                throughSequence: highWater,
-              }),
-            );
-            return composeShellStreamWithEnrichment({
-              initial,
-              tail: Stream.concat(Stream.concat(replay, completionMarker), liveFrom(highWater)),
-              enrichment: enrichmentRefreshes,
-            });
+          const stream = yield* openShellSubscription({
+            afterSequence: input.afterSequence,
+            requestCompletionMarker: input.requestCompletionMarker === true,
+            repositoryIdentityPatches: input.repositoryIdentityPatches === true,
+            maxReplayGap: SHELL_RESUME_MAX_GAP,
+            latestSequence: applicationEvents.latestApplicationSequence,
+            loadSnapshot: loadSnapshot(),
+            loadProjects: loadProjects(),
+            replay,
+            live,
+            enrichment: enrichmentRefreshes,
+            delivered: deliveredIdentities,
           }).pipe(
             Effect.mapError(
               (cause) =>
@@ -1430,12 +1379,12 @@ const makeWsRpcLayer = (
       const getOrchestrationV2ArchivedShellSnapshot = sql
         .withTransaction(
           Effect.gen(function* () {
-            const projects = yield* projectionSnapshotQuery.getShellSnapshotWithoutEnrichment();
+            const projects = yield* projectionSnapshotQuery.listProjectShells();
             const threads = yield* threadManagement.getShellSnapshot();
             return {
               schemaVersion: threads.schemaVersion,
               snapshotSequence: yield* applicationEvents.latestApplicationSequence,
-              projects: projects.projects,
+              projects,
               threads: threads.archivedThreads,
             } as const;
           }),
