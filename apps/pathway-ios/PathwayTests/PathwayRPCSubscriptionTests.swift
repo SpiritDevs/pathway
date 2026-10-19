@@ -34,6 +34,45 @@ struct PathwayRPCSubscriptionTests {
         pair.continuation.finish()
     }
 
+    @Test func aSlowPongDoesNotCloseAHealthySocket() {
+        var heartbeat = PathwayRPCHeartbeat()
+        #expect(heartbeat.tick() == .ping)
+        // The server answers six seconds later, after the next tick.
+        #expect(heartbeat.tick() == .ping)
+        heartbeat.receivedFrame()
+        #expect(heartbeat.tick() == .ping)
+        #expect(heartbeat.tick() == .ping)
+        #expect(heartbeat.tick() == .ping)
+    }
+
+    @Test func anyInboundFrameKeepsTheSocketAlive() {
+        var heartbeat = PathwayRPCHeartbeat()
+        for _ in 0 ..< 10 {
+            #expect(heartbeat.tick() == .ping)
+            heartbeat.receivedFrame()
+        }
+    }
+
+    @Test func aSilentSocketClosesAfterThreeMissedWindows() {
+        var heartbeat = PathwayRPCHeartbeat()
+        #expect(heartbeat.tick() == .ping)
+        #expect(heartbeat.tick() == .ping)
+        #expect(heartbeat.tick() == .ping)
+        #expect(heartbeat.tick() == .disconnect)
+    }
+
+    @Test func activityJustBeforeTheDeadlineRestartsTheCount() {
+        var heartbeat = PathwayRPCHeartbeat()
+        _ = heartbeat.tick()
+        _ = heartbeat.tick()
+        _ = heartbeat.tick()
+        heartbeat.receivedFrame()
+        #expect(heartbeat.tick() == .ping)
+        #expect(heartbeat.tick() == .ping)
+        #expect(heartbeat.tick() == .ping)
+        #expect(heartbeat.tick() == .disconnect)
+    }
+
     @Test func issueRequestsWaitForTheCurrentSocketsProtocolAcknowledgement() {
         var gate = PathwayRPCSubscriptionGate()
         #expect(gate.allowsRequest(requiresSubscription: false))

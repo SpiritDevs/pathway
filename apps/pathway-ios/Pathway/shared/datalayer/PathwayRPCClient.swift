@@ -103,7 +103,7 @@ actor PathwayRPCClient {
     private var connectionID: UUID?
     private var loopTask: Task<Void, Never>?
     private var keepaliveTask: Task<Void, Never>?
-    private var awaitingKeepaliveResponse = false
+    private var heartbeat = PathwayRPCHeartbeat()
     private var desired = false
     private var nextRequestID = 1
     private var pending: [Int: PathwayRPCPendingRequest] = [:]
@@ -225,7 +225,7 @@ actor PathwayRPCClient {
         loopTask = nil
         keepaliveTask?.cancel()
         keepaliveTask = nil
-        awaitingKeepaliveResponse = false
+        heartbeat = PathwayRPCHeartbeat()
         socket?.cancel(with: .goingAway, reason: nil)
         socket = nil
         socketClosed()
@@ -288,7 +288,7 @@ actor PathwayRPCClient {
         socketClosed()
         socket = task
         connectionID = id
-        awaitingKeepaliveResponse = false
+        heartbeat = PathwayRPCHeartbeat()
         keepaliveTask?.cancel()
         keepaliveTask = Task { [weak self] in
             await self?.keepaliveLoop(connectionID: id)
@@ -325,7 +325,7 @@ actor PathwayRPCClient {
     private func handle(_ data: Data, connectionID: UUID) async throws {
         guard self.connectionID == connectionID else { return }
         let response = try JSONDecoder().decode(PathwayRPCResponse.self, from: data)
-        awaitingKeepaliveResponse = false
+        heartbeat.receivedFrame()
         switch response.envelopeTag {
         case "Pong":
             return
@@ -392,7 +392,7 @@ actor PathwayRPCClient {
         connectionID = nil
         keepaliveTask?.cancel()
         keepaliveTask = nil
-        awaitingKeepaliveResponse = false
+        heartbeat = PathwayRPCHeartbeat()
         subscriptionRequestID = nil
         subscriptionGate.reset()
         yieldTransportState("disconnected")
@@ -466,11 +466,10 @@ actor PathwayRPCClient {
                 return
             }
             guard desired, self.connectionID == connectionID else { return }
-            if awaitingKeepaliveResponse {
+            if heartbeat.tick() == .disconnect {
                 disconnect(id: connectionID)
                 return
             }
-            awaitingKeepaliveResponse = true
             do {
                 try await sendControl("Ping", requestID: nil)
             } catch {
@@ -579,6 +578,33 @@ private extension JSONEncoder {
 }
 
 // swiftlint:enable file_length
+
+/// Decides when a quiet socket is dead. Like the web client's patched Effect RPC pinger, it pings
+/// every interval and gives up only after three windows pass without any frame from the server.
+struct PathwayRPCHeartbeat: Equatable {
+    enum Action: Equatable { case ping, disconnect }
+
+    static let missedWindowLimit = 3
+    private var heardSinceLastPing = true
+    private var missedWindows = 0
+
+    /// Any decoded frame from the current socket proves it is alive, not only a Pong.
+    mutating func receivedFrame() {
+        heardSinceLastPing = true
+        missedWindows = 0
+    }
+
+    /// Called once per ping interval.
+    mutating func tick() -> Action {
+        if heardSinceLastPing {
+            heardSinceLastPing = false
+            missedWindows = 0
+            return .ping
+        }
+        missedWindows += 1
+        return missedWindows >= Self.missedWindowLimit ? .disconnect : .ping
+    }
+}
 
 /// An issue RPC can run only after this socket has acknowledged the current subscription.
 struct PathwayRPCSubscriptionGate {
