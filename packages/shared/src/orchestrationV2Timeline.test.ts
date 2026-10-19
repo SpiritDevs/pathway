@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildOrchestrationErrorFixPrompt,
   isOrchestrationV2TurnItemVisible,
+  orchestrationV2TurnItemVisibility,
 } from "./orchestrationV2Timeline.ts";
 
 const runId = RunId.make("run:timeline-visibility");
@@ -141,5 +142,56 @@ describe("isOrchestrationV2TurnItemVisible", () => {
         items: [{ type: "run_interrupt_result", runId, nodeId }],
       }),
     ).toBe(true);
+  });
+});
+
+describe("orchestrationV2TurnItemVisibility", () => {
+  it("matches the single-item check for every run, attempt and item combination", () => {
+    const runStatuses = ["running", "completed", "interrupted", "cancelled", "rolled_back"] as const;
+    const attemptStatuses = ["running", "interrupted", "superseded"] as const;
+    const runs = runStatuses.flatMap((status) =>
+      [false, true].map((paired) => ({
+        id: RunId.make(`run:${status}:${paired ? "paired" : "unpaired"}`),
+        status,
+        paired,
+      })),
+    );
+    const attempts = runs.flatMap((run, index) => [
+      {
+        runId: run.id,
+        rootNodeId: NodeId.make(`${run.id}:root`),
+        status: attemptStatuses[index % attemptStatuses.length]!,
+      },
+      { runId: run.id, rootNodeId: NodeId.make(`${run.id}:other`), status: "superseded" as const },
+    ]);
+    const items = [
+      { type: "user_message" as const, inputIntent: "queued_turn" as const, runId: null, nodeId: null },
+      ...runs.flatMap((run) => [
+        { type: "user_message" as const, inputIntent: "queued_turn" as const, runId: run.id, nodeId: null },
+        { type: "user_message" as const, inputIntent: "turn_start" as const, runId: run.id, nodeId: null },
+        { type: "assistant_message" as const, runId: run.id, nodeId: NodeId.make(`${run.id}:root`) },
+        { type: "run_interrupt_result" as const, runId: run.id, nodeId: NodeId.make(`${run.id}:root`) },
+        { type: "run_interrupt_result" as const, runId: run.id, nodeId: NodeId.make(`${run.id}:none`) },
+        ...(run.paired
+          ? [{ type: "run_interrupt_request" as const, runId: run.id, nodeId: null }]
+          : []),
+      ]),
+    ];
+    const visible = orchestrationV2TurnItemVisibility({ runs, attempts, items });
+    const expected = items.map((item) =>
+      isOrchestrationV2TurnItemVisible({ item, runs, attempts, items }),
+    );
+    expect(items.map(visible)).toEqual(expected);
+    expect(expected).toContain(false);
+    expect(expected).toContain(true);
+  });
+
+  it("keeps every item when no run or attempt can hide one", () => {
+    const visible = orchestrationV2TurnItemVisibility({
+      runs: [{ id: runId, status: "completed" }],
+      attempts: [{ runId, rootNodeId: nodeId, status: "interrupted" }],
+      items: [],
+    });
+    expect(visible({ type: "run_interrupt_result", runId, nodeId })).toBe(true);
   });
 });

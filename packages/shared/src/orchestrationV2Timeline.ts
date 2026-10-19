@@ -77,3 +77,31 @@ export function isOrchestrationV2TurnItemVisible(input: {
     items: input.items,
   });
 }
+
+/**
+ * Prepares {@link isOrchestrationV2TurnItemVisible} for checking many items of
+ * one thread. Only rolled-back or cancelled runs and superseded attempts can
+ * hide an item, so each check runs against those small subsets instead of
+ * scanning every run per item.
+ */
+export function orchestrationV2TurnItemVisibility(input: {
+  readonly runs: ReadonlyArray<TimelineRun>;
+  readonly attempts: ReadonlyArray<TimelineRunAttempt>;
+  readonly items: ReadonlyArray<TimelineTurnItem>;
+}): (item: TimelineTurnItem) => boolean {
+  const runs = input.runs.filter(
+    (run) => run.status === "rolled_back" || run.status === "cancelled",
+  );
+  const attempts = input.attempts.filter((attempt) => attempt.status === "superseded");
+  const hidingRunIds = new Set<string>([
+    ...runs.map((run) => run.id),
+    ...attempts.map((attempt) => attempt.runId),
+  ]);
+  if (hidingRunIds.size === 0) return () => true;
+  const items =
+    attempts.length === 0 ? [] : input.items.filter((item) => item.type === "run_interrupt_request");
+  return (item) =>
+    item.runId === null ||
+    !hidingRunIds.has(item.runId) ||
+    isOrchestrationV2TurnItemVisible({ item, runs, attempts, items });
+}
