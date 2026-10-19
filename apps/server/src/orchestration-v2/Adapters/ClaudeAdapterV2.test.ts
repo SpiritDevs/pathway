@@ -28,6 +28,8 @@ import {
   ThreadId,
 } from "@spiritdevs/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import { HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
+import { SpawnExecutableResolution } from "@spiritdevs/shared/shell";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -1430,7 +1432,7 @@ describe("ClaudeAdapterV2 resume compaction dialog", () => {
 });
 
 describe("ClaudeAdapterV2 native session identity", () => {
-  const openTurnWithOrdinal = (providerTurnOrdinal: number) =>
+  const openTurnWithOrdinal = (providerTurnOrdinal: number, environment: NodeJS.ProcessEnv = {}) =>
     Effect.scoped(
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
@@ -1442,7 +1444,7 @@ describe("ClaudeAdapterV2 native session identity", () => {
         const adapter = makeClaudeAdapterV2({
           instanceId: CLAUDE_DEFAULT_INSTANCE_ID,
           settings: DEFAULT_CLAUDE_SETTINGS,
-          environment: {},
+          environment,
           attachmentsDir,
           fileSystem,
           idAllocator,
@@ -1491,6 +1493,30 @@ describe("ClaudeAdapterV2 native session identity", () => {
         return openedQueries;
       }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
     );
+
+  it.effect("passes the resolved instance executable to new and resumed SDK queries", () =>
+    Effect.gen(function* () {
+      const environment = { PATH: "/instance/bin:/usr/bin" };
+      for (const platform of ["darwin", "linux", "win32"] as const) {
+        const executable =
+          platform === "win32" ? "C:\\instance\\claude.exe" : "/instance/bin/claude";
+        for (const ordinal of [1, 2]) {
+          const openedQueries = yield* openTurnWithOrdinal(ordinal, environment).pipe(
+            Effect.provideService(HostProcessPlatform, platform),
+            Effect.provideService(SpawnExecutableResolution, (command, hostPlatform, env) => {
+              assert.equal(command, "claude");
+              assert.equal(hostPlatform, platform);
+              assert.strictEqual(env, environment);
+              return executable;
+            }),
+          );
+          assert.equal(openedQueries.length, 1);
+          assert.equal(openedQueries[0]?.options.pathToClaudeCodeExecutable, executable);
+          assert.strictEqual(openedQueries[0]?.options.env, environment);
+        }
+      }
+    }),
+  );
 
   it.effect("creates the native session on the first provider turn", () =>
     Effect.gen(function* () {
