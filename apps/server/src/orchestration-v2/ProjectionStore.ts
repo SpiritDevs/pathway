@@ -162,6 +162,20 @@ export interface ProjectionStoreV2Shape {
   readonly getThreadProjection: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2ThreadProjection, ProjectionStoreV2Error>;
+  /** One thread row without conversation history, for commands that only touch thread fields. */
+  readonly getThread: (
+    threadId: ThreadId,
+  ) => Effect.Effect<OrchestrationV2AppThread, ProjectionStoreV2Error>;
+  /** One run by primary key, for status/attempt guards that must not load history. */
+  readonly getRun: (
+    threadId: ThreadId,
+    runId: RunId,
+  ) => Effect.Effect<OrchestrationV2Run | null, ProjectionStoreV2Error>;
+  /** The subset of `turnItemIds` that this thread has projected, without decoding them. */
+  readonly getTurnItemIds: (
+    threadId: ThreadId,
+    turnItemIds: ReadonlyArray<TurnItemId>,
+  ) => Effect.Effect<ReadonlyArray<TurnItemId>, ProjectionStoreV2Error>;
   readonly getProviderRuntimeRecoveryProjection: (
     threadId: ThreadId,
   ) => Effect.Effect<ProviderRuntimeRecoveryProjection, ProjectionStoreV2Error>;
@@ -3597,6 +3611,50 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         )
         .pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })));
 
+    const getThread = Effect.fn("ProjectionStoreV2.getThread")(
+      function* (threadId: ThreadId) {
+        const rows = yield* sql<PayloadRow>`
+          SELECT payload_json FROM orchestration_v2_projection_threads WHERE thread_id = ${threadId}
+        `;
+        if (rows[0] === undefined) {
+          return yield* new ProjectionStoreThreadNotFoundError({ threadId });
+        }
+        return yield* decodeThreadPayload(rows[0].payload_json);
+      },
+      (effect, threadId) =>
+        effect.pipe(
+          Effect.mapError((cause) =>
+            isProjectionStoreThreadNotFoundError(cause)
+              ? cause
+              : new ProjectionStoreReadError({ threadId, cause }),
+          ),
+        ),
+    );
+
+    const getRun = Effect.fn("ProjectionStoreV2.getRun")(
+      function* (threadId: ThreadId, runId: RunId) {
+        const rows = yield* sql<PayloadRow>`
+          SELECT payload_json FROM orchestration_v2_projection_runs
+          WHERE run_id = ${runId} AND thread_id = ${threadId}
+        `;
+        return rows[0] === undefined ? null : yield* decodeRunPayload(rows[0].payload_json);
+      },
+      (effect, threadId) =>
+        effect.pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause }))),
+    );
+
+    const getTurnItemIds = Effect.fn("ProjectionStoreV2.getTurnItemIds")(
+      function* (threadId: ThreadId, turnItemIds: ReadonlyArray<TurnItemId>) {
+        const rows = yield* sql<{ readonly turn_item_id: string }>`
+          SELECT turn_item_id FROM orchestration_v2_projection_turn_items
+          WHERE thread_id = ${threadId} AND turn_item_id IN ${sql.in(turnItemIds)}
+        `;
+        return rows.map((row) => TurnItemId.make(row.turn_item_id));
+      },
+      (effect, threadId) =>
+        effect.pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause }))),
+    );
+
     const getThreadMetadata = Effect.fn("ProjectionStoreV2.getThreadMetadata")(
       function* () {
         const rows = yield* sql<PayloadRow>`
@@ -3750,6 +3808,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getShellSnapshot,
       getThreadShell,
       getThreadProjection,
+      getThread,
+      getRun,
+      getTurnItemIds,
       getProviderRuntimeRecoveryProjection,
       getDelegatedCompletionRecoveryProjection,
       getRecoveryThreadIds,
@@ -3989,6 +4050,31 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
           }
           return projection;
         }),
+      getThread: (threadId) =>
+        Ref.get(replayState).pipe(
+          Effect.flatMap((state) => {
+            const projection = state.projections.get(threadId);
+            return projection === undefined
+              ? Effect.fail(new ProjectionStoreThreadNotFoundError({ threadId }))
+              : Effect.succeed(projection.thread);
+          }),
+        ),
+      getRun: (threadId, runId) =>
+        Ref.get(replayState).pipe(
+          Effect.map(
+            (state) =>
+              state.projections.get(threadId)?.runs.find((run) => run.id === runId) ?? null,
+          ),
+        ),
+      getTurnItemIds: (threadId, turnItemIds) =>
+        Ref.get(replayState).pipe(
+          Effect.map((state) => {
+            const projected = new Set(
+              state.projections.get(threadId)?.turnItems.map((item) => item.id),
+            );
+            return turnItemIds.filter((id) => projected.has(id));
+          }),
+        ),
       getRecoveryThreadIds: () =>
         Ref.get(replayState).pipe(
           Effect.map((state) =>

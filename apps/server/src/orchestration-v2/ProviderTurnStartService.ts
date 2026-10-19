@@ -168,18 +168,20 @@ export const layer: Layer.Layer<
         .getThreadProjection(projection.thread.id)
         .pipe(Effect.map(selectInheritedBackgroundItems));
       const providerSessionId = providerThread.providerSessionId;
-      const isCurrentAttemptInStatus = (
-        expectedStatus: OrchestrationV2Run["status"],
+      // Guards re-read only this run: they run repeatedly while a turn prepares or waits for
+      // allowance, and a missing row or failed read keeps the run from advancing.
+      const isCurrentAttemptIn = (
+        statuses: ReadonlyArray<OrchestrationV2Run["status"]>,
       ): Effect.Effect<boolean, never> =>
-        projectionStore.getThreadProjection(projection.thread.id).pipe(
-          Effect.map((current) => {
-            const currentRun = current.runs.find((candidate) => candidate.id === run.id);
-            return (
-              currentRun?.activeAttemptId === attempt.id && currentRun.status === expectedStatus
-            );
-          }),
+        projectionStore.getRun(input.threadId, run.id).pipe(
+          Effect.map(
+            (currentRun) =>
+              currentRun?.activeAttemptId === attempt.id && statuses.includes(currentRun.status),
+          ),
           Effect.catchCause(() => Effect.succeed(false)),
         );
+      const isCurrentAttemptInStatus = (expectedStatus: OrchestrationV2Run["status"]) =>
+        isCurrentAttemptIn([expectedStatus]);
 
       if (Option.isSome(allowance)) {
         let lastHold = "";
@@ -774,34 +776,21 @@ export const layer: Layer.Layer<
                 .map((turn) => turn.ordinal),
             ) + 1,
           shouldStartProviderTurn: () => isCurrentAttemptInStatus("running"),
-          shouldFinalizeRun: () =>
-            projectionStore.getThreadProjection(projection.thread.id).pipe(
-              Effect.map((current) => {
-                const currentRun = current.runs.find((candidate) => candidate.id === run.id);
-                return (
-                  currentRun?.activeAttemptId === attempt.id &&
-                  (currentRun.status === "starting" || currentRun.status === "running")
-                );
-              }),
+          shouldFinalizeRun: () => isCurrentAttemptIn(["starting", "running"]),
+          hasUnpairedRunInterruptRequest: () => {
+            const requestId = idAllocator.derive.runSignalTurnItem({
+              runId: run.id,
+              signal: "interrupt-request",
+            });
+            const resultId = idAllocator.derive.runSignalTurnItem({
+              runId: run.id,
+              signal: "interrupt-result",
+            });
+            return projectionStore.getTurnItemIds(input.threadId, [requestId, resultId]).pipe(
+              Effect.map((ids) => ids.includes(requestId) && !ids.includes(resultId)),
               Effect.catchCause(() => Effect.succeed(false)),
-            ),
-          hasUnpairedRunInterruptRequest: () =>
-            projectionStore.getThreadProjection(projection.thread.id).pipe(
-              Effect.map((current) => {
-                const requestId = idAllocator.derive.runSignalTurnItem({
-                  runId: run.id,
-                  signal: "interrupt-request",
-                });
-                const resultId = idAllocator.derive.runSignalTurnItem({
-                  runId: run.id,
-                  signal: "interrupt-result",
-                });
-                const hasRequest = current.turnItems.some((item) => item.id === requestId);
-                const hasResult = current.turnItems.some((item) => item.id === resultId);
-                return hasRequest && !hasResult;
-              }),
-              Effect.catchCause(() => Effect.succeed(false)),
-            ),
+            );
+          },
           message: {
             messageId: message.id,
             text:
