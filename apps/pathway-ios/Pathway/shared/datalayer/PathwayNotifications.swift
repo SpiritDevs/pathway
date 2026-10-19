@@ -25,6 +25,7 @@ struct PathwayNotificationPreferences: Codable, Equatable {
     @ObservationIgnored private var preferenceKey: String?
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private let registrationWriter = PathwayNotificationRegistrationWriter()
+    @ObservationIgnored private var activation: Task<Void, Never>?
     @ObservationIgnored private var activityConfigurationTask: Task<Void, Never>?
     @ObservationIgnored private var needsActivityConfiguration = false
     @ObservationIgnored private var activityStopTask: Task<Void, Never>?
@@ -37,6 +38,9 @@ struct PathwayNotificationPreferences: Codable, Equatable {
         if stored == nil { UserDefaults.standard.set(deviceID, forKey: key) }
     }
 
+    /// Binds the account's preferences after the previous account's cleanup drains. Relay
+    /// registration and the Live Activity refresh continue in the background, so the
+    /// workspace never waits on them.
     func configure(appModel: PathwayAppModel) async {
         await activityStopTask?.value
         activityStopTask = nil
@@ -45,21 +49,32 @@ struct PathwayNotificationPreferences: Codable, Equatable {
         if preferenceKey != key {
             let drain = registrationWriter.fence()
             generation += 1; registered = false
+            let epoch = generation
             await drain?.value
+            await activation?.value
             await activityConfigurationTask?.value
             #if os(iOS)
             await PathwayLiveActivities.shared.stop()
             #endif
+            // A sign-out or newer session during cleanup owns the registration now.
+            guard generation == epoch else { return }
             registrationWriter.resume()
             preferenceKey = key
             preferences = UserDefaults.standard.data(forKey: key).flatMap { try? JSONDecoder().decode(PathwayNotificationPreferences.self, from: $0) } ?? .init()
         }
         self.appModel = appModel
-        await refreshAuthorization()
-        if preferences.notificationsEnabled && authorization == .authorized {
-            UIApplication.shared.registerForRemoteNotifications()
+        let epoch = generation
+        let previous = activation
+        activation = Task { [weak self] in
+            await previous?.value
+            guard let self, generation == epoch else { return }
+            await refreshAuthorization()
+            guard generation == epoch else { return }
+            if preferences.notificationsEnabled && authorization == .authorized {
+                UIApplication.shared.registerForRemoteNotifications()
+            }
+            if preferences.liveActivitiesEnabled { await register() }
         }
-        if preferences.liveActivitiesEnabled { await register() }
     }
 
     func refreshAuthorization() async {
@@ -175,9 +190,11 @@ struct PathwayNotificationPreferences: Codable, Equatable {
         let connect = appModel?.connect
         let drain = registrationWriter.fence()
         generation += 1
+        let activation = self.activation
         let activityConfiguration = activityConfigurationTask
         clearLocalState()
         await drain?.value
+        await activation?.value
         await activityConfiguration?.value
         await activityStopTask?.value
         #if os(iOS)
@@ -190,12 +207,14 @@ struct PathwayNotificationPreferences: Codable, Equatable {
         let connect = appModel?.connect
         let drain = registrationWriter.fence()
         generation += 1
+        let activation = self.activation
         let activityConfiguration = activityConfigurationTask
         let previousStop = activityStopTask
         clearLocalState()
         activityStopTask = Task {
             await previousStop?.value
             await drain?.value
+            await activation?.value
             await activityConfiguration?.value
             #if os(iOS)
             await PathwayLiveActivities.shared.stop()
@@ -205,7 +224,7 @@ struct PathwayNotificationPreferences: Codable, Equatable {
     }
 
     private func clearLocalState() {
-        appModel = nil; preferenceKey = nil; registered = false; registering = false
+        appModel = nil; preferenceKey = nil; activation = nil; registered = false; registering = false
         preferences = .init(); errorMessage = nil
         pushToStartToken = nil; needsActivityConfiguration = false
         UIApplication.shared.unregisterForRemoteNotifications()
