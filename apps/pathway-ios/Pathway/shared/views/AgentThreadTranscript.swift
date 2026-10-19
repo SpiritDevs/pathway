@@ -9,15 +9,25 @@ struct AgentThreadTranscript: View {
     @State private var forkingID: String?
     @State private var preparingEditID: String?
     @State private var layoutCache = AgentThreadTranscriptLayoutCache()
+    /// Kept here, keyed by group row ID, so a header scrolled out of the lazy stack stays expanded.
+    @State private var expandedWork: Set<String> = []
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 22) {
-            ForEach(layoutCache.rows(model.transcriptItems, activeRunID: model.activeRunID)) { row in
+            ForEach(layoutCache.rows(model, expanded: expandedWork)) { row in
                 switch row.content {
-                case .item(let item):
-                    itemView(item)
-                case .work(let label, let items, let settled):
-                    AgentTranscriptWorkGroup(label: label, items: items, settled: settled, model: model, onOpenChild: onOpenChild)
+                case .item(let index):
+                    if let item = resolve(index, id: row.id) { itemView(item) }
+                case .work(let label, let items, let settled, let expanded):
+                    AgentTranscriptWorkGroup(label: label, first: items.first.flatMap { resolve($0) }, settled: settled, expanded: expanded) {
+                        expandedWork.formSymmetricDifference([row.id])
+                    }
+                case .child(let index, let closesGroup):
+                    if let item = resolve(index, id: row.id) {
+                        AgentTranscriptWorkItem(item: item, closesGroup: closesGroup, model: model, onOpenChild: onOpenChild)
+                            // Members sit 16pt apart, as they did inside the group, rather than the transcript's 22pt.
+                            .padding(.top, -6)
+                    }
                 }
             }
             if let hold = model.thread.shell.allowanceHold {
@@ -39,6 +49,13 @@ struct AgentThreadTranscript: View {
         } message: { Text(errorMessage ?? "") }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("agent-thread-transcript")
+    }
+
+    /// The row's current item. Rows keep positions, and a position only resolves while it still holds that item.
+    private func resolve(_ index: Int, id: String? = nil) -> PathwayTimelineItem? {
+        let items = model.items
+        guard items.indices.contains(index), id == nil || items[index].id == id else { return nil }
+        return items[index]
     }
 
     @ViewBuilder
@@ -433,17 +450,17 @@ struct AgentTranscriptAttachmentPreview: View {
     }
 }
 
+/// A work group's header. Its members follow as transcript rows of their own while expanded.
 private struct AgentTranscriptWorkGroup: View {
     let label: String
-    let items: [PathwayTimelineItem]
+    let first: PathwayTimelineItem?
     let settled: Bool
-    let model: PathwayAgentThreadModel
-    let onOpenChild: (String) -> Void
-    @State private var expanded = false
+    let expanded: Bool
+    let toggle: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Button { expanded.toggle() } label: {
+            Button(action: toggle) {
                 HStack(spacing: 7) {
                     if !settled { Image(systemName: "magnifyingglass") }
                     Text(label).lineLimit(2)
@@ -452,20 +469,28 @@ private struct AgentTranscriptWorkGroup: View {
                 }.foregroundStyle(.secondary).contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .accessibilityIdentifier("thread-work-\(items.first?.runID ?? items.first?.id ?? "group")")
+            .accessibilityIdentifier("thread-work-\(first?.runID ?? first?.id ?? "group")")
             .accessibilityValue(expanded ? "Expanded" : "Collapsed")
-            if expanded {
-                VStack(alignment: .leading, spacing: 16) {
-                    ForEach(items) { item in
-                        if item.isConversation {
-                            AgentTranscriptMarkdown(markdown: item.text ?? "", imageContext: AgentMarkdownImageContext(model: model, threadID: item.fields["threadId"]?.stringValue ?? model.threadID)).equatable()
-                        } else {
-                            AgentTranscriptEventRow(item: item, model: model, onOpenChild: onOpenChild)
-                        }
-                    }
-                }
+            if settled && !expanded { Divider() }
+        }
+    }
+}
+
+/// One member of an expanded work group; the last member of a settled group carries its divider.
+private struct AgentTranscriptWorkItem: View {
+    let item: PathwayTimelineItem
+    let closesGroup: Bool
+    let model: PathwayAgentThreadModel
+    let onOpenChild: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if item.isConversation {
+                AgentTranscriptMarkdown(markdown: item.text ?? "", imageContext: AgentMarkdownImageContext(model: model, threadID: item.fields["threadId"]?.stringValue ?? model.threadID)).equatable()
+            } else {
+                AgentTranscriptEventRow(item: item, model: model, onOpenChild: onOpenChild)
             }
-            if settled { Divider() }
+            if closesGroup { Divider() }
         }
     }
 }
@@ -711,23 +736,20 @@ struct AgentTranscriptEventContent: View {
     }
 }
 
+/// Huge tool output shows its head and tail; Copy and the reader still return the full text.
 struct AgentTranscriptCodeBlock: View {
     let text: String
     var body: some View {
-        ScrollView(.horizontal) {
-            Text(Self.displayText(text)).font(.caption.monospaced()).textSelection(.enabled)
-                .fixedSize(horizontal: true, vertical: false).padding(12)
+        let shortened = PathwayTextPreview.shortened(text)
+        VStack(alignment: .leading, spacing: 8) {
+            ScrollView(.horizontal) {
+                Text(shortened ?? text).font(.caption.monospaced()).textSelection(.enabled)
+                    .fixedSize(horizontal: true, vertical: false).padding(12)
+            }
+            .background(.quaternary, in: .rect(cornerRadius: 12))
+            .contextMenu { Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = text } }
+            if shortened != nil { PathwayFullTextActions(title: "Output", text: text) }
         }
-        .background(.quaternary, in: .rect(cornerRadius: 12))
-        .contextMenu { Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = text } }
-    }
-
-    /// One Text lays out every glyph on the main thread, so huge tool output shows its head and tail.
-    /// Copy still returns the full text.
-    nonisolated static func displayText(_ text: String, limit: Int = 20_000) -> String {
-        // The UTF-8 length is O(1) and bounds the character count, which is only measured for large text.
-        guard text.utf8.count > limit, text.count > limit else { return text }
-        return "\(text.prefix(limit / 2))\n\n… Output shortened for display. Copy to get the full text. …\n\n\(text.suffix(limit / 2))"
     }
 }
 

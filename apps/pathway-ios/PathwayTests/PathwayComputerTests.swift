@@ -60,7 +60,7 @@ struct PathwayComputerTests {
             "id": .string("tool"), "type": .string("dynamic_tool"), "runId": .string("run"), "toolName": .string("computer_click")
         ])))
         let rows = AgentThreadTranscriptLayout.rows([tool, denied], activeRunID: nil)
-        #expect(rows.contains { $0.content == .item(denied) })
+        #expect(rows.contains { $0.content == .item(1) })
     }
 
     @Test func readsOnlyALeadingSlashCommand() {
