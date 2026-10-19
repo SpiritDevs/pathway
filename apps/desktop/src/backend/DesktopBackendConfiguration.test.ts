@@ -11,7 +11,10 @@ import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
+import { CUA_HOST_SOCKET_ENV } from "@spiritdevs/shared/cuaDriverProtocol";
+
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import { DesktopComputer, inertDesktopComputer } from "../computer/DesktopComputer.ts";
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopServerExposure from "./DesktopServerExposure.ts";
@@ -54,9 +57,11 @@ function makeEnvironmentLayer(
     readonly devServerUrl?: string;
     readonly platform?: NodeJS.Platform;
     readonly resourcesPath?: string;
+    readonly flavor?: DesktopEnvironment.MakeDesktopEnvironmentInput["flavor"];
   },
 ) {
   return DesktopEnvironment.layer({
+    flavor: options?.flavor,
     dirname: options?.dirname ?? "/repo/apps/desktop/src",
     homeDirectory: baseDir,
     platform: options?.platform ?? "darwin",
@@ -99,6 +104,7 @@ const withHarness = <A, E, R>(
     | FileSystem.FileSystem
     | DesktopBackendConfiguration.DesktopBackendConfiguration
   >,
+  environmentOptions?: Parameters<typeof makeEnvironmentLayer>[1],
 ) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
@@ -112,7 +118,7 @@ const withHarness = <A, E, R>(
           Layer.provideMerge(serverExposureLayer),
           Layer.provideMerge(DesktopAppSettings.layerTest()),
           Layer.provideMerge(DesktopWslEnvironment.layerTest()),
-          Layer.provideMerge(makeEnvironmentLayer(baseDir)),
+          Layer.provideMerge(makeEnvironmentLayer(baseDir, environmentOptions)),
         ),
       ),
     );
@@ -137,6 +143,7 @@ describe("DesktopBackendConfiguration", () => {
         assert.isUndefined(first.env.PATHWAY_PORT);
         assert.isUndefined(first.env.PATHWAY_MODE);
         assert.isUndefined(first.env.PATHWAY_DESKTOP_LAN_HOST);
+        assert.notProperty(first.env, "PATHWAY_HOME");
 
         assert.equal(first.bootstrap.mode, "desktop");
         assert.equal(first.bootstrap.noBrowser, true);
@@ -153,6 +160,22 @@ describe("DesktopBackendConfiguration", () => {
           first.bootstrap.desktopEnvironmentId,
         );
       }),
+    ),
+  );
+
+  it.effect("resolvePrimary pins the cua flavor's home over an inherited PATHWAY_HOME", () =>
+    withHarness(
+      Effect.gen(function* () {
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+
+        const primary = yield* configuration.resolvePrimary;
+
+        assert.equal(environment.flavor, "cua");
+        assert.equal(primary.env.PATHWAY_HOME, environment.baseDir);
+        assert.equal(primary.bootstrap.pathwayHome, environment.baseDir);
+      }),
+      { flavor: "cua" },
     ),
   );
 
@@ -353,6 +376,39 @@ describe("DesktopBackendConfiguration", () => {
 
         assert.isUndefined(config.bootstrap.otlpTracesUrl);
         assert.isUndefined(config.bootstrap.otlpMetricsUrl);
+      }),
+    ),
+  );
+
+  it.effect("resolvePrimary hands the Computer host socket and capability to the backend", () =>
+    withHarness(
+      Effect.gen(function* () {
+        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+        const config = yield* configuration.resolvePrimary;
+
+        assert.equal(config.env[CUA_HOST_SOCKET_ENV], "/tmp/pathway-cua-host.sock");
+        assert.equal(config.bootstrap.cuaHostCapability, "fixture-capability");
+      }),
+    ).pipe(
+      Effect.provideService(DesktopComputer, {
+        ...inertDesktopComputer,
+        handoff: Option.some({
+          endpoint: "/tmp/pathway-cua-host.sock",
+          capability: "fixture-capability",
+        }),
+      }),
+    ),
+  );
+
+  it.effect("resolvePrimary clears an inherited Computer host socket while Computer is off", () =>
+    withHarness(
+      Effect.gen(function* () {
+        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+        const config = yield* configuration.resolvePrimary;
+
+        assert.isTrue(CUA_HOST_SOCKET_ENV in config.env);
+        assert.isUndefined(config.env[CUA_HOST_SOCKET_ENV]);
+        assert.isUndefined(config.bootstrap.cuaHostCapability);
       }),
     ),
   );

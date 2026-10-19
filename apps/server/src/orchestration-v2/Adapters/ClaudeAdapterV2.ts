@@ -928,6 +928,7 @@ export function claudeMcpQueryOverrides(input: {
         headers: {
           Authorization: session.authorizationHeader,
         },
+        timeout: McpProviderSession.PATHWAY_MCP_TOOL_TIMEOUT_MS,
       },
     },
   };
@@ -5927,7 +5928,7 @@ const makeDefaultClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2.layer")(function* 
     modelManifest: yield* ModelManifest,
     instanceId: CLAUDE_DEFAULT_INSTANCE_ID,
     settings: DEFAULT_CLAUDE_SETTINGS,
-    environment: hostEnvironment,
+    environment: mergeProviderInstanceEnvironment(undefined, hostEnvironment),
     attachmentsDir: serverConfig.attachmentsDir,
     fileSystem,
     idAllocator,

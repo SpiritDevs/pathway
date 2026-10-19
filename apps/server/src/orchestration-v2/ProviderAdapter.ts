@@ -51,6 +51,12 @@ export const ProviderAdapterV2RuntimePolicy = Schema.Struct({
   approvalPolicy: Schema.optional(Schema.Unknown),
   sandboxPolicy: Schema.optional(Schema.Unknown),
   reasoningEffort: Schema.optional(Schema.String),
+  /**
+   * The turn was admitted to Computer control (ADR 0048): the session's MCP
+   * credential carries the `computer` toolkit, and the adapter auto-allows
+   * those tools because Pathway owns their approval.
+   */
+  enableComputerControl: Schema.optional(Schema.Boolean),
 });
 export type ProviderAdapterV2RuntimePolicy = typeof ProviderAdapterV2RuntimePolicy.Type;
 

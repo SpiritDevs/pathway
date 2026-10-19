@@ -14,6 +14,12 @@ enum AgentThreadTranscriptLayout {
     private static let persistent = Set(["subagent", "fork", "thread_created", "proposed_plan"])
     private static let attention = Set(["approval_request", "user_input_request", "error", "run_interrupt_request", "run_interrupt_result"])
 
+    /// Rows that never fold: durable links, anything asking for attention, and Computer notices.
+    private static func isPinned(_ item: PathwayTimelineItem) -> Bool {
+        persistent.contains(item.type) || attention.contains(item.type)
+            || item.fields["workspacePreparation"]?.objectValue != nil || PathwayComputerNotice(item) != nil
+    }
+
     static func rows(_ items: [PathwayTimelineItem], activeRunID: String?) -> [AgentTranscriptRow] {
         var byRun: [String: [PathwayTimelineItem]] = [:]
         var starts: [String: Date] = [:]
@@ -32,8 +38,7 @@ enum AgentThreadTranscriptLayout {
                   !entries.contains(where: { $0.streaming || ["running", "pending", "waiting"].contains($0.status) || $0.type.hasPrefix("run_interrupt") }) else { continue }
             let terminal = entries.last(where: { $0.type == "assistant_message" })?.id
             let folded = entries.filter {
-                $0.id != terminal && !persistent.contains($0.type) && !attention.contains($0.type)
-                    && $0.fields["workspacePreparation"]?.objectValue == nil
+                $0.id != terminal && !isPinned($0)
             }
             guard let first = folded.first else { continue }
             let start = starts[run] ?? entries.compactMap(\.startedAt).min()
@@ -56,8 +61,7 @@ enum AgentThreadTranscriptLayout {
         for item in items {
             if let fold = folds[item.id] { flush(); output.append(fold) }
             if hidden.contains(item.id) { continue }
-            if !item.isConversation && !persistent.contains(item.type) && !attention.contains(item.type)
-                && item.fields["workspacePreparation"]?.objectValue == nil {
+            if !item.isConversation && !isPinned(item) {
                 if pending.last?.runID != item.runID { flush() }
                 pending.append(item)
             } else {

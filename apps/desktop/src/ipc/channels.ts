@@ -107,3 +107,20 @@ export const PREVIEW_POINTER_EVENT_CHANNEL = "desktop:preview-pointer-event";
 export const PREVIEW_OPEN_IN_NEW_TAB_CHANNEL = "desktop:preview-open-in-new-tab";
 
 export const PREVIEW_AUTOFILL_LOGIN_CHANNEL = "desktop:preview-autofill-login";
+
+export const COMPUTER_GET_STATE_CHANNEL = "desktop:computer-get-state";
+export const COMPUTER_REQUEST_PERMISSIONS_CHANNEL = "desktop:computer-request-permissions";
+export const COMPUTER_START_PERMISSION_SETUP_CHANNEL = "desktop:computer-start-permission-setup";
+export const COMPUTER_OPEN_PERMISSION_SETTINGS_CHANNEL =
+  "desktop:computer-open-permission-settings";
+export const COMPUTER_SHOW_PERMISSION_GUIDE_CHANNEL = "desktop:computer-show-permission-guide";
+export const COMPUTER_HIDE_PERMISSION_GUIDE_CHANNEL = "desktop:computer-hide-permission-guide";
+export const COMPUTER_RESTART_APP_CHANNEL = "desktop:computer-restart-app";
+export const COMPUTER_SET_CURSOR_STYLE_CHANNEL = "desktop:computer-set-cursor-style";
+export const COMPUTER_STATE_CHANNEL = "desktop:computer-state";
+export const COMPUTER_ERROR_CHANNEL = "desktop:computer-error";
+export const COMPUTER_PERMISSION_GUIDE_STATE_CHANNEL = "desktop:computer-permission-guide-state";
+/** Live frame-tap JPEGs for the desktop's own renderer; never the orchestration socket. */
+export const COMPUTER_PREVIEW_FRAME_CHANNEL = "desktop:computer-preview-frame";
+/** Whether the renderer has a preview subscribed to those frames. */
+export const COMPUTER_PREVIEW_WATCHED_CHANNEL = "desktop:computer-preview-watched";

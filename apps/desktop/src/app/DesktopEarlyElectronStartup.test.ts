@@ -82,10 +82,54 @@ describe("DesktopEarlyElectronStartup", () => {
 
     assert.deepEqual(options, {
       isDevelopment: true,
+      scheme: "pathway-dev",
       linuxWmClass: "pathway-dev",
       linuxDesktopEntryName: "com.spiritdevs.Pathway.Development.desktop",
       passwordStore: "gnome-libsecret",
     });
+  });
+
+  it("reads settings and names from the isolated cua identity", () => {
+    const options = resolveEarlyLinuxElectronOptions({
+      env: {},
+      homeDirectory: "/home/user",
+      joinPath,
+      flavor: "cua",
+      readFileString: (path) => {
+        assert.equal(path, "/home/user/.pathway-cua/userdata/desktop-settings.json");
+        return JSON.stringify({ linuxPasswordStore: "kwallet6" });
+      },
+    });
+
+    assert.deepEqual(options, {
+      isDevelopment: false,
+      scheme: "pathway-cua",
+      linuxWmClass: "pathway-cua",
+      linuxDesktopEntryName: "com.spiritdevs.Pathway.Cua.desktop",
+      passwordStore: "kwallet6",
+    });
+  });
+
+  it("reads the cua flavor's early settings from its own home whatever PATHWAY_HOME says", () => {
+    const readPaths: Array<string> = [];
+    for (const PATHWAY_HOME of ["/home/user/.pathway", "~/.pathway/", "/tmp/cua-home"]) {
+      resolveEarlyLinuxElectronOptions({
+        env: { PATHWAY_HOME },
+        homeDirectory: "/home/user",
+        joinPath,
+        flavor: "cua",
+        readFileString: (path) => {
+          readPaths.push(path);
+          return "{}";
+        },
+      });
+    }
+
+    assert.deepEqual(readPaths, [
+      "/home/user/.pathway-cua/userdata/desktop-settings.json",
+      "/home/user/.pathway-cua/userdata/desktop-settings.json",
+      "/home/user/.pathway-cua/userdata/desktop-settings.json",
+    ]);
   });
 
   it("keeps implicit development state under ~/.pathway/dev when PATHWAY_HOME is unset", () => {

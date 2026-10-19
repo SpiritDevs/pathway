@@ -67,6 +67,7 @@ import { createDebouncedJSONStorage, createMemoryStorage } from "./lib/storage";
 import { getDefaultServerModel } from "./providerModels";
 import { UnifiedSettings } from "@spiritdevs/contracts/settings";
 import { ReviewCommentContextSchema, type ReviewCommentContext } from "./reviewCommentContext";
+import type { ComposerComputerControlMode } from "./computerControlMode";
 const isSnapShotSource = Schema.is(SnapShotSource);
 const isRuntimeMode = Schema.is(RuntimeMode);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
@@ -191,6 +192,8 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   activeProvider: Schema.optionalKey(Schema.NullOr(ProviderInstanceId)),
   runtimeMode: Schema.optionalKey(RuntimeMode),
   interactionMode: Schema.optionalKey(ProviderInteractionMode),
+  computerControlMode: Schema.optionalKey(Schema.Literals(["off", "request", "chat"])),
+  computerControlGeneration: Schema.optionalKey(Schema.Number),
 });
 type PersistedComposerThreadDraftState = typeof PersistedComposerThreadDraftState.Type;
 
@@ -351,6 +354,10 @@ export interface ComposerThreadDraftState {
   activeProvider: ProviderInstanceId | null;
   runtimeMode: RuntimeMode | null;
   interactionMode: ProviderInteractionMode | null;
+  /** Explicit Computer intent for this draft; absent until the user chooses one. */
+  computerControlMode?: ComposerComputerControlMode | undefined;
+  /** The thread's Computer revocation generation that intent was formed against. */
+  computerControlGeneration?: number | undefined;
 }
 
 /**
@@ -585,6 +592,11 @@ interface ComposerDraftStoreState {
   setInteractionMode: (
     threadRef: ComposerThreadTarget,
     interactionMode: ProviderInteractionMode | null | undefined,
+  ) => void;
+  setComputerControlMode: (
+    threadRef: ComposerThreadTarget,
+    mode: ComposerComputerControlMode,
+    options?: { readonly generation?: number },
   ) => void;
   addImage: (threadRef: ComposerThreadTarget, image: ComposerAttachment) => boolean;
   addImages: (threadRef: ComposerThreadTarget, images: ComposerAttachment[]) => void;
@@ -922,6 +934,14 @@ function normalizeTerminalContextsForThread(
   return normalizedContexts;
 }
 
+function normalizeComputerControlMode(value: unknown): ComposerComputerControlMode | undefined {
+  return value === "off" || value === "request" || value === "chat" ? value : undefined;
+}
+
+function normalizeComputerControlGeneration(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
 function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
   return (
     draft.prompt.length === 0 &&
@@ -935,7 +955,9 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     Object.keys(draft.modelSelectionByProvider).length === 0 &&
     draft.activeProvider === null &&
     draft.runtimeMode === null &&
-    draft.interactionMode === null
+    draft.interactionMode === null &&
+    draft.computerControlMode === undefined &&
+    draft.computerControlGeneration === undefined
   );
 }
 
@@ -2005,6 +2027,10 @@ function normalizePersistedDraftsByThreadId(
       draftCandidate.interactionMode === "plan" || draftCandidate.interactionMode === "default"
         ? draftCandidate.interactionMode
         : null;
+    const computerControlMode = normalizeComputerControlMode(draftCandidate.computerControlMode);
+    const computerControlGeneration = normalizeComputerControlGeneration(
+      draftCandidate.computerControlGeneration,
+    );
     const prompt = ensureInlineTerminalContextPlaceholders(
       promptCandidate,
       terminalContexts.length,
@@ -2066,7 +2092,9 @@ function normalizePersistedDraftsByThreadId(
       reviewComments.length === 0 &&
       !hasModelData &&
       !runtimeMode &&
-      !interactionMode
+      !interactionMode &&
+      computerControlMode === undefined &&
+      computerControlGeneration === undefined
     ) {
       continue;
     }
@@ -2097,6 +2125,8 @@ function normalizePersistedDraftsByThreadId(
         : {}),
       ...(runtimeMode ? { runtimeMode } : {}),
       ...(interactionMode ? { interactionMode } : {}),
+      ...(computerControlMode === undefined ? {} : { computerControlMode }),
+      ...(computerControlGeneration === undefined ? {} : { computerControlGeneration }),
     };
   }
 
@@ -2218,6 +2248,12 @@ function toPersistedThreadDraft(
       : {}),
     ...(draft.runtimeMode ? { runtimeMode: draft.runtimeMode } : {}),
     ...(draft.interactionMode ? { interactionMode: draft.interactionMode } : {}),
+    ...(draft.computerControlMode === undefined
+      ? {}
+      : { computerControlMode: draft.computerControlMode }),
+    ...(draft.computerControlGeneration === undefined
+      ? {}
+      : { computerControlGeneration: draft.computerControlGeneration }),
   };
 }
 
@@ -2267,7 +2303,9 @@ function partializeComposerDraftStoreState(
       draft.reviewComments.length === 0 &&
       !hasModelData &&
       draft.runtimeMode === null &&
-      draft.interactionMode === null
+      draft.interactionMode === null &&
+      draft.computerControlMode === undefined &&
+      draft.computerControlGeneration === undefined
     ) {
       continue;
     }
@@ -2544,6 +2582,12 @@ function toHydratedThreadDraft(
     activeProvider,
     runtimeMode: persistedDraft.runtimeMode ?? null,
     interactionMode: persistedDraft.interactionMode ?? null,
+    ...(persistedDraft.computerControlMode === undefined
+      ? {}
+      : { computerControlMode: persistedDraft.computerControlMode }),
+    ...(normalizeComputerControlGeneration(persistedDraft.computerControlGeneration) === undefined
+      ? {}
+      : { computerControlGeneration: persistedDraft.computerControlGeneration }),
   };
 }
 
@@ -3370,6 +3414,31 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               nextDraftsByThreadKey[threadKey] = nextDraft;
             }
             return { draftsByThreadKey: nextDraftsByThreadKey };
+          });
+        },
+        setComputerControlMode: (threadRef, mode, options) => {
+          const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";
+          if (threadKey.length === 0) {
+            return;
+          }
+          const generation = normalizeComputerControlGeneration(options?.generation);
+          set((state) => {
+            const base = state.draftsByThreadKey[threadKey] ?? createEmptyThreadDraft();
+            const nextGeneration = generation ?? base.computerControlGeneration;
+            if (
+              base.computerControlMode === mode &&
+              base.computerControlGeneration === nextGeneration
+            ) {
+              return state;
+            }
+            const nextDraft: ComposerThreadDraftState = {
+              ...base,
+              computerControlMode: mode,
+              ...(nextGeneration === undefined
+                ? {}
+                : { computerControlGeneration: nextGeneration }),
+            };
+            return { draftsByThreadKey: { ...state.draftsByThreadKey, [threadKey]: nextDraft } };
           });
         },
         addImage: (threadRef, image) => {

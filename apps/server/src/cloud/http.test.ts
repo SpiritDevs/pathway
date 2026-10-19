@@ -18,6 +18,7 @@ import {
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import {
+  AuthComputerOperateScope,
   AuthRelayReadScope,
   AuthRelayWriteScope,
   AuthSessionId,
@@ -351,6 +352,19 @@ describe("cloud mint credential handler", () => {
       expect(harness.pairingInputs[0]?.subject).toBe("cloud-connect");
       expect(harness.pairingInputs[0]?.initiatingEnvironmentId).toBeUndefined();
       expect(harness.secretReads).toContain(CLOUD_LINKED_USER_ID);
+    }),
+  );
+
+  it.effect("never lets a peer environment drive this desktop", () =>
+    Effect.gen(function* () {
+      const peer = yield* makeMintHarness({ environmentSubject: true });
+      yield* peer.run;
+      expect(peer.pairingInputs[0]?.scopes).not.toContain(AuthComputerOperateScope);
+
+      // A person's own client, even one hosted in an environment, keeps it.
+      const desktop = yield* makeMintHarness({ clientEnvironmentId: INITIATING_ENVIRONMENT_ID });
+      yield* desktop.run;
+      expect(desktop.pairingInputs[0]?.scopes).toContain(AuthComputerOperateScope);
     }),
   );
 

@@ -126,9 +126,13 @@ export const makeCommandGate = Effect.gen(function* () {
         }
 
         const result = yield* Deferred.make<A, E | ServerRuntimeStartupError>();
+        // A queued command runs with its caller's services, as it would inline:
+        // the caller's identity (the Computer access port) must not fall back
+        // to the worker's.
+        const callerContext = yield* Effect.context<never>();
         yield* Queue.offer(commandQueue, {
           run: Deferred.await(commandReady).pipe(
-            Effect.flatMap(() => effect),
+            Effect.flatMap(() => Effect.provideContext(effect, callerContext)),
             Effect.exit,
             Effect.flatMap((exit) => settleQueuedCommand(result, exit)),
           ),

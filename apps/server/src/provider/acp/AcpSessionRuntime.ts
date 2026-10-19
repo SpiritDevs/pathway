@@ -29,6 +29,7 @@ import type * as EffectAcpProtocol from "effect-acp/protocol";
 import { resolveSpawnCommand } from "@spiritdevs/shared/shell";
 import { HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
 
+import { providerChildEnvironment } from "../ProviderInstanceEnvironment.ts";
 import {
   collectSessionConfigOptionValues,
   extractModelConfigId,
@@ -1341,7 +1342,7 @@ export const make = (
     const spawnCommand = yield* resolveSpawnCommand(
       options.spawn.command,
       options.spawn.args,
-      options.spawn.env ? { env: options.spawn.env, extendEnv: true } : {},
+      yield* providerChildEnvironment({ env: options.spawn.env, extendEnv: true }),
     );
     const linuxCgroupLease =
       options.ownDescendantProcessGroups === true && options.processGroupPlatform === "linux"
@@ -1402,7 +1403,7 @@ export const make = (
       .spawn(
         ChildProcess.make(containedSpawnCommand.command, containedSpawnCommand.args, {
           ...(options.spawn.cwd ? { cwd: options.spawn.cwd } : {}),
-          ...(spawnEnvironment ? { env: spawnEnvironment, extendEnv: true } : {}),
+          ...(yield* providerChildEnvironment({ env: spawnEnvironment, extendEnv: true })),
           ...(options.ownDetachedProcessGroup === undefined
             ? {}
             : { detached: options.ownDetachedProcessGroup }),
