@@ -100,7 +100,7 @@ struct PathwayComputerSettingsView: View {
                 if PathwayComputerAccess.servesComputer(serverConfig: config) {
                     status = (try? await client.run("computer.getStatus")).map(PathwayComputerPolicy.summary)
                 }
-                canWrite = (try? await appModel.connect?.prepare(environment: client.environment))?.scopes.contains("access:write") == true
+                canWrite = (try? await appModel.connect?.authorize(environment: client.environment))?.scopes.contains("access:write") == true
             }
             guard id == loadID, !Task.isCancelled else { return }
             supported = supports

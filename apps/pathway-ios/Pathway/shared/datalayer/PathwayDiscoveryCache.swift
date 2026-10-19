@@ -6,6 +6,8 @@ actor PathwayDiscoveryCache {
         let entities: [String: [PathwaySyncChange]]
         let versions: [String: Int]
         let savedAt: Date
+        /// Saved with `versions` and `entities`. Older caches lack it and always bootstrap again.
+        var authorizationEpochs: [String: Int]?
     }
 
     private let file: URL

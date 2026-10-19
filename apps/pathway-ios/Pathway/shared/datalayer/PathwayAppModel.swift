@@ -156,6 +156,7 @@ final class PathwayAppModel {
             defer { isSigningOut = false }
             await PathwayNotifications.shared.stop()
             try await authProvider.signOut()
+            await connect?.clearEnvironmentAuthorizations()
             authenticationGeneration += 1
             storagePreparation?.cancel()
             await storagePreparation?.value
@@ -187,6 +188,7 @@ final class PathwayAppModel {
 
     func sessionDidEnd() {
         PathwayNotifications.shared.clearLocalRegistration()
+        Task { [connect] in await connect?.clearEnvironmentAuthorizations() }
         authenticationGeneration += 1
         storagePreparation?.cancel()
         isAccountReady = false

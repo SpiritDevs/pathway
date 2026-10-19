@@ -71,6 +71,8 @@ actor PathwayDirectConnections {
     private let signer: PathwayDPoPSigner
     private let session: URLSession
     private let service = "com.spiritdevs.pathway.direct-connections"
+    /// Stored credentials whose server already proved its identity in this process.
+    private var verifiedDescriptors: Set<String> = []
 
     init(signer: PathwayDPoPSigner = PathwayDPoPSigner(), session: URLSession? = nil) {
         self.signer = signer
@@ -130,22 +132,53 @@ actor PathwayDirectConnections {
         return connection.summary
     }
 
+    /// The stored session for signed HTTP and asset URLs. Checks the server's identity once per credential.
+    func authorization(environmentID: String, accountKey: String, requirePreferred: Bool = true) async throws -> PathwayEnvironmentAuthorization? {
+        guard let connection = try stored(environmentID: environmentID, accountKey: accountKey, requirePreferred: requirePreferred) else { return nil }
+        return try await authorization(connection, accountKey: accountKey)
+    }
+
     func prepare(environmentID: String, accountKey: String, requirePreferred: Bool = true) async throws -> PathwayPreparedEnvironmentConnection? {
-        guard let connection = try read(accountKey).first(where: { $0.environmentID == environmentID && (!requirePreferred || $0.useForConnections) }) else { return nil }
-        try validate(connection)
-        let descriptor = try await send(URLRequest(url: connection.baseURL.appendingPathComponent(".well-known/pathway/environment")))
-        guard descriptor.objectValue?["environmentId"]?.stringValue == environmentID,
-              descriptor.objectValue?["applicationId"]?.stringValue == "pathway" else { throw PathwayConnectError.environmentMismatch }
-        let ticket = try await authenticated(connection, method: "POST", path: "/api/auth/websocket-ticket", payload: .object([:]))
+        guard let connection = try stored(environmentID: environmentID, accountKey: accountKey, requirePreferred: requirePreferred) else { return nil }
+        let authorization = try await authorization(connection, accountKey: accountKey)
+        let ticket: JSONValue
+        do {
+            ticket = try await authenticated(connection, method: "POST", path: "/api/auth/websocket-ticket", payload: .object([:]))
+        } catch {
+            // Check the server's identity again next time, in case another server now owns this address.
+            verifiedDescriptors.remove(Self.verificationKey(connection, accountKey: accountKey))
+            throw error
+        }
         guard let value = ticket.objectValue?["ticket"]?.stringValue else { throw PathwayConnectError.invalidResponse }
+        return try .init(authorization, ticket: value, expiresAt: ticket.objectValue?["expiresAt"]?.stringValue.flatMap(pathwayDate(from:)))
+    }
+
+    private func stored(environmentID: String, accountKey: String, requirePreferred: Bool) throws -> PathwayStoredDirectConnection? {
+        try read(accountKey).first { $0.environmentID == environmentID && (!requirePreferred || $0.useForConnections) }
+    }
+
+    private func authorization(_ connection: PathwayStoredDirectConnection, accountKey: String) async throws -> PathwayEnvironmentAuthorization {
+        let environmentID = connection.environmentID
+        try validate(connection)
+        let verification = Self.verificationKey(connection, accountKey: accountKey)
+        if !verifiedDescriptors.contains(verification) {
+            let descriptor = try await send(URLRequest(url: connection.baseURL.appendingPathComponent(".well-known/pathway/environment")))
+            guard descriptor.objectValue?["environmentId"]?.stringValue == environmentID,
+                  descriptor.objectValue?["applicationId"]?.stringValue == "pathway" else { throw PathwayConnectError.environmentMismatch }
+            verifiedDescriptors.insert(verification)
+        }
         guard var socket = URLComponents(url: connection.baseURL, resolvingAgainstBaseURL: false) else { throw PathwayConnectError.invalidURL }
         socket.scheme = connection.baseURL.scheme == "https" ? "wss" : "ws"
         socket.path = "/ws"
-        socket.queryItems = [URLQueryItem(name: "wsTicket", value: value)]
         guard let socketURL = socket.url else { throw PathwayConnectError.invalidURL }
-        return .init(environmentID: environmentID, label: connection.label, httpBaseURL: connection.baseURL,
-            webSocketURL: socketURL, accessToken: connection.accessToken, proofKeyThumbprint: connection.thumbprint, scopes: connection.scopes,
-            ticketExpiresAt: ticket.objectValue?["expiresAt"]?.stringValue.flatMap(pathwayDate(from:)))
+        return .init(environmentID: environmentID, label: connection.label, httpBaseURL: connection.baseURL, webSocketBaseURL: socketURL,
+                     accessToken: connection.accessToken, proofKeyThumbprint: connection.thumbprint, scopes: connection.scopes,
+                     expiresAt: connection.expiresAt)
+    }
+
+    private static func verificationKey(_ connection: PathwayStoredDirectConnection, accountKey: String) -> String {
+        [accountKey, connection.environmentID, connection.baseURL.absoluteString, connection.thumbprint,
+         PathwayDPoPSigner.accessTokenHash(connection.accessToken)].joined(separator: "\n")
     }
 
     func request(environmentID: String, accountKey: String, method: String, path: String, payload: JSONValue? = nil) async throws -> JSONValue {

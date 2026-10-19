@@ -31,6 +31,43 @@ enum PathwayConnectError: LocalizedError, Sendable {
     }
 }
 
+/// How a connection attempt failed, so reconnect loops stop retrying input that cannot change.
+enum PathwayConnectFailure: Equatable {
+    /// Network, timeout, server startup, or a temporary relay outage.
+    case transient
+    /// The environment or relay rejected a credential. Worth one fresh authorization.
+    case unauthorized
+    /// Invalid configuration or endpoint, a different environment, refused scopes or proof, or
+    /// expired pairing. Retrying unchanged input cannot repair it.
+    case permanent
+
+    init(_ error: Error) {
+        guard let error = error as? PathwayConnectError else { self = .transient; return }
+        switch error {
+        case .invalidConfiguration, .invalidURL, .invalidProofKey, .scopeMismatch, .environmentMismatch:
+            self = .permanent
+        case let .response(status, _, _) where status == 401:
+            self = .unauthorized
+        case let .response(status, _, _) where status == 403:
+            self = .permanent
+        case .invalidResponse, .keychain, .response:
+            self = .transient
+        }
+    }
+}
+
+/// A validated environment session. Each socket still needs its own one-use ticket from it.
+struct PathwayEnvironmentAuthorization: Sendable {
+    let environmentID: String
+    let label: String
+    let httpBaseURL: URL
+    let webSocketBaseURL: URL
+    let accessToken: String
+    let proofKeyThumbprint: String
+    let scopes: Set<String>
+    let expiresAt: Date
+}
+
 struct PathwayManagedEndpoint: Codable, Equatable, Sendable {
     let httpBaseUrl: String
     let wsBaseUrl: String
@@ -54,6 +91,23 @@ struct PathwayPreparedEnvironmentConnection: Sendable {
     func threadOperationWebSocketURL() throws -> URL {
         guard scopes.contains("orchestration:operate") else { throw PathwayConnectError.scopeMismatch }
         return webSocketURL
+    }
+}
+
+extension PathwayPreparedEnvironmentConnection {
+    /// `authorization`'s socket URL carrying `ticket`.
+    init(_ authorization: PathwayEnvironmentAuthorization, ticket: String, expiresAt: Date?) throws {
+        guard var components = URLComponents(url: authorization.webSocketBaseURL, resolvingAgainstBaseURL: false) else {
+            throw PathwayConnectError.invalidURL
+        }
+        var queryItems = components.queryItems ?? []
+        queryItems.removeAll { $0.name == "wsTicket" }
+        queryItems.append(URLQueryItem(name: "wsTicket", value: ticket))
+        components.queryItems = queryItems
+        guard let socketURL = components.url else { throw PathwayConnectError.invalidURL }
+        self.init(environmentID: authorization.environmentID, label: authorization.label, httpBaseURL: authorization.httpBaseURL,
+                  webSocketURL: socketURL, accessToken: authorization.accessToken, proofKeyThumbprint: authorization.proofKeyThumbprint,
+                  scopes: authorization.scopes, ticketExpiresAt: expiresAt)
     }
 }
 
@@ -143,6 +197,9 @@ actor PathwayConnectClient {
     private let signer: PathwayDPoPSigner
     private let session: URLSession
     private var relayTokens: [String: PathwayCachedRelayToken] = [:]
+    private var authorizations: [String: PathwayEnvironmentAuthorization] = [:]
+    private var pendingAuthorizations: [String: Task<PathwayEnvironmentAuthorization, Error>] = [:]
+    private var authorizationGeneration = 0
 
     init(
         relayURL: URL,
@@ -156,64 +213,40 @@ actor PathwayConnectClient {
         self.session = session
     }
 
-    // swiftlint:disable opening_brace
-    func prepare(environment: PathwayCompanyEnvironment) async throws
-        -> PathwayPreparedEnvironmentConnection
-    {
+    /// A socket-ready connection with a fresh one-use ticket. The environment session behind it is
+    /// reused until it expires, so a reconnect costs one ticket request.
+    func prepare(environment: PathwayCompanyEnvironment) async throws -> PathwayPreparedEnvironmentConnection {
         let clerkToken = try await clerkTokenProvider()
         if let accountKey = PathwayAccountStorage.identity(fromToken: clerkToken),
            let direct = try await PathwayDirectConnections.shared.prepare(environmentID: environment.environment.environmentId, accountKey: accountKey) {
             return direct
         }
-        let thumbprint = try await signer.thumbprint()
-        let relayAccessToken = try await relayAccessToken(
-            clerkToken: clerkToken,
-            thumbprint: thumbprint
-        )
-        let bootstrap = try await connectRelay(
-            environment: environment,
-            relayAccessToken: relayAccessToken,
-            thumbprint: thumbprint
-        )
-        guard let httpBaseURL = bootstrap.endpoint.httpBaseURL else {
-            throw PathwayConnectError.invalidConfiguration(
-                "The environment's Pathway Connect URL is invalid."
-            )
+        let (authorization, reused) = try await relayAuthorization(environment: environment, clerkToken: clerkToken)
+        do {
+            return try await ticketed(authorization)
+        } catch let error where reused && !(error is CancellationError) {
+            // A revoked session or moved endpoint fails here; authorize once from scratch.
+            invalidate(authorization, clerkToken: clerkToken)
+            let (fresh, _) = try await relayAuthorization(environment: environment, clerkToken: clerkToken)
+            return try await ticketed(fresh)
         }
-        let descriptor: PathwayRemoteEnvironmentDescriptor = try await send(
-            request(url: endpoint(httpBaseURL, path: [".well-known", "pathway", "environment"])),
-            as: PathwayRemoteEnvironmentDescriptor.self
-        )
-        guard descriptor.environmentId == environment.environment.environmentId,
-              descriptor.applicationId == "pathway"
-        else {
-            throw PathwayConnectError.environmentMismatch
-        }
-
-        let accessToken = try await exchangeEnvironmentToken(
-            bootstrapCredential: bootstrap.credential,
-            endpoint: bootstrap.endpoint,
-            thumbprint: thumbprint,
-            scopes: Self.environmentScopes(computerOperateScope: descriptor.capabilities?["computerOperateScope"]?.boolValue == true)
-        )
-        let (socketURL, ticketExpiresAt) = try await webSocketURL(
-            endpoint: bootstrap.endpoint,
-            accessToken: accessToken.accessToken,
-            thumbprint: thumbprint
-        )
-        return PathwayPreparedEnvironmentConnection(
-            environmentID: descriptor.environmentId,
-            label: descriptor.label,
-            httpBaseURL: httpBaseURL,
-            webSocketURL: socketURL,
-            accessToken: accessToken.accessToken,
-            proofKeyThumbprint: thumbprint,
-            scopes: Set(accessToken.scope.split(separator: " ").map(String.init)),
-            ticketExpiresAt: ticketExpiresAt
-        )
     }
 
-    // swiftlint:enable opening_brace
+    /// The environment session alone, for signed HTTP and asset URLs. Never mints a socket ticket.
+    func authorize(environment: PathwayCompanyEnvironment) async throws -> PathwayEnvironmentAuthorization {
+        let clerkToken = try await clerkTokenProvider()
+        if let accountKey = PathwayAccountStorage.identity(fromToken: clerkToken),
+           let direct = try await PathwayDirectConnections.shared.authorization(environmentID: environment.environment.environmentId, accountKey: accountKey) {
+            return direct
+        }
+        return try await relayAuthorization(environment: environment, clerkToken: clerkToken).0
+    }
+
+    /// Forgets a session the environment rejected, so the next connection authorizes again.
+    func invalidateAuthorization(environment: PathwayCompanyEnvironment) {
+        authorizations = authorizations.filter { !$0.key.hasSuffix("\n\(environment.environment.environmentId)") }
+    }
+
 
     /// A fresh `wsTicket` minted with `connection`'s access token, so the socket it opens belongs to the
     /// same authenticated environment session. Every `prepare` through Pathway Connect opens a new session.
@@ -243,7 +276,7 @@ actor PathwayConnectClient {
     }
 
     func authenticatedRequest(environment: PathwayCompanyEnvironment, method: String, path: String) async throws -> URLRequest {
-        let connection = try await prepare(environment: environment)
+        let connection = try await authorize(environment: environment)
         guard let url = URL(string: path, relativeTo: connection.httpBaseURL)?.absoluteURL,
               url.scheme == connection.httpBaseURL.scheme,
               url.host == connection.httpBaseURL.host,
@@ -261,6 +294,16 @@ actor PathwayConnectClient {
 
     func clearTokenCache() {
         relayTokens = [:]
+        clearEnvironmentAuthorizations()
+    }
+
+    /// Drops every environment session, including ones still being authorized. Relay tokens stay
+    /// so sign-out can still unregister this device.
+    func clearEnvironmentAuthorizations() {
+        authorizations = [:]
+        authorizationGeneration += 1
+        pendingAuthorizations.values.forEach { $0.cancel() }
+        pendingAuthorizations = [:]
     }
 
     func relayRequest(method: String, path: String, payload: JSONValue? = nil) async throws -> JSONValue {
@@ -301,6 +344,109 @@ actor PathwayConnectClient {
 }
 
 private extension PathwayConnectClient {
+    private func authorizationKey(clerkToken: String, environmentID: String) -> String {
+        let subject = PathwayAccountStorage.identity(fromToken: clerkToken) ?? PathwayDPoPSigner.accessTokenHash(clerkToken)
+        return "\(subject)\n\(environmentID)"
+    }
+
+    /// Reuses this account's valid session for the environment and joins one already being authorized.
+    private func relayAuthorization(
+        environment: PathwayCompanyEnvironment,
+        clerkToken: String
+    ) async throws -> (PathwayEnvironmentAuthorization, reused: Bool) {
+        let key = authorizationKey(clerkToken: clerkToken, environmentID: environment.environment.environmentId)
+        let thumbprint = try await signer.thumbprint()
+        if let cached = authorizations[key] {
+            if cached.proofKeyThumbprint == thumbprint, cached.expiresAt.timeIntervalSinceNow > 60 { return (cached, true) }
+            authorizations.removeValue(forKey: key)
+        }
+        if let pending = pendingAuthorizations[key] { return (try await pending.value, false) }
+        let generation = authorizationGeneration
+        let task = Task {
+            try await authorizeRelay(environment: environment, clerkToken: clerkToken, thumbprint: thumbprint)
+        }
+        pendingAuthorizations[key] = task
+        defer { if generation == authorizationGeneration { pendingAuthorizations.removeValue(forKey: key) } }
+        let authorization = try await task.value
+        // Sign-out during authorization must not leave the old account's session behind.
+        guard generation == authorizationGeneration else { throw CancellationError() }
+        authorizations[key] = authorization
+        return (authorization, false)
+    }
+
+    private func invalidate(_ authorization: PathwayEnvironmentAuthorization, clerkToken: String) {
+        let key = authorizationKey(clerkToken: clerkToken, environmentID: authorization.environmentID)
+        if authorizations[key]?.accessToken == authorization.accessToken { authorizations.removeValue(forKey: key) }
+    }
+
+    private func authorizeRelay(
+        environment: PathwayCompanyEnvironment,
+        clerkToken: String,
+        thumbprint: String
+    ) async throws -> PathwayEnvironmentAuthorization {
+        let relayAccessToken = try await relayAccessToken(
+            clerkToken: clerkToken,
+            thumbprint: thumbprint
+        )
+        let bootstrap: PathwayRelayConnectResponse
+        do {
+            bootstrap = try await connectRelay(
+                environment: environment,
+                relayAccessToken: relayAccessToken,
+                thumbprint: thumbprint
+            )
+        } catch let PathwayConnectError.response(status, message, traceID) where status == 401 {
+            // The cached relay token was revoked; the next attempt exchanges a fresh one.
+            relayTokens = [:]
+            throw PathwayConnectError.response(status: status, message: message, traceID: traceID)
+        }
+        guard let httpBaseURL = bootstrap.endpoint.httpBaseURL else {
+            throw PathwayConnectError.invalidConfiguration(
+                "The environment's Pathway Connect URL is invalid."
+            )
+        }
+        let descriptor: PathwayRemoteEnvironmentDescriptor = try await send(
+            request(url: endpoint(httpBaseURL, path: [".well-known", "pathway", "environment"])),
+            as: PathwayRemoteEnvironmentDescriptor.self
+        )
+        guard descriptor.environmentId == environment.environment.environmentId,
+              descriptor.applicationId == "pathway"
+        else {
+            throw PathwayConnectError.environmentMismatch
+        }
+        let socketBaseURL = try secureWebSocketBaseURL(bootstrap.endpoint)
+        let accessToken = try await exchangeEnvironmentToken(
+            bootstrapCredential: bootstrap.credential,
+            endpoint: bootstrap.endpoint,
+            thumbprint: thumbprint,
+            scopes: Self.environmentScopes(computerOperateScope: descriptor.capabilities?["computerOperateScope"]?.boolValue == true)
+        )
+        return PathwayEnvironmentAuthorization(
+            environmentID: descriptor.environmentId,
+            label: descriptor.label,
+            httpBaseURL: httpBaseURL,
+            webSocketBaseURL: socketBaseURL,
+            accessToken: accessToken.accessToken,
+            proofKeyThumbprint: thumbprint,
+            scopes: Set(accessToken.scope.split(separator: " ").map(String.init)),
+            expiresAt: Date().addingTimeInterval(accessToken.expiresIn.isFinite ? accessToken.expiresIn : 0)
+        )
+    }
+
+    /// Mints the one-use ticket a new socket presents.
+    private func ticketed(_ authorization: PathwayEnvironmentAuthorization) async throws -> PathwayPreparedEnvironmentConnection {
+        let target = endpoint(authorization.httpBaseURL, path: ["api", "auth", "websocket-ticket"])
+        let proof = try await signer.proof(method: "POST", url: target, accessToken: authorization.accessToken)
+        guard proof.thumbprint == authorization.proofKeyThumbprint else { throw PathwayConnectError.invalidProofKey }
+        var request = URLRequest(url: target)
+        request.httpMethod = "POST"
+        request.setValue("DPoP \(authorization.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue(proof.value, forHTTPHeaderField: "DPoP")
+        let ticket: PathwayWebSocketTicket = try await send(request, as: PathwayWebSocketTicket.self)
+        return try PathwayPreparedEnvironmentConnection(authorization, ticket: ticket.ticket,
+                                                        expiresAt: ticket.expiresAt.flatMap(pathwayDate(from:)))
+    }
+
     private func relayAccessToken(
         clerkToken: String,
         thumbprint: String,
@@ -429,11 +575,7 @@ private extension PathwayConnectClient {
         return response
     }
 
-    private func webSocketURL(
-        endpoint managedEndpoint: PathwayManagedEndpoint,
-        accessToken: String,
-        thumbprint: String
-    ) async throws -> (URL, Date?) {
+    private func secureWebSocketBaseURL(_ managedEndpoint: PathwayManagedEndpoint) throws -> URL {
         guard
             let httpBaseURL = managedEndpoint.httpBaseURL,
             let socketBaseURL = managedEndpoint.webSocketBaseURL,
@@ -446,28 +588,12 @@ private extension PathwayConnectClient {
                 "The managed environment endpoint is not secure."
             )
         }
-        let target = endpoint(httpBaseURL, path: ["api", "auth", "websocket-ticket"])
-        let proof = try await signer.proof(method: "POST", url: target, accessToken: accessToken)
-        guard proof.thumbprint == thumbprint else { throw PathwayConnectError.invalidProofKey }
-        var request = URLRequest(url: target)
-        request.httpMethod = "POST"
-        request.setValue("DPoP \(accessToken)", forHTTPHeaderField: "Authorization")
-        request.setValue(proof.value, forHTTPHeaderField: "DPoP")
-        let ticket: PathwayWebSocketTicket = try await send(
-            request,
-            as: PathwayWebSocketTicket.self
-        )
-
         var components = URLComponents(url: socketBaseURL, resolvingAgainstBaseURL: false)
         if components?.path.isEmpty == true || components?.path == "/" {
             components?.path = "/ws"
         }
-        var queryItems = components?.queryItems ?? []
-        queryItems.removeAll { $0.name == "wsTicket" }
-        queryItems.append(URLQueryItem(name: "wsTicket", value: ticket.ticket))
-        components?.queryItems = queryItems
         guard let result = components?.url else { throw PathwayConnectError.invalidURL }
-        return (result, ticket.expiresAt.flatMap(pathwayDate(from:)))
+        return result
     }
 
     private var relayOrigin: URL {

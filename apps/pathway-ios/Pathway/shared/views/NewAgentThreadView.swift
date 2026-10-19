@@ -604,10 +604,15 @@ struct NewAgentThreadComposer: View {
 
             if model.isImportingCapture { ProgressView("Importing shared draft…").font(.caption) }
             if let statusMessage = statusMessage(model) {
-                Text(statusMessage)
-                    .font(.caption)
-                    .foregroundStyle(model.errorMessage == nil ? Color.secondary : Color.red)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack {
+                    Text(statusMessage)
+                        .foregroundStyle(model.errorMessage == nil ? Color.secondary : Color.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if case .failed = model.connectionState {
+                        Button("Try again") { Task { await model.retryConnection() } }
+                    }
+                }
+                .font(.caption)
             }
         }
         .padding(14)

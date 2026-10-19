@@ -6,8 +6,7 @@ enum PathwayEnvironmentHTTP {
         let signed = try await request("assets.createUrl", .object([
             "resource": .object(["_tag": .string(resourceKind), "threadId": .string(threadID), "path": .string(path)])
         ]))
-        let connection = try await connect.prepare(environment: environment)
-        return try signedAssetURL(signed, base: connection.httpBaseURL)
+        return try signedAssetURL(signed, base: try await connect.authorize(environment: environment).httpBaseURL)
     }
 
     static func signedAssetURL(_ response: JSONValue, base: URL) throws -> URL {
@@ -29,6 +28,7 @@ enum PathwayEnvironmentHTTP {
         }
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let response = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        if response.statusCode == 401 { await connect.invalidateAuthorization(environment: environment) }
         guard (200...299).contains(response.statusCode) else {
             let body = try? JSONDecoder().decode(JSONValue.self, from: data)
             throw PathwayThreadConversationError.message(body?.objectValue?["message"]?.stringValue

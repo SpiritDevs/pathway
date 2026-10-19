@@ -306,11 +306,11 @@ extension PathwayAgentThreadModel {
     func htmlRenderURL(_ render: PathwayHTMLRender) async throws -> URL {
         guard let connect else { throw PathwayThreadConversationError.message("Connect to the environment to view this page.") }
         let signed = try await request("assets.createUrl", payload: .object(["resource": render.assetResource]), reportsErrors: false)
-        return try PathwayEnvironmentHTTP.signedAssetURL(signed, base: try await connect.prepare(environment: environment).httpBaseURL)
+        return try PathwayEnvironmentHTTP.signedAssetURL(signed, base: try await connect.authorize(environment: environment).httpBaseURL)
     }
     private func resolveAssetURL(_ relative: String) async throws -> URL {
         guard let connect else { throw PathwayThreadConversationError.message("Connect to the environment to access files.") }
-        let base = try await connect.prepare(environment: environment).httpBaseURL
+        let base = try await connect.authorize(environment: environment).httpBaseURL
         guard let url = URL(string: relative, relativeTo: base)?.absoluteURL,
               url.scheme == base.scheme, url.host == base.host, url.port == base.port else {
             throw PathwayThreadConversationError.message("The environment returned an invalid file URL.")

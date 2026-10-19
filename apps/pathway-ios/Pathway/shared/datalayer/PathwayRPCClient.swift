@@ -103,7 +103,7 @@ actor PathwayRPCClient {
     private var connectionID: UUID?
     private var loopTask: Task<Void, Never>?
     private var keepaliveTask: Task<Void, Never>?
-    private var awaitingKeepaliveResponse = false
+    private var heartbeat = PathwayRPCHeartbeat()
     private var desired = false
     private var nextRequestID = 1
     private var pending: [Int: PathwayRPCPendingRequest] = [:]
@@ -225,7 +225,7 @@ actor PathwayRPCClient {
         loopTask = nil
         keepaliveTask?.cancel()
         keepaliveTask = nil
-        awaitingKeepaliveResponse = false
+        heartbeat = PathwayRPCHeartbeat()
         socket?.cancel(with: .goingAway, reason: nil)
         socket = nil
         socketClosed()
@@ -255,11 +255,13 @@ actor PathwayRPCClient {
 
     private func connectionLoop() async {
         var failureCount = 0
+        var rejectedAuthorizations = 0
         while desired, !Task.isCancelled {
             let id = UUID()
             do {
                 let url = try await endpointProvider()
                 guard desired, !Task.isCancelled else { return }
+                rejectedAuthorizations = 0
                 let task = session.webSocketTask(with: url)
                 task.resume()
                 install(task, id: id)
@@ -268,9 +270,18 @@ actor PathwayRPCClient {
             } catch is CancellationError {
                 break
             } catch {
-                if !reconnectsSubscriptions {
-                    subscriptionContinuation?.finish(throwing: error)
-                    stop()
+                // Unchanged input cannot repair a permanent rejection; an explicit retry restarts the client.
+                // A rejected credential gets one fresh authorization before it counts as permanent.
+                var permanent = !reconnectsSubscriptions
+                switch PathwayConnectFailure(error) {
+                case .permanent: permanent = true
+                case .unauthorized:
+                    rejectedAuthorizations += 1
+                    if rejectedAuthorizations > 1 { permanent = true }
+                case .transient: break
+                }
+                if permanent {
+                    fail(with: error)
                     break
                 }
                 disconnect(id: id)
@@ -288,7 +299,7 @@ actor PathwayRPCClient {
         socketClosed()
         socket = task
         connectionID = id
-        awaitingKeepaliveResponse = false
+        heartbeat = PathwayRPCHeartbeat()
         keepaliveTask?.cancel()
         keepaliveTask = Task { [weak self] in
             await self?.keepaliveLoop(connectionID: id)
@@ -325,7 +336,7 @@ actor PathwayRPCClient {
     private func handle(_ data: Data, connectionID: UUID) async throws {
         guard self.connectionID == connectionID else { return }
         let response = try JSONDecoder().decode(PathwayRPCResponse.self, from: data)
-        awaitingKeepaliveResponse = false
+        heartbeat.received()
         switch response.envelopeTag {
         case "Pong":
             return
@@ -392,7 +403,7 @@ actor PathwayRPCClient {
         connectionID = nil
         keepaliveTask?.cancel()
         keepaliveTask = nil
-        awaitingKeepaliveResponse = false
+        heartbeat = PathwayRPCHeartbeat()
         subscriptionRequestID = nil
         subscriptionGate.reset()
         yieldTransportState("disconnected")
@@ -461,22 +472,33 @@ actor PathwayRPCClient {
     private func keepaliveLoop(connectionID: UUID) async {
         while desired, self.connectionID == connectionID, !Task.isCancelled {
             do {
-                try await Task.sleep(for: .seconds(5))
+                try await Task.sleep(for: PathwayRPCHeartbeat.interval)
             } catch {
                 return
             }
             guard desired, self.connectionID == connectionID else { return }
-            if awaitingKeepaliveResponse {
+            if heartbeat.tick(now: .now) == .expire {
                 disconnect(id: connectionID)
                 return
             }
-            awaitingKeepaliveResponse = true
             do {
                 try await sendControl("Ping", requestID: nil)
             } catch {
                 return
             }
         }
+    }
+
+    /// Ends the client with `error` instead of `disconnected`, so its owner can show why.
+    private func fail(with error: Error) {
+        subscriptionContinuation?.finish(throwing: error)
+        subscriptionContinuation = nil
+        for request in pending.values {
+            request.deadlineTask?.cancel()
+            request.resume(.failure(error))
+        }
+        pending.removeAll()
+        stop()
     }
 
     private func removeSubscription(id: UUID) async {
@@ -579,6 +601,35 @@ private extension JSONEncoder {
 }
 
 // swiftlint:enable file_length
+
+/// Pings every interval, but only a Ping left unanswered by any frame for the whole grace period
+/// closes the socket. One slow response from a busy environment is not a lost connection.
+struct PathwayRPCHeartbeat {
+    enum Action: Equatable { case ping, expire }
+
+    static let interval: Duration = .seconds(5)
+    static let grace: Duration = .seconds(20)
+
+    private var unansweredSince: ContinuousClock.Instant?
+    private var lastTick: ContinuousClock.Instant?
+
+    /// Any decoded frame on the current socket proves it is alive.
+    mutating func received() {
+        unansweredSince = nil
+    }
+
+    mutating func tick(now: ContinuousClock.Instant) -> Action {
+        // A tick far behind schedule means the process was suspended. Probe again rather than
+        // charge the suspension to the socket.
+        if let lastTick, now - lastTick > Self.interval * 2 { unansweredSince = nil }
+        lastTick = now
+        guard let unansweredSince else {
+            self.unansweredSince = now
+            return .ping
+        }
+        return now - unansweredSince >= Self.grace ? .expire : .ping
+    }
+}
 
 /// An issue RPC can run only after this socket has acknowledged the current subscription.
 struct PathwayRPCSubscriptionGate {
