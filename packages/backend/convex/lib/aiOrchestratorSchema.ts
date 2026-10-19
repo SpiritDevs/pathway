@@ -1,0 +1,426 @@
+/** Cloud-owned coordinator state; private data stays out of company change feeds. */
+import { defineTable } from "convex/server";
+import { v } from "convex/values";
+import { mailSelection } from "./mailSchema.ts";
+
+export const orchestratorAttachment = v.object({
+  id: v.string(),
+  type: v.union(v.literal("image"), v.literal("file")),
+  name: v.string(),
+  mimeType: v.string(),
+  sizeBytes: v.number(),
+});
+
+const traitOverrides = {
+  warmth: v.optional(v.number()),
+  playfulness: v.optional(v.number()),
+  energy: v.optional(v.number()),
+  curiosity: v.optional(v.number()),
+  expressiveness: v.optional(v.number()),
+};
+const avatar = v.object({ shape: v.string(), eyes: v.string() });
+const personality = v.object({
+  shared: v.object({
+    warmth: v.number(),
+    playfulness: v.number(),
+    energy: v.number(),
+    curiosity: v.number(),
+    expressiveness: v.number(),
+  }),
+  replies: v.optional(v.object(traitOverrides)),
+  avatar: v.optional(v.object(traitOverrides)),
+});
+export const orchestratorConfig = {
+  avatar: v.optional(avatar),
+  personality: v.optional(personality),
+  name: v.string(),
+  color: v.string(),
+  persona: v.string(),
+  instructions: v.string(),
+  responsibilities: v.string(),
+  reviewIntervalMinutes: v.optional(v.number()),
+  kind: v.union(v.literal("personal"), v.literal("project"), v.literal("custom")),
+  companyId: v.union(v.string(), v.null()),
+  projectId: v.union(v.string(), v.null()),
+  shared: v.boolean(),
+  models: v.array(
+    v.object({ id: v.string(), environmentId: v.string(), selection: mailSelection }),
+  ),
+  workerModels: v.optional(
+    v.array(
+      v.object({
+        id: v.string(),
+        environmentId: v.string(),
+        selection: mailSelection,
+        name: v.string(),
+        guidance: v.string(),
+        cost: v.union(
+          v.literal("unknown"),
+          v.literal("lower"),
+          v.literal("standard"),
+          v.literal("higher"),
+        ),
+      }),
+    ),
+  ),
+  environmentIds: v.array(v.string()),
+  allEnvironments: v.boolean(),
+  capabilities: v.array(v.string()),
+  directorSubjects: v.array(v.string()),
+  managerSubjects: v.array(v.string()),
+  maxAssignments: v.number(),
+  proactive: v.boolean(),
+  rememberAutomatically: v.boolean(),
+  notifyUrgent: v.boolean(),
+  batchCompletions: v.boolean(),
+};
+export const orchestratorMemoryScope = v.union(
+  v.literal("orchestrator"),
+  v.literal("personal"),
+  v.literal("project"),
+);
+export const aiOrchestratorTables = {
+  aiOrchestratorWorkerMessages: defineTable({
+    id: v.string(),
+    workId: v.string(),
+    threadId: v.string(),
+    revision: v.number(),
+    position: v.number(),
+    text: v.string(),
+    mode: v.union(v.literal("queue"), v.literal("steer"), v.literal("answer")),
+    questionId: v.optional(v.string()),
+    answers: v.optional(v.record(v.string(), v.string())),
+    state: v.union(
+      v.literal("pending"),
+      v.literal("accepted"),
+      v.literal("delivered"),
+      v.literal("failed"),
+      v.literal("removed"),
+    ),
+    detail: v.string(),
+    fingerprint: v.string(),
+    chatMessageId: v.optional(v.string()),
+    attachments: v.optional(v.array(orchestratorAttachment)),
+  })
+    .index("by_work", ["workId"])
+    .index("by_work_id", ["workId", "id"])
+    .index("by_chat_message", ["chatMessageId"])
+    .index("by_work_state", ["workId", "state"]),
+  aiOrchestratorWorkerQuestions: defineTable({
+    id: v.string(),
+    workId: v.string(),
+    threadId: v.string(),
+    requestId: v.string(),
+    questions: v.array(
+      v.object({ id: v.string(), question: v.string(), isSecret: v.optional(v.boolean()) }),
+    ),
+    humanAnswers: v.optional(v.record(v.string(), v.string())),
+    state: v.union(
+      v.literal("open"),
+      v.literal("escalated"),
+      v.literal("answering"),
+      v.literal("resolved"),
+      v.literal("unavailable"),
+    ),
+  })
+    .index("by_work", ["workId"])
+    .index("by_work_id", ["workId", "id"])
+    .index("by_request", ["threadId", "requestId"]),
+
+  aiOrchestratorSignalDeliveries: defineTable({
+    id: v.string(),
+    createdAt: v.number(),
+  }).index("by_domain_id", ["id"]),
+  aiOrchestratorPush: defineTable({
+    chatId: v.string(),
+    subject: v.string(),
+    sequence: v.number(),
+    generation: v.number(),
+    dueAt: v.number(),
+  })
+    .index("by_chat_subject", ["chatId", "subject"])
+    .index("by_due", ["dueAt"]),
+  aiOrchestrators: defineTable({
+    ...orchestratorConfig,
+    id: v.string(),
+    ownerSubject: v.string(),
+    status: v.union(
+      v.literal("active"),
+      v.literal("paused"),
+      v.literal("archived"),
+      v.literal("deleted"),
+    ),
+    revision: v.number(),
+    nextReviewAt: v.optional(v.number()),
+    workStoppedBefore: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_domain_id", ["id"])
+    .index("by_review_due", ["nextReviewAt"])
+    .index("by_owner", ["ownerSubject"])
+    .index("by_owner_kind", ["ownerSubject", "kind"])
+    .index("by_company_project", ["companyId", "projectId"])
+    .index("by_company", ["companyId", "shared"]),
+  aiOrchestratorChats: defineTable({
+    id: v.string(),
+    title: v.string(),
+    kind: v.union(v.literal("dm"), v.literal("group")),
+    ownerSubject: v.string(),
+    orchestratorIds: v.array(v.string()),
+    orchestratorHistory: v.optional(
+      v.array(v.object({ orchestratorId: v.string(), fromSequence: v.number() })),
+    ),
+    revision: v.optional(v.number()),
+    leadId: v.string(),
+    participantSubjects: v.array(v.string()),
+    companyIds: v.array(v.string()),
+    archived: v.boolean(),
+    lifecycle: v.optional(
+      v.union(
+        v.literal("archiving"),
+        v.literal("archived"),
+        v.literal("deleting"),
+        v.literal("deleted"),
+      ),
+    ),
+    lifecycleStartedAt: v.optional(v.number()),
+    lifecycleDetail: v.optional(v.string()),
+    lastSequence: v.number(),
+    lastMessage: v.string(),
+    lastVisibleSequence: v.optional(v.number()),
+    lastVisibleAt: v.optional(v.number()),
+    notification: v.optional(
+      v.object({
+        coordination: v.optional(v.boolean()),
+        senderId: v.optional(v.string()),
+        mentions: v.optional(v.array(v.object({ kind: v.literal("user"), id: v.string() }))),
+        sequence: v.number(),
+        senderName: v.string(),
+        text: v.string(),
+        urgent: v.boolean(),
+        enabled: v.boolean(),
+        createdAt: v.number(),
+      }),
+    ),
+    summary: v.string(),
+    summaryThroughSequence: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_domain_id", ["id"])
+    .index("by_owner", ["ownerSubject"])
+    .index("by_direct_contact", ["leadId", "ownerSubject", "kind", "archived"]),
+  aiOrchestratorChatMembers: defineTable({
+    chatId: v.string(),
+    subject: v.string(),
+    fromSequence: v.number(),
+    readSequence: v.number(),
+    attentionReady: v.optional(v.boolean()),
+    attentionCursor: v.optional(v.number()),
+    attentionPreview: v.optional(
+      v.object({ sequence: v.number(), createdAt: v.number(), text: v.string() }),
+    ),
+    pinned: v.optional(v.boolean()),
+    muted: v.optional(v.boolean()),
+    markedUnread: v.optional(v.boolean()),
+    updatedAt: v.number(),
+  })
+    .index("by_attention_ready", ["attentionReady"])
+    .index("by_subject", ["subject", "updatedAt"])
+    .index("by_chat_subject", ["chatId", "subject"]),
+  // Only attention-worthy messages have a row; bodies never enter the unread-count read set.
+  aiOrchestratorAttention: defineTable({
+    memberId: v.id("aiOrchestratorChatMembers"),
+    sequence: v.number(),
+  }).index("by_member_sequence", ["memberId", "sequence"]),
+  aiOrchestratorAttachments: defineTable({
+    id: v.string(),
+    chatId: v.string(),
+    ownerSubject: v.string(),
+    attachment: orchestratorAttachment,
+    storageId: v.optional(v.id("_storage")),
+    messageId: v.optional(v.string()),
+    sequence: v.optional(v.number()),
+    expiresAt: v.number(),
+  })
+    .index("by_domain_id", ["id"])
+    .index("by_storage", ["storageId"])
+    .index("by_expiry", ["expiresAt"]),
+  aiOrchestratorMessages: defineTable({
+    worker: v.optional(
+      v.object({
+        workId: v.string(),
+        questionId: v.optional(v.string()),
+        fieldId: v.optional(v.string()),
+        isSecret: v.optional(v.boolean()),
+      }),
+    ),
+    attachments: v.optional(v.array(orchestratorAttachment)),
+    expression: v.optional(v.string()),
+    id: v.string(),
+    chatId: v.string(),
+    sequence: v.number(),
+    senderKind: v.union(v.literal("user"), v.literal("orchestrator"), v.literal("system")),
+    senderId: v.string(),
+    senderName: v.string(),
+    text: v.string(),
+    status: v.union(
+      v.literal("queued"),
+      v.literal("working"),
+      v.literal("sent"),
+      v.literal("failed"),
+      v.literal("cancelled"),
+    ),
+    seenAt: v.optional(v.number()),
+    seenBy: v.optional(v.array(v.string())),
+    coordination: v.optional(v.boolean()),
+    mentions: v.optional(v.array(v.object({ kind: v.literal("user"), id: v.string() }))),
+    replyToId: v.union(v.string(), v.null()),
+    createdAt: v.number(),
+  })
+    .index("by_domain_id", ["id"])
+    .index("by_chat_sequence", ["chatId", "sequence"]),
+  aiOrchestratorMemory: defineTable({
+    id: v.string(),
+    orchestratorId: v.string(),
+    ownerSubject: v.string(),
+    text: v.string(),
+    scope: orchestratorMemoryScope,
+    source: v.string(),
+    explicit: v.boolean(),
+    forgotten: v.boolean(),
+    sourceChatId: v.optional(v.string()),
+    sourceSequence: v.optional(v.number()),
+    sharedCompanyId: v.optional(v.string()),
+    sharedProjectId: v.optional(v.string()),
+    updatedAt: v.number(),
+  })
+    .index("by_domain_id", ["id"])
+    .index("by_orchestrator", ["orchestratorId"])
+    .index("by_orchestrator_forgotten", ["orchestratorId", "forgotten", "updatedAt"])
+    .index("by_source_forgotten", ["sourceChatId", "forgotten", "sourceSequence"])
+    .index("by_owner_scope", ["ownerSubject", "scope"])
+    .index("by_owner_scope_forgotten", ["ownerSubject", "scope", "forgotten", "updatedAt"]),
+  aiOrchestratorJobs: defineTable({
+    stopRequested: v.optional(v.boolean()),
+    stopConfirmed: v.optional(v.boolean()),
+    routingCandidateIds: v.optional(v.array(v.string())),
+    routingTopic: v.optional(v.string()),
+    inspectionIds: v.optional(v.array(v.string())),
+    selection: v.optional(mailSelection),
+    id: v.string(),
+    orchestratorId: v.string(),
+    chatId: v.string(),
+    messageId: v.string(),
+    companyId: v.string(),
+    status: v.union(
+      v.literal("queued"),
+      v.literal("running"),
+      v.literal("completed"),
+      v.literal("failed"),
+      v.literal("cancelled"),
+    ),
+    environmentId: v.union(v.string(), v.null()),
+    generation: v.number(),
+    leaseExpiresAt: v.number(),
+    modelIndex: v.number(),
+    configRevision: v.optional(v.number()),
+    chatRevision: v.optional(v.number()),
+    contextResults: v.optional(v.string()),
+    chainDepth: v.optional(v.number()),
+    attempts: v.optional(v.number()),
+    notBefore: v.optional(v.number()),
+    allowanceHold: v.optional(v.string()),
+    mailMessageId: v.optional(v.string()),
+    threadSignalId: v.optional(v.string()),
+    issueSignalId: v.optional(v.string()),
+    environmentSignalId: v.optional(v.string()),
+    responsibilityReview: v.optional(v.boolean()),
+    failedEnvironmentIds: v.optional(v.array(v.string())),
+    contextThroughSequence: v.optional(v.number()),
+    error: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_domain_id", ["id"])
+    .index("by_company_status", ["companyId", "status", "createdAt"])
+    .index("by_company_ready", ["companyId", "status", "notBefore"])
+    .index("by_orchestrator_status", ["orchestratorId", "status"])
+    .index("by_orchestrator_chat_status", ["orchestratorId", "chatId", "status", "createdAt"])
+    .index("by_chat_status", ["chatId", "status"])
+    .index("by_message", ["messageId"]),
+  aiOrchestratorWork: defineTable({
+    continuation: v.optional(v.boolean()),
+    id: v.string(),
+    chatId: v.string(),
+    orchestratorId: v.string(),
+    title: v.string(),
+    environmentId: v.string(),
+    projectId: v.union(v.string(), v.null()),
+    threadId: v.union(v.string(), v.null()),
+    status: v.union(
+      v.literal("queued"),
+      v.literal("working"),
+      v.literal("completed"),
+      v.literal("failed"),
+      v.literal("cancelled"),
+      v.literal("unknown"),
+    ),
+    detail: v.string(),
+    prompt: v.string(),
+    commandId: v.optional(v.string()),
+    selection: v.optional(v.union(mailSelection, v.null())),
+    selectionReason: v.optional(v.string()),
+    selectionExplicit: v.optional(v.boolean()),
+    companyId: v.optional(v.string()),
+    completionNotified: v.optional(v.boolean()),
+    sourceSequence: v.optional(v.number()),
+    readRequested: v.optional(v.boolean()),
+    readRequestId: v.optional(v.string()),
+    readResult: v.optional(v.string()),
+    resultRequired: v.optional(v.boolean()),
+    resultCollected: v.optional(v.boolean()),
+    resultText: v.optional(v.string()),
+    resultRunId: v.optional(v.string()),
+    controlsPending: v.optional(v.boolean()),
+    controlWorkId: v.optional(v.string()),
+    controlMessageId: v.optional(v.string()),
+    resultMessageId: v.optional(v.string()),
+    stopRequested: v.optional(v.boolean()),
+    stopConfirmed: v.optional(v.boolean()),
+    interruptCommandId: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_domain_id", ["id"])
+    .index("by_company_environment_status", ["companyId", "environmentId", "status"])
+    .index("by_company_environment_updated", ["companyId", "environmentId", "updatedAt"])
+    .index("by_pending_controls", ["companyId", "environmentId", "controlsPending", "threadId"])
+    .index("by_chat", ["chatId"])
+    .index("by_command", ["commandId"])
+    .index("by_control_work", ["controlWorkId", "createdAt"])
+    .index("by_control_work_status", ["controlWorkId", "status"])
+    .index("by_orchestrator_controls", ["orchestratorId", "controlsPending"])
+    .index("by_result_run", ["companyId", "environmentId", "threadId", "resultRunId"])
+    .index("by_thread", ["companyId", "environmentId", "threadId"])
+    .index("by_company_status", ["companyId", "status"])
+    .index("by_environment_read", ["companyId", "environmentId", "readRequested"])
+    .index("by_environment_result", ["companyId", "environmentId", "resultCollected", "status"])
+    .index("by_company_notification", ["companyId", "completionNotified", "status"])
+    .index("by_orchestrator_notification", ["orchestratorId", "completionNotified", "status"])
+    .index("by_orchestrator_status", ["orchestratorId", "status"]),
+  aiOrchestratorInspections: defineTable({
+    id: v.string(),
+    jobId: v.string(),
+    companyId: v.string(),
+    environmentId: v.string(),
+    projectId: v.union(v.string(), v.null()),
+    request: v.any(),
+    status: v.union(v.literal("pending"), v.literal("completed")),
+    text: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_domain_id", ["id"])
+    .index("by_environment_status", ["companyId", "environmentId", "status", "createdAt"]),
+};

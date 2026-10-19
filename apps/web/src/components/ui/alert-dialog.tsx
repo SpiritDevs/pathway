@@ -3,7 +3,11 @@
 import { AlertDialog as AlertDialogPrimitive } from "@base-ui/react/alert-dialog";
 
 import { cn } from "~/lib/utils";
-import { dialogFooterButtonClassName } from "~/components/ui/dialog";
+import {
+  DIALOG_BACKDROP_CLASS,
+  DIALOG_MOBILE_SHEET_CLASS,
+  DIALOG_POPUP_CLASS,
+} from "~/components/ui/dialog-styles";
 
 const AlertDialogCreateHandle = AlertDialogPrimitive.createHandle;
 
@@ -18,10 +22,8 @@ function AlertDialogTrigger(props: AlertDialogPrimitive.Trigger.Props) {
 function AlertDialogBackdrop({ className, ...props }: AlertDialogPrimitive.Backdrop.Props) {
   return (
     <AlertDialogPrimitive.Backdrop
-      className={cn(
-        "fixed inset-0 z-50 bg-black/60 transition-all duration-200 ease-out data-ending-style:opacity-0 data-starting-style:opacity-0",
-        className,
-      )}
+      forceRender
+      className={cn(DIALOG_BACKDROP_CLASS, className)}
       data-slot="alert-dialog-backdrop"
       {...props}
     />
@@ -32,7 +34,7 @@ function AlertDialogViewport({ className, ...props }: AlertDialogPrimitive.Viewp
   return (
     <AlertDialogPrimitive.Viewport
       className={cn(
-        "fixed inset-0 z-50 grid grid-rows-[1fr_auto_1fr] justify-items-center p-4",
+        "fixed inset-0 z-[130] grid grid-rows-[1fr_auto_1fr] justify-items-center p-4",
         className,
       )}
       data-slot="alert-dialog-viewport"
@@ -41,18 +43,13 @@ function AlertDialogViewport({ className, ...props }: AlertDialogPrimitive.Viewp
   );
 }
 
-// Same opaque, centered surface as `dialogPopupClassName` in dialog.tsx — keep in sync.
-const alertDialogPopupClassName =
-  "-translate-y-[calc(1.25rem*var(--nested-dialogs))] relative row-start-2 flex max-h-full min-h-0 w-full min-w-0 max-w-lg scale-[calc(1-0.1*var(--nested-dialogs))] flex-col rounded-3xl border border-[color:var(--color-border-light)] bg-popover text-[var(--color-text-foreground)] shadow-[0_16px_50px_-12px_rgba(0,0,0,0.34)] dark:shadow-[0_16px_50px_-12px_rgba(0,0,0,0.7)] opacity-[calc(1-0.1*var(--nested-dialogs))] transition-[scale,opacity,translate] duration-200 ease-in-out will-change-transform data-nested:data-ending-style:translate-y-8 data-nested:data-starting-style:translate-y-8 data-nested-dialog-open:origin-top data-ending-style:scale-98 data-starting-style:scale-98 data-ending-style:opacity-0 data-starting-style:opacity-0";
-
 function AlertDialogPopup({
   className,
-  bottomStickOnMobile: bottomStickOnMobileProp,
+  bottomStickOnMobile = true,
   ...props
 }: AlertDialogPrimitive.Popup.Props & {
   bottomStickOnMobile?: boolean;
 }) {
-  const bottomStickOnMobile = bottomStickOnMobileProp ?? true;
   return (
     <AlertDialogPortal>
       <AlertDialogBackdrop />
@@ -61,9 +58,9 @@ function AlertDialogPopup({
       >
         <AlertDialogPrimitive.Popup
           className={cn(
-            alertDialogPopupClassName,
-            bottomStickOnMobile &&
-              "max-sm:max-w-none max-sm:rounded-none max-sm:border-x-0 max-sm:border-t max-sm:border-b-0 max-sm:opacity-[calc(1-min(var(--nested-dialogs),1))] max-sm:data-ending-style:translate-y-4 max-sm:data-starting-style:translate-y-4",
+            DIALOG_POPUP_CLASS,
+            "row-start-2 max-h-full max-w-lg text-popover-foreground",
+            bottomStickOnMobile && DIALOG_MOBILE_SHEET_CLASS,
             className,
           )}
           data-slot="alert-dialog-popup"
@@ -77,7 +74,7 @@ function AlertDialogPopup({
 function AlertDialogHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
-      className={cn("flex flex-col gap-1.5 px-4 pt-4 pb-2 text-center sm:text-left", className)}
+      className={cn("flex flex-col gap-2 p-6 text-center max-sm:pb-4 sm:text-left", className)}
       data-slot="alert-dialog-header"
       {...props}
     />
@@ -86,19 +83,17 @@ function AlertDialogHeader({ className, ...props }: React.ComponentProps<"div">)
 
 function AlertDialogFooter({
   className,
-  variant: variantProp,
+  variant = "default",
   ...props
 }: React.ComponentProps<"div"> & {
   variant?: "default" | "bare";
 }) {
-  const variant = variantProp ?? "default";
   return (
     <div
       className={cn(
-        "flex flex-col-reverse gap-2 px-4 sm:flex-row sm:justify-end",
-        dialogFooterButtonClassName,
-        variant === "default" && "py-3",
-        variant === "bare" && "pb-4 pt-3",
+        "flex flex-col-reverse gap-2 px-6 sm:flex-row sm:justify-end sm:rounded-b-[calc(var(--radius-2xl)-1px)]",
+        variant === "default" && "border-t bg-muted/72 py-4",
+        variant === "bare" && "pb-6",
         className,
       )}
       data-slot="alert-dialog-footer"
@@ -110,7 +105,7 @@ function AlertDialogFooter({
 function AlertDialogTitle({ className, ...props }: AlertDialogPrimitive.Title.Props) {
   return (
     <AlertDialogPrimitive.Title
-      className={cn("font-heading font-semibold text-lg leading-tight", className)}
+      className={cn("font-heading font-semibold text-xl leading-none", className)}
       data-slot="alert-dialog-title"
       {...props}
     />
@@ -120,7 +115,7 @@ function AlertDialogTitle({ className, ...props }: AlertDialogPrimitive.Title.Pr
 function AlertDialogDescription({ className, ...props }: AlertDialogPrimitive.Description.Props) {
   return (
     <AlertDialogPrimitive.Description
-      className={cn("text-muted-foreground text-ui leading-snug", className)}
+      className={cn("text-muted-foreground text-sm", className)}
       data-slot="alert-dialog-description"
       {...props}
     />
@@ -136,8 +131,10 @@ export {
   AlertDialog,
   AlertDialogPortal,
   AlertDialogBackdrop,
+  AlertDialogBackdrop as AlertDialogOverlay,
   AlertDialogTrigger,
   AlertDialogPopup,
+  AlertDialogPopup as AlertDialogContent,
   AlertDialogHeader,
   AlertDialogFooter,
   AlertDialogTitle,

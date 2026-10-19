@@ -1,22 +1,79 @@
-// FILE: ChatHeader.test.ts
-// Purpose: Covers chat header presentation helpers that choose thread identity chrome.
-// Layer: Component unit tests
-// Depends on: ChatHeader pure helpers and Vitest assertions.
+import { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
+import { describe, expect, it } from "vite-plus/test";
 
-import { describe, expect, it } from "vitest";
+import { resolveThreadBreadcrumbAncestors } from "./ChatHeader";
 
-import { resolveChatHeaderThreadIconKind } from "./ChatHeader";
+const environmentId = EnvironmentId.make("environment-local");
 
-describe("resolveChatHeaderThreadIconKind", () => {
-  it("uses the terminal icon for terminal-first threads", () => {
-    expect(resolveChatHeaderThreadIconKind("terminal", "New terminal")).toBe("terminal");
+function thread(input: {
+  readonly id: string;
+  readonly title: string;
+  readonly parentId?: string | null;
+  readonly forkParentId?: string;
+  readonly environment?: string;
+}) {
+  return {
+    id: ThreadId.make(input.id),
+    title: input.title,
+    environmentId: EnvironmentId.make(input.environment ?? environmentId),
+    forkedFrom:
+      input.forkParentId === undefined
+        ? null
+        : { type: "run", threadId: ThreadId.make(input.forkParentId) },
+    lineage: {
+      parentThreadId:
+        input.parentId === undefined || input.parentId === null
+          ? null
+          : ThreadId.make(input.parentId),
+    },
+  };
+}
+
+describe("thread header breadcrumb ancestry", () => {
+  it("orders every available ancestor from the root to the immediate parent", () => {
+    const root = thread({ id: "root", title: "Root" });
+    const child = thread({ id: "child", title: "Child", parentId: "root" });
+    const grandchild = thread({ id: "grandchild", title: "Grandchild", parentId: "child" });
+
+    expect(resolveThreadBreadcrumbAncestors(grandchild, [child, grandchild, root])).toEqual([
+      { id: root.id, title: "Root" },
+      { id: child.id, title: "Child" },
+    ]);
   });
 
-  it("keeps provider branding for chat-first threads", () => {
-    expect(resolveChatHeaderThreadIconKind("chat", "Fix auth flow")).toBe("provider");
+  it("stops safely at missing parents and lineage cycles", () => {
+    const child = thread({ id: "child", title: "Child", parentId: "missing" });
+    expect(resolveThreadBreadcrumbAncestors(child, [child])).toEqual([]);
+
+    const first = thread({ id: "first", title: "First", parentId: "second" });
+    const second = thread({ id: "second", title: "Second", parentId: "first" });
+    expect(resolveThreadBreadcrumbAncestors(first, [first, second])).toEqual([
+      { id: second.id, title: "Second" },
+    ]);
   });
 
-  it("hides provider branding for untouched new chat threads", () => {
-    expect(resolveChatHeaderThreadIconKind("chat", "New thread")).toBe("none");
+  it("uses a fork's source run when it is more specific than lineage metadata", () => {
+    const lineageParent = thread({ id: "lineage-parent", title: "Lineage parent" });
+    const forkParent = thread({ id: "fork-parent", title: "Fork parent" });
+    const child = thread({
+      id: "child",
+      title: "Child",
+      parentId: "lineage-parent",
+      forkParentId: "fork-parent",
+    });
+
+    expect(resolveThreadBreadcrumbAncestors(child, [lineageParent, forkParent, child])).toEqual([
+      { id: forkParent.id, title: "Fork parent" },
+    ]);
+  });
+
+  it("does not cross environment boundaries when thread ids collide", () => {
+    const root = thread({ id: "root", title: "Local root" });
+    const remoteRoot = thread({ id: "root", title: "Remote root", environment: "remote" });
+    const child = thread({ id: "child", title: "Child", parentId: "root" });
+
+    expect(resolveThreadBreadcrumbAncestors(child, [remoteRoot, root, child])).toEqual([
+      { id: root.id, title: "Local root" },
+    ]);
   });
 });

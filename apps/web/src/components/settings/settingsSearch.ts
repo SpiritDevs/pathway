@@ -1,0 +1,885 @@
+export type SettingsPath =
+  | "/settings/orchestrators-overview"
+  | "/settings/orchestrators-instructions"
+  | "/settings/orchestrators-models"
+  | "/settings/orchestrators-environments"
+  | "/settings/orchestrators-responsibilities"
+  | "/settings/orchestrators-permissions"
+  | "/settings/orchestrators-memory"
+  | "/settings/orchestrators-notifications"
+  | "/settings/orchestrators-work-limits"
+  | "/settings/notifications"
+  | "/settings/general"
+  | "/settings/appearance"
+  | "/settings/keybindings"
+  | "/settings/snap-shot"
+  | "/settings/computer"
+  | "/settings/dictation"
+  | "/settings/dictation/models"
+  | "/settings/dictation/history"
+  | "/settings/dictation/dictionary"
+  | "/settings/dictation/settings"
+  | "/settings/projects"
+  | "/settings/members-teams"
+  | "/settings/company-members"
+  | "/settings/company-teams"
+  | "/settings/company-roles"
+  | "/settings/calendars"
+  | "/settings/environments"
+  | "/settings/integrations"
+  | "/settings/providers"
+  | "/settings/scheduled-tasks"
+  | "/settings/source-control"
+  | "/settings/time-tracker"
+  | "/settings/usage"
+  | "/settings/issues-statuses"
+  | "/settings/issues-labels"
+  | "/settings/issues-milestones"
+  | "/settings/issues-import"
+  | "/settings/issues-enrichment"
+  | "/settings/email"
+  | "/settings/archived"
+  | "/settings/diagnostics";
+
+export type SettingsSearchPath = SettingsPath | "/settings/appearance/action-palette";
+
+export type SettingsWorkspaceKind = "profile" | "personal" | "organization";
+
+export interface SettingsSearchItem {
+  readonly id: string;
+  readonly title: string;
+  readonly to: SettingsSearchPath;
+  readonly targetId?: string;
+  readonly searchTerms?: ReadonlyArray<string>;
+}
+
+export function settingsSectionPathForSearchPath(path: SettingsSearchPath): SettingsPath {
+  return path === "/settings/appearance/action-palette" ? "/settings/appearance" : path;
+}
+
+export function settingsSectionPathForLocation(pathname: string): SettingsPath | null {
+  const normalizedPathname = pathname.replace(/\/+$/, "") || "/";
+  return (
+    (Object.keys(SETTINGS_SECTION_LABELS) as ReadonlyArray<SettingsPath>).find(
+      (path) => normalizedPathname === path,
+    ) ??
+    (Object.keys(SETTINGS_SECTION_LABELS) as ReadonlyArray<SettingsPath>).find((path) =>
+      normalizedPathname.startsWith(`${path}/`),
+    ) ??
+    null
+  );
+}
+
+export function settingsPathIsVisibleForWorkspace(
+  path: SettingsSearchPath,
+  workspaceKind: SettingsWorkspaceKind,
+): boolean {
+  if (workspaceKind === "profile") {
+    return !COMPANY_SCOPED_SETTINGS_PATHS.has(settingsSectionPathForSearchPath(path));
+  }
+  return workspaceKind === "organization"
+    ? path !== "/settings/members-teams"
+    : !path.startsWith("/settings/company-");
+}
+
+export function settingsLocationIsVisibleForWorkspace(
+  pathname: string,
+  workspaceKind: SettingsWorkspaceKind,
+): boolean {
+  const section = settingsSectionPathForLocation(pathname);
+  return section === null || settingsPathIsVisibleForWorkspace(section, workspaceKind);
+}
+
+const COMPANY_SCOPED_SETTINGS_PATHS: ReadonlySet<SettingsPath> = new Set([
+  "/settings/members-teams",
+  "/settings/company-members",
+  "/settings/company-teams",
+  "/settings/company-roles",
+  "/settings/calendars",
+]);
+
+/**
+ * Section labels in sidebar order. The sidebar nav, the breadcrumb, and the
+ * search-result subtitles all render from this record, so each label exists
+ * once. `SETTINGS_NAV_GROUPS` slices the same paths into sidebar groups.
+ */
+export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
+  "/settings/general": "General",
+  "/settings/notifications": "Notifications",
+  "/settings/appearance": "Appearance",
+  "/settings/keybindings": "Keybindings",
+  "/settings/snap-shot": "SnapShots",
+  "/settings/computer": "Computer use",
+  "/settings/projects": "Projects",
+  "/settings/members-teams": "Members & Teams",
+  "/settings/company-members": "Members",
+  "/settings/company-teams": "Teams",
+  "/settings/company-roles": "Roles",
+  "/settings/calendars": "Calendars",
+  "/settings/environments": "Environments",
+  "/settings/dictation": "Set up dictation",
+  "/settings/dictation/models": "Models",
+  "/settings/dictation/history": "History",
+  "/settings/dictation/dictionary": "Dictionary",
+  "/settings/dictation/settings": "Settings",
+  "/settings/providers": "Providers",
+  "/settings/scheduled-tasks": "Schedule Tasks",
+  "/settings/source-control": "Source Control",
+  "/settings/time-tracker": "Time Tracker",
+  "/settings/usage": "Usage",
+  "/settings/orchestrators-overview": "Overview",
+  "/settings/orchestrators-instructions": "Instructions",
+  "/settings/orchestrators-models": "Models",
+  "/settings/orchestrators-environments": "Environments",
+  "/settings/orchestrators-responsibilities": "Responsibilities",
+  "/settings/orchestrators-permissions": "Permissions",
+  "/settings/orchestrators-memory": "Memory",
+  "/settings/orchestrators-notifications": "Notifications",
+  "/settings/orchestrators-work-limits": "Work limits",
+  "/settings/issues-statuses": "Statuses",
+  "/settings/issues-labels": "Labels",
+  "/settings/issues-milestones": "Milestones",
+  "/settings/issues-import": "Import",
+  "/settings/issues-enrichment": "Enrichment",
+  "/settings/integrations": "Integrations",
+  "/settings/email": "Email",
+  "/settings/archived": "Storage & cleanup",
+  "/settings/diagnostics": "Diagnostics",
+};
+
+export interface SettingsNavGroup {
+  readonly label: string;
+  readonly paths: ReadonlyArray<SettingsPath>;
+}
+
+/**
+ * Sidebar grouping. Every `SettingsPath` belongs to exactly one group (asserted
+ * in `settingsSearch.test.ts`); labels and icons stay keyed off the path.
+ */
+export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
+  {
+    label: "Workspace",
+    paths: [
+      "/settings/general",
+      "/settings/notifications",
+      "/settings/appearance",
+      "/settings/keybindings",
+      "/settings/snap-shot",
+      "/settings/computer",
+      "/settings/projects",
+    ],
+  },
+  {
+    label: "Account",
+    paths: [
+      "/settings/members-teams",
+      "/settings/company-members",
+      "/settings/company-teams",
+      "/settings/company-roles",
+      "/settings/calendars",
+      "/settings/environments",
+    ],
+  },
+  {
+    label: "Dictation",
+    paths: [
+      "/settings/dictation",
+      "/settings/dictation/models",
+      "/settings/dictation/history",
+      "/settings/dictation/dictionary",
+      "/settings/dictation/settings",
+    ],
+  },
+  {
+    label: "Agents",
+    paths: [
+      "/settings/providers",
+      "/settings/scheduled-tasks",
+      "/settings/source-control",
+      "/settings/time-tracker",
+      "/settings/usage",
+    ],
+  },
+  {
+    label: "Orchestrators",
+    paths: [
+      "/settings/orchestrators-overview",
+      "/settings/orchestrators-instructions",
+      "/settings/orchestrators-models",
+      "/settings/orchestrators-environments",
+      "/settings/orchestrators-responsibilities",
+      "/settings/orchestrators-permissions",
+      "/settings/orchestrators-memory",
+      "/settings/orchestrators-notifications",
+      "/settings/orchestrators-work-limits",
+    ],
+  },
+  {
+    label: "Tasks",
+    paths: [
+      "/settings/issues-statuses",
+      "/settings/issues-labels",
+      "/settings/issues-milestones",
+      "/settings/issues-import",
+      "/settings/issues-enrichment",
+      "/settings/integrations",
+    ],
+  },
+  // Email is its own group rather than a System page: direct mailbox integration (Gmail, Outlook)
+  // lands beside local capture later, and it is plainly not a System concern.
+  {
+    label: "Email",
+    paths: ["/settings/email"],
+  },
+  {
+    label: "System",
+    paths: ["/settings/archived", "/settings/diagnostics"],
+  },
+];
+
+/**
+ * Every searchable setting, in result order. This catalog is the single
+ * source of truth for anchor ids and visible titles: panels render both via
+ * `searchableSetting`, so a retitle (or, later, a translation pass) happens
+ * here once instead of separately in the panel and the index.
+ */
+export const SETTINGS_SEARCH_ITEMS = [
+  {
+    id: "orchestrators-overview",
+    title: "Orchestrator overview",
+    to: "/settings/orchestrators-overview",
+  },
+  {
+    id: "orchestrators-instructions",
+    title: "Orchestrator instructions",
+    to: "/settings/orchestrators-instructions",
+  },
+  {
+    id: "orchestrators-models",
+    title: "Orchestrator models",
+    to: "/settings/orchestrators-models",
+  },
+  {
+    id: "orchestrators-environments",
+    title: "Orchestrator environments",
+    to: "/settings/orchestrators-environments",
+  },
+  {
+    id: "orchestrators-responsibilities",
+    title: "Orchestrator responsibilities",
+    to: "/settings/orchestrators-responsibilities",
+  },
+  {
+    id: "orchestrators-permissions",
+    title: "Orchestrator permissions",
+    to: "/settings/orchestrators-permissions",
+  },
+  {
+    id: "orchestrators-memory",
+    title: "Orchestrator memory",
+    to: "/settings/orchestrators-memory",
+  },
+  {
+    id: "orchestrators-notifications",
+    title: "Orchestrator notifications",
+    to: "/settings/orchestrators-notifications",
+  },
+  {
+    id: "orchestrators-work-limits",
+    title: "Orchestrator work limits",
+    to: "/settings/orchestrators-work-limits",
+  },
+
+  {
+    id: "dictation-setup",
+    title: "Set up dictation",
+    to: "/settings/dictation",
+    targetId: "dictation-models",
+  },
+  {
+    id: "dictation-models",
+    title: "Dictation speech models",
+    to: "/settings/dictation/models",
+    searchTerms: ["whisper", "download", "transcription"],
+  },
+  {
+    id: "dictation-cleanup",
+    title: "Dictation text cleanup",
+    to: "/settings/dictation/settings",
+    searchTerms: ["qwen", "fillers", "speed", "clean up"],
+  },
+  { id: "dictation-history", title: "Dictation history", to: "/settings/dictation/history" },
+  {
+    id: "dictation-dictionary",
+    title: "Dictation dictionary",
+    to: "/settings/dictation/dictionary",
+    searchTerms: ["spelling", "aliases", "corrections"],
+  },
+  { id: "dictation-enabled", title: "Enable dictation", to: "/settings/dictation/settings" },
+  { id: "dictation-microphone", title: "Dictation microphone", to: "/settings/dictation/settings" },
+  { id: "dictation-shortcut", title: "Dictation shortcut", to: "/settings/dictation/settings" },
+  { id: "dictation-language", title: "Dictation language", to: "/settings/dictation/settings" },
+  {
+    id: "dictation-bar",
+    title: "Dictation bar and model memory",
+    to: "/settings/dictation/settings",
+  },
+  {
+    id: "dictation-retention",
+    title: "Dictation history retention",
+    to: "/settings/dictation/settings",
+  },
+  {
+    id: "dictation-permissions",
+    title: "Dictation permissions",
+    to: "/settings/dictation/settings",
+  },
+  { id: "thread-alerts", title: "Thread alerts", to: "/settings/notifications" },
+  {
+    id: "alert-project-overrides",
+    title: "Project alert overrides",
+    to: "/settings/notifications",
+  },
+  {
+    id: "alert-device",
+    title: "Notification sound, permissions, and test alert",
+    to: "/settings/notifications",
+  },
+  { id: "alert-quiet-hours", title: "Notification quiet hours", to: "/settings/notifications" },
+  {
+    id: "company-members",
+    title: "Members and invitations",
+    to: "/settings/company-members",
+  },
+  {
+    id: "company-teams",
+    title: "Teams",
+    to: "/settings/company-teams",
+  },
+  {
+    id: "company-roles",
+    title: "Roles and permissions",
+    to: "/settings/company-roles",
+  },
+  {
+    id: "company-upgrade",
+    title: "Upgrade to a company workspace",
+    to: "/settings/members-teams",
+  },
+  {
+    id: "company-sync",
+    title: "Workspace sync status",
+    to: "/settings/diagnostics",
+  },
+  {
+    id: "calendar-sharing",
+    title: "Calendar sharing and grants",
+    to: "/settings/calendars",
+  },
+  {
+    id: "company-environments",
+    title: "Workspace environments",
+    to: "/settings/environments",
+  },
+  {
+    id: "load-balancing",
+    title: "Load balancing and automatic machine selection",
+    to: "/settings/environments",
+  },
+  {
+    id: "color-scheme",
+    title: "Color scheme",
+    to: "/settings/appearance",
+    // The scheme tiles sit at the top of the Appearance section.
+    targetId: "appearance",
+  },
+  {
+    id: "theme",
+    title: "Themes",
+    to: "/settings/appearance",
+    // Theme cards live directly under the scheme tiles; the section is the
+    // stable scroll destination for both.
+    targetId: "appearance",
+  },
+  {
+    // Prefixed because the slider control already owns the `glass-opacity` id.
+    id: "setting-glass-opacity",
+    title: "Glass opacity",
+    to: "/settings/appearance",
+  },
+  {
+    id: "environment-identification",
+    title: "Environment identification",
+    to: "/settings/appearance",
+    // The setting is stage-dependent, so its parent section is the stable destination.
+    targetId: "appearance",
+  },
+  {
+    id: "action-palette",
+    title: "Action palette",
+    to: "/settings/appearance/action-palette",
+  },
+  {
+    id: "interface-font",
+    title: "Interface font",
+    to: "/settings/appearance",
+  },
+  {
+    id: "prompt-font",
+    title: "Prompt font",
+    to: "/settings/appearance",
+  },
+  {
+    id: "code-font",
+    title: "Code font",
+    to: "/settings/appearance",
+  },
+  {
+    id: "terminal-font",
+    title: "Terminal font",
+    to: "/settings/appearance",
+  },
+  {
+    id: "font-smoothing",
+    title: "Font smoothing",
+    to: "/settings/appearance",
+  },
+  {
+    id: "word-wrap",
+    title: "Word wrap",
+    to: "/settings/appearance",
+  },
+  {
+    id: "composer-context",
+    title: "Composer context",
+    to: "/settings/appearance",
+  },
+  {
+    id: "browser-passwords",
+    title: "Passwords and saved website logins",
+    to: "/settings/general",
+    targetId: "browser-passwords",
+  },
+  {
+    id: "project-grouping",
+    title: "Project grouping",
+    to: "/settings/general",
+  },
+  {
+    id: "active-turn-send-action",
+    title: "Queue or steer messages",
+    to: "/settings/general",
+  },
+  {
+    id: "auto-settle-inactive-threads",
+    title: "Auto-settle inactive threads",
+    to: "/settings/general",
+  },
+  {
+    id: "preferred-terminal",
+    title: "Open in Terminal",
+    to: "/settings/general",
+  },
+  {
+    id: "time-format",
+    title: "Time format",
+    to: "/settings/general",
+  },
+  {
+    id: "hide-whitespace-changes",
+    title: "Hide whitespace changes",
+    to: "/settings/general",
+  },
+  {
+    id: "provider-update-checks",
+    title: "Provider update checks",
+    to: "/settings/general",
+  },
+  {
+    id: "development-server-ports",
+    title: "Development server ports",
+    to: "/settings/general",
+  },
+  {
+    id: "new-threads",
+    title: "New threads",
+    to: "/settings/general",
+  },
+  {
+    id: "start-from-origin",
+    title: "Start from origin",
+    to: "/settings/general",
+    targetId: "new-threads",
+  },
+  {
+    id: "add-project-starts-in",
+    title: "Add project starts in",
+    to: "/settings/general",
+  },
+  {
+    id: "archive-confirmation",
+    title: "Archive confirmation",
+    to: "/settings/general",
+  },
+  {
+    id: "delete-confirmation",
+    title: "Delete confirmation",
+    to: "/settings/general",
+  },
+  {
+    id: "text-generation-model",
+    title: "Text generation model",
+    to: "/settings/general",
+  },
+  {
+    id: "context-compaction-model",
+    title: "Context compaction model",
+    to: "/settings/general",
+  },
+  {
+    id: "diagnostics",
+    title: "Diagnostics",
+    to: "/settings/general",
+  },
+  {
+    id: "legacy-plan-mode",
+    title: "Plan mode (legacy)",
+    to: "/settings/general",
+  },
+  {
+    id: "legacy-token-streaming",
+    title: "Stream token by token (legacy)",
+    to: "/settings/general",
+  },
+  {
+    id: "keybindings",
+    title: "Keybindings",
+    to: "/settings/keybindings",
+  },
+  {
+    id: "projects",
+    title: "Projects",
+    to: "/settings/projects",
+  },
+  // The settings themselves live on the per-project subpage, so the index section is the stable
+  // destination: the search hit gets you to the project list, and you pick a project from there.
+  {
+    id: "project-default-model",
+    title: "Project default model",
+    to: "/settings/projects",
+    targetId: "projects",
+  },
+  {
+    id: "project-new-thread-workspace",
+    title: "Project new-thread workspace",
+    to: "/settings/projects",
+    targetId: "projects",
+  },
+  {
+    id: "project-scripts",
+    title: "Project scripts",
+    to: "/settings/projects",
+    targetId: "projects",
+  },
+  {
+    id: "project-checkouts",
+    title: "Project checkouts",
+    to: "/settings/projects",
+    targetId: "projects",
+  },
+  {
+    id: "snap-shot-enabled",
+    searchTerms: ["window capture screenshot", "app shots", "annotation editor"],
+    title: "SnapShots",
+    to: "/settings/snap-shot",
+  },
+  {
+    id: "snap-shot-accessibility",
+    searchTerms: ["capture accessibility data", "privacy app text"],
+    title: "Include app text",
+    to: "/settings/snap-shot",
+    targetId: "snap-shot-enabled",
+  },
+  {
+    id: "snap-shot-shortcut",
+    title: "Active window shortcut",
+    searchTerms: ["capture shortcut", "window hotkey"],
+    to: "/settings/snap-shot",
+    targetId: "snap-shot-enabled",
+  },
+  {
+    id: "snap-shot-screen-shortcut",
+    title: "Current screen shortcut",
+    searchTerms: ["fullscreen capture", "whole screen", "display monitor hotkey"],
+    to: "/settings/snap-shot",
+    targetId: "snap-shot-enabled",
+  },
+  {
+    id: "snap-shot-region-shortcut",
+    title: "Region shortcut",
+    searchTerms: ["region capture", "area selection hotkey"],
+    to: "/settings/snap-shot",
+    targetId: "snap-shot-enabled",
+  },
+  {
+    id: "snap-shot-sound",
+    title: "Capture sound",
+    to: "/settings/snap-shot",
+    targetId: "snap-shot-enabled",
+  },
+  {
+    id: "snap-shot-flash",
+    title: "Capture flash",
+    to: "/settings/snap-shot",
+    targetId: "snap-shot-enabled",
+  },
+  {
+    id: "computer-control",
+    title: "Computer control",
+    searchTerms: [
+      "Let the agent use the desktop in any chat. Approval gates and Stop still apply.",
+      "enable toggle permission desktop agent computer use control",
+    ],
+    to: "/settings/computer",
+  },
+  {
+    id: "computer-status",
+    title: "Computer status",
+    searchTerms: [
+      "Whether agents can see and control this computer's desktop right now.",
+      "desktop backend beta availability health kwin hyprland nested wayland linux mac macos screen recording accessibility computer use control status set up install plugin repair",
+    ],
+    to: "/settings/computer",
+    // The status row is conditional and its title is dynamic, so link to the section.
+    targetId: "computer-control",
+  },
+  {
+    id: "computer-preview",
+    title: "Preview",
+    searchTerms: [
+      "Show the in-chat Computer preview the first time an agent acts on the desktop, and choose its size.",
+      "open automatically compact large auto open computer use",
+    ],
+    to: "/settings/computer",
+  },
+  {
+    id: "computer-cursor-colors",
+    title: "Cursor colors",
+    searchTerms: [
+      "The agent pointer's colors: stock monochrome by default, or custom fill and rim.",
+      "agent cursor arrow pointer color hex custom",
+    ],
+    to: "/settings/computer",
+  },
+  {
+    id: "computer-audit-history",
+    title: "Recent Computer actions",
+    searchTerms: ["computer audit history action log", "admin access read"],
+    to: "/settings/computer",
+  },
+  {
+    id: "computer-access-policy",
+    title: "Who can use this computer",
+    searchTerms: [
+      "computer access policy any operator scoped admins only",
+      "access write admin connection",
+    ],
+    to: "/settings/computer",
+  },
+  {
+    id: "computer-autonomy",
+    title: "Computer autonomy",
+    searchTerms: [
+      "computer oversight approvals supervised per task auto full access",
+      "reduced oversight denylist",
+    ],
+    to: "/settings/computer",
+  },
+  {
+    id: "providers",
+    title: "Providers",
+    to: "/settings/providers",
+  },
+  {
+    id: "time-tracker",
+    title: "Time Tracker summary model",
+    to: "/settings/time-tracker",
+    searchTerms: ["time", "tracking", "title", "description", "model"],
+  },
+  {
+    id: "source-control",
+    title: "Source control",
+    to: "/settings/source-control",
+  },
+  {
+    id: "issue-statuses",
+    title: "Task statuses",
+    to: "/settings/issues-statuses",
+  },
+  {
+    id: "issue-key-prefix",
+    title: "Task key prefix",
+    to: "/settings/issues-statuses",
+  },
+  {
+    id: "issue-labels",
+    title: "Task labels",
+    to: "/settings/issues-labels",
+  },
+  {
+    id: "issue-milestones",
+    title: "Task milestones",
+    to: "/settings/issues-milestones",
+  },
+  {
+    id: "issue-import",
+    title: "Import tasks",
+    to: "/settings/issues-import",
+  },
+  {
+    id: "issue-intake",
+    title: "Slack intake",
+    to: "/settings/integrations",
+  },
+  {
+    id: "slack-bot-token",
+    title: "Slack bot token",
+    to: "/settings/integrations",
+    targetId: "issue-intake",
+  },
+  {
+    id: "slack-watched-channels",
+    title: "Watched Slack channels",
+    to: "/settings/integrations",
+    targetId: "issue-intake",
+  },
+  {
+    id: "issue-intake-automation",
+    title: "Task auto-assignment and audits",
+    to: "/settings/integrations",
+  },
+  {
+    id: "issue-enrichment",
+    title: "Task enrichment",
+    to: "/settings/issues-enrichment",
+  },
+  {
+    id: "issue-enrichment-model",
+    title: "Investigation model",
+    to: "/settings/issues-enrichment",
+  },
+  {
+    id: "email-listener",
+    title: "Local SMTP capture",
+    to: "/settings/email",
+  },
+  {
+    id: "email-listener-port",
+    title: "Capture port",
+    to: "/settings/email",
+  },
+  {
+    id: "email-trusted-senders",
+    title: "Trusted email senders",
+    to: "/settings/email",
+  },
+  {
+    id: "email-retention",
+    title: "Captured mail retention",
+    to: "/settings/email",
+  },
+  {
+    id: "email-clear-all",
+    title: "Clear captured mail",
+    to: "/settings/email",
+    // The row lives inside the retention section, which is the stable scroll target.
+    targetId: "email-retention",
+  },
+  {
+    id: "email-toasts",
+    title: "Captured mail toasts",
+    to: "/settings/email",
+  },
+  {
+    id: "email-project-capture",
+    title: "Project capture addresses",
+    to: "/settings/email",
+  },
+  // The slug and the password are edited inside a project's collapsed block, so the section is the
+  // stable destination: the hit gets you to the list and you open the project you meant.
+  {
+    id: "email-mail-slug",
+    title: "Mail slug",
+    to: "/settings/email",
+    targetId: "email-project-capture",
+  },
+  {
+    id: "email-capture-password",
+    title: "SMTP capture password",
+    to: "/settings/email",
+    targetId: "email-project-capture",
+  },
+  {
+    id: "email-trigger-rules",
+    title: "Mail trigger rules",
+    to: "/settings/email",
+  },
+  {
+    id: "add-environment",
+    title: "Add environment",
+    to: "/settings/environments",
+    targetId: "company-environments",
+  },
+  {
+    id: "archive",
+    title: "Storage & cleanup, archived, settled and snoozed threads",
+    to: "/settings/archived",
+  },
+  {
+    id: "usage",
+    title: "Usage analytics",
+    to: "/settings/usage",
+  },
+] as const satisfies ReadonlyArray<SettingsSearchItem>;
+
+export type SettingsSearchItemId = (typeof SETTINGS_SEARCH_ITEMS)[number]["id"];
+
+const SEARCH_ITEMS_BY_ID = Object.fromEntries(
+  SETTINGS_SEARCH_ITEMS.map((item) => [item.id, item]),
+) as Readonly<Record<SettingsSearchItemId, SettingsSearchItem>>;
+
+/**
+ * `id` and `title` props for the element a search item anchors to. Panels
+ * spread (or pick from) this instead of restating the strings, so the catalog
+ * and the rendered settings cannot drift apart.
+ */
+export function searchableSetting(id: SettingsSearchItemId): {
+  readonly id: string;
+  readonly title: string;
+} {
+  const { id: anchorId, title } = SEARCH_ITEMS_BY_ID[id];
+  return { id: anchorId, title };
+}
+
+function normalizeSearchText(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function searchSettings(
+  query: string,
+  items: ReadonlyArray<SettingsSearchItem> = SETTINGS_SEARCH_ITEMS,
+): ReadonlyArray<SettingsSearchItem> {
+  const normalizedQuery = normalizeSearchText(query);
+  if (normalizedQuery.length === 0) return [];
+
+  return items.filter((item) =>
+    [item.title, ...(item.searchTerms ?? [])].some((text) =>
+      normalizeSearchText(text).includes(normalizedQuery),
+    ),
+  );
+}

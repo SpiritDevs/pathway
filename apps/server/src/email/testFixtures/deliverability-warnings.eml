@@ -1,0 +1,12 @@
+From: Offers <offers@example.com>
+To: Developer <dev@my-app.test>
+Subject: This deliberately overlong fixture subject demonstrates the deterministic subject length warning in captured email analytics
+Date: Wed, 12 Aug 2026 11:00:00 +0000
+Message-ID: <warning-fixture@example.com>
+Received-SPF: banana invalid-result
+Authentication-Results: mx.example.test; dmarc=unknownvalue header.from=example.com
+DKIM-Signature: v=1; a=rsa-sha256; d=localhost; s=mail; h=from:to:subject; b=not-base64!
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<!doctype html><html><body><div style="display: grid"><p>Sale</p><img src="https://example.com/open.gif" width="1" height="1" alt=""><form><button>Buy</button></form></div></body></html>

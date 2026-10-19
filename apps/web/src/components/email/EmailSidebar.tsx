@@ -1,0 +1,567 @@
+/**
+ * The `/email` secondary sidebar: the source toggle, then the inbox list.
+ *
+ * Navigation is search-param state, not routes — every row writes the same `/email` params the
+ * view reads, the way `IssuesSidebar` drives the issue list. Selecting an inbox drops the open
+ * message: a message id belongs to exactly one inbox, so carrying it across would leave the
+ * reading pane on something the list beside it no longer shows.
+ *
+ * @module components/email/EmailSidebar
+ */
+import type { EmailInboxScope, EnvironmentId, ProjectId } from "@spiritdevs/contracts";
+import { useLocation, useNavigate } from "@tanstack/react-router";
+import {
+  BarChart3Icon,
+  BellIcon,
+  BellOffIcon,
+  FolderIcon,
+  InboxIcon,
+  MailQuestionIcon,
+  MailIcon,
+  FilePenLineIcon,
+  CircleOffIcon,
+  StarIcon,
+  MonitorIcon,
+  SettingsIcon,
+  TagsIcon,
+} from "lucide-react";
+import { useMemo } from "react";
+
+import { cn } from "../../lib/utils";
+import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
+import {
+  ALL_EMAIL_SCOPE,
+  emailScopeKey,
+  findEmailInbox,
+  UNASSIGNED_EMAIL_SCOPE,
+  useEmailInboxSummaries,
+  useEmailSettings,
+  useEmailTags,
+  useUpdateEmailSettings,
+} from "../../state/email";
+import { ContextualSidebarHeader } from "../sidebar/ContextualSidebarHeader";
+import {
+  SidebarContent,
+  SidebarGroup,
+  SidebarGroupLabel,
+  SidebarMenu,
+  SidebarMenuAction,
+  SidebarMenuBadge,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  useSidebar,
+} from "../ui/sidebar";
+import { Select, SelectItem, SelectPopup, SelectTrigger } from "../ui/select";
+import { Toggle, ToggleGroup } from "../ui/toggle-group";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { useIssueProjectOptions } from "../issues/useIssueProjectOptions";
+import { buildEmailSidebarProjects, findEmailSidebarProject } from "./emailSidebar.logic";
+import { isCapturedEmailSearch } from "./connectedMail.logic";
+import { findEmailProjectSettings, withEmailProjectSettings } from "./emailSettings.logic";
+import { reportEmailWriteFailure } from "./emailWrites";
+import {
+  emailScopeFromParam,
+  emailScopeParam,
+  parseEmailSearch,
+  type EmailSearchPatch,
+  type EmailSearch,
+} from "./emailView.logic";
+
+type EmailSource = "local-smtp" | "gmail";
+
+const ALL_ENVIRONMENTS_VALUE = "all-environments";
+
+interface EmailEnvironmentOption {
+  readonly environmentId: EnvironmentId;
+  readonly label: string;
+}
+
+export function EmailEnvironmentSelect({
+  environments,
+  environmentId,
+  onEnvironmentChange,
+}: {
+  environments: ReadonlyArray<EmailEnvironmentOption>;
+  environmentId: EnvironmentId | null;
+  onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
+}) {
+  const selectedEnvironment =
+    environments.find((environment) => environment.environmentId === environmentId) ?? null;
+
+  return (
+    <Select
+      value={selectedEnvironment?.environmentId ?? ALL_ENVIRONMENTS_VALUE}
+      onValueChange={(value) =>
+        onEnvironmentChange(value === ALL_ENVIRONMENTS_VALUE ? null : (value as EnvironmentId))
+      }
+    >
+      <SelectTrigger
+        aria-label="Filter email by environment"
+        className="w-full border-sidebar-foreground/10 bg-sidebar-foreground/[0.06] px-2 text-sidebar-foreground shadow-none hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+        size="sm"
+      >
+        <MonitorIcon className="size-4 text-sidebar-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate text-left">
+          {selectedEnvironment?.label ?? "All environments"}
+        </span>
+      </SelectTrigger>
+      <SelectPopup alignItemWithTrigger={false}>
+        <SelectItem value={ALL_ENVIRONMENTS_VALUE}>
+          <span className="flex items-center gap-2">
+            <MonitorIcon />
+            All environments
+          </span>
+        </SelectItem>
+        {environments.map((environment) => (
+          <SelectItem key={environment.environmentId} value={environment.environmentId}>
+            <span className="flex items-center gap-2">
+              <MonitorIcon />
+              <span className="truncate">{environment.label}</span>
+            </span>
+          </SelectItem>
+        ))}
+      </SelectPopup>
+    </Select>
+  );
+}
+
+export function EmailSourceToggle({
+  source,
+  onSource,
+}: {
+  source: EmailSource;
+  onSource: (source: EmailSource) => void;
+}) {
+  return (
+    <ToggleGroup
+      aria-label="Email source"
+      className="relative grid w-full grid-cols-2 gap-0 rounded-full border border-sidebar-foreground/15 bg-sidebar-foreground/10 p-0.5"
+      size="sm"
+      value={[source]}
+      variant="default"
+      onValueChange={(next) => {
+        const nextSource = next[0];
+        if (nextSource === "local-smtp" || nextSource === "gmail") onSource(nextSource);
+      }}
+    >
+      <span
+        aria-hidden="true"
+        className={cn(
+          "pointer-events-none absolute inset-y-0.5 left-0.5 w-[calc(50%-2px)] rounded-full bg-white shadow-sm/10 transition-transform duration-200 ease-out motion-reduce:transition-none",
+          source === "gmail" && "translate-x-full",
+        )}
+      />
+      <Toggle
+        className="relative z-10 h-6 min-w-0 w-full rounded-full px-2 text-xs text-sidebar-muted-foreground shadow-none before:hidden transition-colors hover:bg-transparent hover:text-sidebar-foreground data-pressed:bg-transparent data-pressed:text-zinc-950"
+        value="local-smtp"
+      >
+        Local SMTP
+      </Toggle>
+      <Toggle
+        className="relative z-10 h-6 min-w-0 w-full rounded-full px-2 text-xs text-sidebar-muted-foreground shadow-none before:hidden transition-colors hover:bg-transparent hover:text-sidebar-foreground data-pressed:bg-transparent data-pressed:text-zinc-950"
+        value="gmail"
+      >
+        Gmail
+      </Toggle>
+    </ToggleGroup>
+  );
+}
+
+export function EmailSidebar() {
+  const navigate = useNavigate();
+  const rawSearch = useLocation({ select: (location) => location.search });
+  const search = parseEmailSearch(rawSearch as Record<string, unknown>);
+  const source = isCapturedEmailSearch(search) ? "local-smtp" : "gmail";
+  const setSource = (next: EmailSource) => {
+    void navigate({
+      to: "/email",
+      replace: true,
+      search: { ...search, source: next === "local-smtp" ? "capture" : "mail" },
+    });
+  };
+
+  return (
+    <>
+      <ContextualSidebarHeader title="Email" />
+      <SidebarContent>
+        <SidebarGroup className="p-[var(--sidebar-content-inset)]">
+          <EmailSourceToggle onSource={setSource} source={source} />
+        </SidebarGroup>
+        {source === "local-smtp" ? <LocalSmtpInboxes /> : <ConnectedMailSidebar />}
+      </SidebarContent>
+    </>
+  );
+}
+
+const MAIL_SIDEBAR_VIEWS = [
+  { value: "priority", label: "Priority", icon: StarIcon },
+  { value: "noise", label: "Noise", icon: CircleOffIcon },
+  { value: "all", label: "All mail", icon: MailIcon },
+  { value: "drafts", label: "Drafts", icon: FilePenLineIcon },
+] as const;
+
+export function ConnectedMailSidebarItems({
+  bucket,
+  onBucket,
+  onSettings,
+}: {
+  bucket: EmailSearch["bucket"];
+  onBucket: (bucket: NonNullable<EmailSearch["bucket"]>) => void;
+  onSettings: () => void;
+}) {
+  return (
+    <>
+      <SidebarGroup>
+        <SidebarMenu>
+          {MAIL_SIDEBAR_VIEWS.map(({ value, label, icon: Icon }) => (
+            <SidebarMenuItem key={value}>
+              <SidebarMenuButton
+                isActive={(bucket ?? "priority") === value}
+                onClick={() => onBucket(value)}
+              >
+                <Icon />
+                <span>{label}</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          ))}
+        </SidebarMenu>
+      </SidebarGroup>
+      <SidebarGroup className="mt-auto">
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton onClick={onSettings}>
+              <SettingsIcon />
+              <span>Mail settings</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarGroup>
+    </>
+  );
+}
+
+function ConnectedMailSidebar() {
+  const navigate = useNavigate();
+  const { isMobile, setOpenMobile } = useSidebar();
+  const rawSearch = useLocation({ select: (location) => location.search });
+  const search = parseEmailSearch(rawSearch as Record<string, unknown>);
+  const closeMobile = () => {
+    if (isMobile) setOpenMobile(false);
+  };
+  return (
+    <ConnectedMailSidebarItems
+      bucket={search.bucket}
+      onBucket={(bucket) => {
+        closeMobile();
+        void navigate({
+          to: "/email",
+          replace: true,
+          search: { ...search, source: "mail", bucket, mailMessage: undefined },
+        });
+      }}
+      onSettings={() => {
+        closeMobile();
+        void navigate({ to: "/settings/email", search: { source: "mail" } });
+      }}
+    />
+  );
+}
+
+/**
+ * The bell on a project row.
+ *
+ * A mute stays visible; an unmuted project only shows the control on hover, so a quiet sidebar does
+ * not grow a column of bells. A project whose capture entry has not arrived yet keeps the control
+ * visible but inert, with a tooltip saying why — a bell that silently does nothing reads as a bug.
+ */
+function ProjectMuteAction({
+  projectTitle,
+  muted,
+  pending,
+  onToggle,
+}: {
+  projectTitle: string;
+  muted: boolean;
+  pending: boolean;
+  onToggle: () => void;
+}) {
+  const action = (
+    <SidebarMenuAction
+      aria-disabled={pending || undefined}
+      aria-label={
+        pending
+          ? `Capture toasts for ${projectTitle} are not ready yet`
+          : muted
+            ? `Unmute capture toasts for ${projectTitle}`
+            : `Mute capture toasts for ${projectTitle}`
+      }
+      aria-pressed={pending ? undefined : muted}
+      className={cn(muted && "text-sidebar-muted-foreground", pending && "opacity-50")}
+      onClick={pending ? undefined : onToggle}
+      showOnHover={!muted && !pending}
+    >
+      {muted ? <BellOffIcon /> : <BellIcon />}
+    </SidebarMenuAction>
+  );
+
+  if (!pending) return action;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger render={action} />
+      <TooltipPopup side="right">
+        This project has no capture inbox yet. It appears the next time the server reads its capture
+        settings.
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
+
+function LocalSmtpInboxes() {
+  const navigate = useNavigate();
+  const { isMobile, setOpenMobile } = useSidebar();
+  const rawSearch = useLocation({ select: (location) => location.search });
+  const pathname = useLocation({ select: (location) => location.pathname });
+  const search = parseEmailSearch(rawSearch as Record<string, unknown>);
+  const onEmail = pathname === "/email";
+  const projectOptions = useIssueProjectOptions();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const projects = useMemo(
+    () => buildEmailSidebarProjects(projectOptions, primaryEnvironmentId),
+    [primaryEnvironmentId, projectOptions],
+  );
+  const { environments } = useEnvironments();
+  const { settings } = useEmailSettings();
+  const updateSettings = useUpdateEmailSettings();
+  const tags = useEmailTags();
+
+  // The same atom the list pane reads, so the badges never disagree with the rows beside them.
+  const scope = useMemo(() => emailScopeFromParam(search.inbox), [search.inbox]);
+  const selectedProject =
+    scope.type === "project" ? findEmailSidebarProject(projects, scope.projectId) : null;
+  const inboxes = useEmailInboxSummaries(
+    scope,
+    (search.environment ?? null) as EnvironmentId | null,
+    selectedProject?.connections,
+  );
+  const activeKey = onEmail && search.analytics !== true ? emailScopeKey(scope) : null;
+
+  const toggleProjectMute = async (projectId: ProjectId) => {
+    // A project the server has not derived an entry for yet has nothing to mute; the entry appears
+    // on the next settings read.
+    const project = findEmailProjectSettings(settings, projectId);
+    if (settings === null || project === null) return;
+    const result = await updateSettings({
+      settings: withEmailProjectSettings(settings, projectId, { toastMuted: !project.toastMuted }),
+    });
+    reportEmailWriteFailure("Could not change capture toasts", result);
+  };
+
+  const toggleToastMaster = async () => {
+    if (settings === null) return;
+    const result = await updateSettings({
+      settings: { ...settings, toastsEnabled: !settings.toastsEnabled },
+    });
+    reportEmailWriteFailure("Could not change capture toasts", result);
+  };
+
+  const navigateWith = (patch: EmailSearchPatch) => {
+    if (isMobile) setOpenMobile(false);
+    void navigate({
+      to: "/email",
+      replace: true,
+      search: { ...search, ...patch, source: "capture" },
+    });
+  };
+
+  // A row lands on an inbox and nothing else: the message and the tab belong to whatever was open
+  // in the inbox being left.
+  const selectInbox = (target: EmailInboxScope) =>
+    navigateWith({
+      inbox: emailScopeParam(target),
+      message: undefined,
+      tab: undefined,
+      analytics: undefined,
+    });
+
+  const unreadFor = (target: EmailInboxScope) => findEmailInbox(inboxes, target)?.unreadCount ?? 0;
+
+  const unassignedUnread = unreadFor(UNASSIGNED_EMAIL_SCOPE);
+
+  return (
+    <>
+      <SidebarGroup>
+        <SidebarGroupLabel>Environments</SidebarGroupLabel>
+        <EmailEnvironmentSelect
+          environmentId={(search.environment ?? null) as EnvironmentId | null}
+          environments={environments}
+          onEnvironmentChange={(environmentId) =>
+            navigateWith({
+              environment: environmentId ?? undefined,
+              message: undefined,
+              analytics: undefined,
+              tab: undefined,
+            })
+          }
+        />
+      </SidebarGroup>
+
+      <SidebarGroup>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              isActive={activeKey === emailScopeKey(ALL_EMAIL_SCOPE)}
+              onClick={() => selectInbox(ALL_EMAIL_SCOPE)}
+            >
+              <InboxIcon />
+              <span>All mail</span>
+              {unreadFor(ALL_EMAIL_SCOPE) > 0 ? (
+                <SidebarMenuBadge>{unreadFor(ALL_EMAIL_SCOPE)}</SidebarMenuBadge>
+              ) : null}
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarGroup>
+
+      <SidebarGroup>
+        <SidebarGroupLabel>Projects</SidebarGroupLabel>
+        <SidebarMenu>
+          {projects.length === 0 ? (
+            <p className="px-2 py-1.5 text-xs text-sidebar-muted-foreground/70">No projects yet.</p>
+          ) : (
+            projects.map((project) => {
+              const projectScope: EmailInboxScope = {
+                type: "project",
+                projectId: project.inboxProjectId,
+              };
+              const unread = [...new Set(project.connections.map((connection) => connection.id))]
+                .map((projectId) => unreadFor({ type: "project", projectId }))
+                .reduce((total, count) => total + count, 0);
+              const projectSettings = findEmailProjectSettings(settings, project.inboxProjectId);
+              // The settings document is the authority on a mute — it is what the toast host reads
+              // — with the inbox summary answering until the first settings read lands.
+              const muted =
+                projectSettings?.toastMuted ??
+                findEmailInbox(inboxes, projectScope)?.toastMuted ??
+                false;
+              return (
+                <SidebarMenuItem key={project.id}>
+                  <SidebarMenuButton
+                    isActive={scope.type === "project" && project.projectIds.has(scope.projectId)}
+                    onClick={() => selectInbox(projectScope)}
+                  >
+                    <FolderIcon />
+                    <span className="truncate">{project.title}</span>
+                    {/* Shifted left of the mute control, which owns the right edge of the row. */}
+                    {unread > 0 ? (
+                      <SidebarMenuBadge className="right-7">{unread}</SidebarMenuBadge>
+                    ) : null}
+                  </SidebarMenuButton>
+                  <ProjectMuteAction
+                    muted={muted}
+                    onToggle={() => void toggleProjectMute(project.inboxProjectId)}
+                    projectTitle={project.title}
+                    // A mute is a write to this project's entry, so there is nothing to write until
+                    // the server has derived one. Saying so beats swallowing the click.
+                    pending={settings === null || projectSettings === null}
+                  />
+                </SidebarMenuItem>
+              );
+            })
+          )}
+        </SidebarMenu>
+      </SidebarGroup>
+
+      {tags.length === 0 ? null : (
+        <SidebarGroup>
+          <SidebarGroupLabel>Tags</SidebarGroupLabel>
+          <SidebarMenu>
+            {tags.map((tag) => (
+              <SidebarMenuItem key={tag.id}>
+                <SidebarMenuButton
+                  isActive={onEmail && search.tag === tag.id && search.analytics !== true}
+                  onClick={() =>
+                    navigateWith({
+                      tag: search.tag === tag.id ? undefined : tag.id,
+                      message: undefined,
+                      analytics: undefined,
+                    })
+                  }
+                >
+                  <TagsIcon style={{ color: tag.color }} />
+                  <span className="truncate">{tag.name}</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ))}
+          </SidebarMenu>
+        </SidebarGroup>
+      )}
+
+      <SidebarGroup>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              isActive={activeKey === emailScopeKey(UNASSIGNED_EMAIL_SCOPE)}
+              onClick={() => selectInbox(UNASSIGNED_EMAIL_SCOPE)}
+            >
+              <MailQuestionIcon />
+              <span>Unassigned</span>
+              {unassignedUnread > 0 ? (
+                <SidebarMenuBadge>{unassignedUnread}</SidebarMenuBadge>
+              ) : null}
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          {/* Analytics keeps the selected inbox rather than resetting it, which is what makes it a
+              lens on the scope above instead of a second top-level view. */}
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              isActive={onEmail && search.analytics === true}
+              onClick={() =>
+                navigateWith({
+                  analytics: true,
+                  environment: undefined,
+                  message: undefined,
+                  tab: undefined,
+                })
+              }
+            >
+              <BarChart3Icon />
+              <span>Analytics</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarGroup>
+
+      <SidebarGroup className="mt-auto">
+        <SidebarMenu>
+          {/* The master switch sits beside the per-project mutes it overrides, rather than only in
+              Settings, because muting everything is the thing you reach for mid-flood. */}
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              aria-pressed={settings?.toastsEnabled ?? true}
+              disabled={settings === null}
+              onClick={() => void toggleToastMaster()}
+            >
+              {settings?.toastsEnabled === false ? <BellOffIcon /> : <BellIcon />}
+              <span>Capture toasts</span>
+              <span className="ms-auto text-xs text-sidebar-muted-foreground">
+                {settings?.toastsEnabled === false ? "Off" : "On"}
+              </span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              onClick={() => {
+                if (isMobile) setOpenMobile(false);
+                void navigate({ to: "/settings/email", search: { source: "capture" } });
+              }}
+            >
+              <SettingsIcon />
+              <span>Capture settings</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarGroup>
+    </>
+  );
+}

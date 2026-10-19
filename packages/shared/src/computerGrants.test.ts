@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
 
 import {
   computerPermissionSetupMessage,
@@ -6,26 +6,26 @@ import {
   computerStaleGrantAdvice,
   listComputerPermissions,
   sortComputerPermissions,
-  missingComputerAppSnapPermissions,
-} from "./computerGrants";
+  missingComputerHelperPermissions,
+} from "./computerGrants.ts";
 
 describe("computer permission copy", () => {
-  it("requires positive AppSnap grant evidence for every Computer permission", () => {
+  it("requires positive helper grant evidence for every Computer permission", () => {
     expect(
-      missingComputerAppSnapPermissions({
+      missingComputerHelperPermissions({
         screenRecordingPermission: "denied",
         inputMonitoringPermission: "unknown",
       }),
     ).toEqual(["accessibility", "screenRecording", "inputMonitoring"]);
     expect(
-      missingComputerAppSnapPermissions({
+      missingComputerHelperPermissions({
         accessibilityPermission: "granted",
         screenRecordingPermission: "granted",
         inputMonitoringPermission: "denied",
       }),
     ).toEqual(["inputMonitoring"]);
     expect(
-      missingComputerAppSnapPermissions({
+      missingComputerHelperPermissions({
         accessibilityPermission: "granted",
         screenRecordingPermission: "granted",
         inputMonitoringPermission: "granted",
@@ -54,31 +54,31 @@ describe("computer permission copy", () => {
     const advice = computerStaleGrantAdvice(
       ["accessibility", "screenRecording"],
       "adhoc",
-      "com.emanueledipietro.synara.dev",
+      "com.spiritdevs.pathway.dev",
     );
     expect(advice).toContain("add the current build again");
-    expect(advice).not.toContain("Synara has cleared");
-    expect(advice).toContain("tccutil reset Accessibility com.emanueledipietro.synara.dev");
+    expect(advice).not.toContain("Pathway has cleared");
+    expect(advice).toContain("tccutil reset Accessibility com.spiritdevs.pathway.dev");
     // `ScreenCapture`, not "Screen Recording": the label is not the service name,
     // and a user who types the label gets an error instead of a reset.
-    expect(advice).toContain("tccutil reset ScreenCapture com.emanueledipietro.synara.dev");
+    expect(advice).toContain("tccutil reset ScreenCapture com.spiritdevs.pathway.dev");
   });
 
   it("names the responsible app rather than assuming the released one", () => {
     // A `.dev` flavor resetting the production identifier would revoke a
-    // separately installed Synara's grants and fix nothing here.
+    // separately installed Pathway's grants and fix nothing here.
     const advice = computerStaleGrantAdvice(
       ["accessibility"],
       "adhoc",
-      "com.example.synara.canary",
+      "com.example.pathway.canary",
     );
-    expect(advice).toContain("tccutil reset Accessibility com.example.synara.canary");
-    expect(advice).not.toContain("com.emanueledipietro.synara");
+    expect(advice).toContain("tccutil reset Accessibility com.example.pathway.canary");
+    expect(advice).not.toContain("com.spiritdevs.pathway");
   });
 
   it("withholds the tccutil sentence when no responsible bundle id is known", () => {
     // Better to say nothing than to hand the user a command that resets some
-    // other Synara. The System Settings advice still stands on its own.
+    // other Pathway. The System Settings advice still stands on its own.
     for (const bundleId of [undefined, "", "   "]) {
       const advice = computerStaleGrantAdvice(["accessibility"], "adhoc", bundleId);
       expect(advice).toContain("add the current build again");
@@ -100,10 +100,10 @@ describe("computer permission copy", () => {
     const message = computerPermissionSetupMessage(
       ["accessibility"],
       "adhoc",
-      "com.emanueledipietro.synara",
+      "com.spiritdevs.pathway",
     );
     expect(message).toContain("System Settings");
-    expect(message).toContain("tccutil reset Accessibility com.emanueledipietro.synara");
+    expect(message).toContain("tccutil reset Accessibility com.spiritdevs.pathway");
   });
 });
 

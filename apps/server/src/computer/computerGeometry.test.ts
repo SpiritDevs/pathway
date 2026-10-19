@@ -1,5 +1,6 @@
-import { Schema } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
 import {
   COMPUTER_ID_MAX_LENGTH,
@@ -7,9 +8,16 @@ import {
   COMPUTER_OCCLUDERS_MAX_LENGTH,
   COMPUTER_WINDOW_LIST_MAX_LENGTH,
   ComputerWindow,
-} from "@synara/contracts";
+} from "@spiritdevs/contracts";
 
-import { parseWindows, topmostWindowAtPoint } from "./computerGeometry.ts";
+const isComputerWindow = Schema.is(ComputerWindow);
+
+import {
+  parseWindows,
+  requireWindowBounds,
+  screenshotFromPng,
+  topmostWindowAtPoint,
+} from "./computerGeometry.ts";
 
 const window = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
   id: "window-1",
@@ -31,7 +39,7 @@ describe("parseWindows clamps to the contract", () => {
   it("passes ordinary windows through untouched", () => {
     const windows = parseWindows([window()], null);
     expect(windows).toHaveLength(1);
-    expect(Schema.is(ComputerWindow)(windows[0])).toBe(true);
+    expect(isComputerWindow(windows[0])).toBe(true);
   });
 
   it("truncates a title and app name past the label maximum", () => {
@@ -41,7 +49,7 @@ describe("parseWindows clamps to the contract", () => {
     expect(windows[0]?.title.length).toBe(COMPUTER_LABEL_MAX_LENGTH);
     expect(windows[0]?.title.endsWith("…")).toBe(true);
     expect(windows[0]?.appName?.length).toBe(COMPUTER_LABEL_MAX_LENGTH);
-    expect(Schema.is(ComputerWindow)(windows[0])).toBe(true);
+    expect(isComputerWindow(windows[0])).toBe(true);
   });
 
   it("keeps the truncation cut outside a surrogate pair", () => {
@@ -76,7 +84,7 @@ describe("parseWindows clamps to the contract", () => {
     );
 
     expect(windows[0]?.occludedBy).toHaveLength(COMPUTER_OCCLUDERS_MAX_LENGTH);
-    expect(Schema.is(ComputerWindow)(windows[0])).toBe(true);
+    expect(isComputerWindow(windows[0])).toBe(true);
   });
 
   it("clamps an oversized window id instead of dropping or emitting it raw", () => {
@@ -84,7 +92,7 @@ describe("parseWindows clamps to the contract", () => {
     const windows = parseWindows([window({ id: longId })], null);
 
     expect(windows[0]?.id.length).toBe(COMPUTER_ID_MAX_LENGTH);
-    expect(Schema.is(ComputerWindow)(windows[0])).toBe(true);
+    expect(isComputerWindow(windows[0])).toBe(true);
   });
 
   it("still matches the focused window when its id needed clamping", () => {
@@ -149,4 +157,31 @@ describe("topmostWindowAtPoint", () => {
     expect(topmostWindowAtPoint(windows, { x: 400, y: 300 })).toBeUndefined();
     expect(topmostWindowAtPoint([], { x: 400, y: 300 })).toBeUndefined();
   });
+});
+
+describe("geometry refusals", () => {
+  it.effect("refuses a window with no bounds with a typed backend error", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        requireWindowBounds({ id: "w1" as ComputerWindow["id"] }, "a click"),
+      );
+      expect(error._tag).toBe("ComputerBackendError");
+      expect(error.message).toContain("capabilities.windowBounds is false");
+    }),
+  );
+
+  it.effect("refuses capture bytes that are not a PNG, naming the source", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        screenshotFromPng({
+          bytes: new Uint8Array(32),
+          region: { x: 0, y: 0, width: 10, height: 10 },
+          capturedAt: "2026-01-01T00:00:00.000Z",
+          source: "The test capture",
+        }),
+      );
+      expect(error._tag).toBe("ComputerBackendError");
+      expect(error.message).toBe("The test capture did not return a usable PNG image.");
+    }),
+  );
 });

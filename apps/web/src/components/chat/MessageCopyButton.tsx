@@ -1,53 +1,85 @@
-import { useRef, type RefObject } from "react";
-import { CheckIcon, CopyIcon } from "~/lib/icons";
+import { memo, useRef } from "react";
+import { CopyIcon, CheckIcon } from "lucide-react";
+import { Button } from "../ui/button";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { cn } from "~/lib/utils";
 import { anchoredToastManager } from "../ui/toast";
-import { MessageActionButton, MESSAGE_ACTION_ICON_CLASS_NAME } from "./MessageActionButton";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 const ANCHORED_TOAST_TIMEOUT_MS = 1000;
+const onCopy = (ref: React.RefObject<HTMLButtonElement | null>) => {
+  if (ref.current) {
+    anchoredToastManager.add({
+      data: {
+        tooltipStyle: true,
+      },
+      positionerProps: {
+        anchor: ref.current,
+      },
+      timeout: ANCHORED_TOAST_TIMEOUT_MS,
+      title: "Copied!",
+    });
+  }
+};
 
-function showCopyToast(
-  ref: RefObject<HTMLButtonElement | null>,
-  title: string,
-  description?: string,
-): void {
-  if (!ref.current) return;
+const onCopyError = (ref: React.RefObject<HTMLButtonElement | null>, error: Error) => {
+  if (ref.current) {
+    anchoredToastManager.add({
+      data: {
+        tooltipStyle: true,
+      },
+      positionerProps: {
+        anchor: ref.current,
+      },
+      timeout: ANCHORED_TOAST_TIMEOUT_MS,
+      title: "Failed to copy",
+      description: error.message,
+    });
+  }
+};
 
-  anchoredToastManager.add({
-    data: {
-      tooltipStyle: true,
-    },
-    positionerProps: {
-      anchor: ref.current,
-    },
-    timeout: ANCHORED_TOAST_TIMEOUT_MS,
-    title,
-    ...(description ? { description } : {}),
-  });
-}
-
-export function MessageCopyButton({ text, className }: { text: string; className?: string }) {
+export const MessageCopyButton = memo(function MessageCopyButton({
+  text,
+  label,
+  size = "xs",
+  variant = "outline",
+  className,
+}: {
+  text: string;
+  label?: string;
+  size?: "xs" | "icon-xs";
+  variant?: "outline" | "ghost";
+  className?: string;
+}) {
   const ref = useRef<HTMLButtonElement>(null);
   const { copyToClipboard, isCopied } = useCopyToClipboard<void>({
-    onCopy: () => showCopyToast(ref, "Copied!"),
-    onError: (error: Error) => showCopyToast(ref, "Failed to copy", error.message),
+    onCopy: () => onCopy(ref),
+    onError: (error: Error) => onCopyError(ref, error),
     timeout: ANCHORED_TOAST_TIMEOUT_MS,
   });
 
   return (
-    <MessageActionButton
-      ref={ref}
-      label="Copy message"
-      tooltip="Copy to clipboard"
-      disabled={isCopied}
-      className={className}
-      onClick={() => copyToClipboard(text)}
-    >
-      {isCopied ? (
-        <CheckIcon className={`${MESSAGE_ACTION_ICON_CLASS_NAME} text-success`} />
-      ) : (
-        <CopyIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
-      )}
-    </MessageActionButton>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            aria-label={label ?? "Copy link"}
+            disabled={isCopied}
+            onClick={() => copyToClipboard(text)}
+            ref={ref}
+            type="button"
+            size={size}
+            variant={variant}
+            className={cn("text-muted-foreground hover:text-foreground", className)}
+          />
+        }
+      >
+        {isCopied ? <CheckIcon className="size-3 text-primary" /> : <CopyIcon className="size-3" />}
+        {label ? (isCopied ? "Copied" : label) : null}
+      </TooltipTrigger>
+      <TooltipPopup>
+        <p>{label ?? "Copy to clipboard"}</p>
+      </TooltipPopup>
+    </Tooltip>
   );
-}
+});

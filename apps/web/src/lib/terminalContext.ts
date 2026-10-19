@@ -1,19 +1,6 @@
-import { type MessageId, type ThreadId } from "@synara/contracts";
-import {
-  extractTrailingAssistantSelections,
-  type ParsedAssistantSelectionEntry,
-} from "./assistantSelections";
-import {
-  buildBrowserAnnotationsPromptBlock,
-  extractTrailingBrowserAnnotations,
-  type BrowserAnnotationDraft,
-} from "./browserAnnotations";
-import { extractTrailingFileComments, type ParsedFileCommentEntry } from "./fileComments";
-import { extractTrailingPastedTexts, type ParsedPastedTextEntry } from "./composerPastedText";
-import {
-  extractTrailingPullRequestContexts,
-  type ParsedPullRequestContextEntry,
-} from "./pullRequestContext";
+import { type ThreadId } from "@spiritdevs/contracts";
+
+import { extractTrailingElementContexts, type ParsedElementContextEntry } from "./elementContext";
 
 export interface TerminalContextSelection {
   terminalId: string;
@@ -42,11 +29,12 @@ export interface DisplayedUserMessageState {
   contextCount: number;
   previewTitle: string | null;
   contexts: ParsedTerminalContextEntry[];
-  assistantSelections: ParsedAssistantSelectionEntry[];
-  fileComments: ParsedFileCommentEntry[];
-  pastedTexts: ParsedPastedTextEntry[];
-  pullRequestContexts: ParsedPullRequestContextEntry[];
-  browserAnnotations: BrowserAnnotationDraft[];
+  /**
+   * Element-context entries extracted from the trailing `<element_context>`
+   * block (if any). Stripped from `visibleText` so the raw block doesn't
+   * leak into the user's bubble.
+   */
+  elementContexts: ParsedElementContextEntry[];
 }
 
 export interface ParsedTerminalContextEntry {
@@ -55,24 +43,9 @@ export interface ParsedTerminalContextEntry {
 }
 
 export const INLINE_TERMINAL_CONTEXT_PLACEHOLDER = "\uFFFC";
-export const IMAGE_ONLY_BOOTSTRAP_PROMPT =
-  "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
-export const IMAGE_ONLY_VISIBLE_PLACEHOLDER = "(No Content)";
 
 const TRAILING_TERMINAL_CONTEXT_BLOCK_PATTERN =
   /\n*<terminal_context>\n([\s\S]*?)\n<\/terminal_context>\s*$/;
-const TRAILING_SERIALIZED_COMPOSER_BLOCK_PATTERNS = [
-  /\n*(<pull_request_context>\n[\s\S]*?\n<\/pull_request_context>)\s*$/u,
-  /\n*(<pasted_text>\n[\s\S]*?\n<\/pasted_text>)\s*$/u,
-  /\n*(<file_comments>\n[\s\S]*?\n<\/file_comments>)\s*$/u,
-  /\n*(<terminal_context>\n[\s\S]*?\n<\/terminal_context>)\s*$/u,
-  /\n*(<assistant_selection>\n[\s\S]*?\n<\/assistant_selection>)\s*$/u,
-] as const;
-
-interface DisplayedUserMessageOptions {
-  hideImageOnlyBootstrapPrompt?: boolean;
-  messageId: MessageId | undefined;
-}
 
 export function normalizeTerminalContextText(text: string): string {
   return text.replace(/\r\n/g, "\n").replace(/^\n+|\n+$/g, "");
@@ -92,24 +65,18 @@ export function filterTerminalContextsWithText<T extends { text: string }>(
   return contexts.filter((context) => hasTerminalContextText(context));
 }
 
-export function syncTerminalContextsByIds<T extends { id: string }>(
-  contexts: ReadonlyArray<T>,
-  ids: ReadonlyArray<string>,
-): T[] {
-  const contextsById = new Map(contexts.map((context) => [context.id, context]));
-  return ids.flatMap((id) => {
-    const context = contextsById.get(id);
-    return context ? [context] : [];
-  });
-}
-
-export function terminalContextIdListsEqual<T extends { id: string }>(
-  contexts: ReadonlyArray<T>,
-  ids: ReadonlyArray<string>,
-): boolean {
-  return (
-    contexts.length === ids.length && contexts.every((context, index) => context.id === ids[index])
-  );
+function previewTerminalContextText(text: string): string {
+  const normalized = normalizeTerminalContextText(text);
+  if (normalized.length === 0) {
+    return "";
+  }
+  const lines = normalized.split("\n");
+  const visibleLines = lines.slice(0, 3);
+  if (lines.length > 3) {
+    visibleLines.push("...");
+  }
+  const preview = visibleLines.join("\n");
+  return preview.length > 180 ? `${preview.slice(0, 177)}...` : preview;
 }
 
 export function normalizeTerminalContextSelection(
@@ -162,6 +129,27 @@ export function formatInlineTerminalContextLabel(selection: {
   return `@${terminalLabel}:${range}`;
 }
 
+export function buildTerminalContextPreviewTitle(
+  contexts: ReadonlyArray<TerminalContextSelection>,
+): string | null {
+  if (contexts.length === 0) {
+    return null;
+  }
+  const previewParts: string[] = [];
+  for (const context of contexts) {
+    const normalized = normalizeTerminalContextSelection(context);
+    if (!normalized) continue;
+    const preview = previewTerminalContextText(normalized.text);
+    previewParts.push(
+      preview.length > 0
+        ? `${formatTerminalContextLabel(normalized)}\n${preview}`
+        : formatTerminalContextLabel(normalized),
+    );
+  }
+  const previews = previewParts.join("\n\n");
+  return previews.length > 0 ? previews : null;
+}
+
 function buildTerminalContextBodyLines(selection: TerminalContextSelection): string[] {
   return normalizeTerminalContextText(selection.text)
     .split("\n")
@@ -171,9 +159,13 @@ function buildTerminalContextBodyLines(selection: TerminalContextSelection): str
 export function buildTerminalContextBlock(
   contexts: ReadonlyArray<TerminalContextSelection>,
 ): string {
-  const normalizedContexts = contexts
-    .map((context) => normalizeTerminalContextSelection(context))
-    .filter((context): context is TerminalContextSelection => context !== null);
+  const normalizedContexts: TerminalContextSelection[] = [];
+  for (const context of contexts) {
+    const normalized = normalizeTerminalContextSelection(context);
+    if (normalized !== null) {
+      normalizedContexts.push(normalized);
+    }
+  }
   if (normalizedContexts.length === 0) {
     return "";
   }
@@ -228,54 +220,6 @@ export function appendTerminalContextsToPrompt(
   return trimmedPrompt.length > 0 ? `${trimmedPrompt}\n\n${contextBlock}` : contextBlock;
 }
 
-// Edits operate on visible bubble text. Reattach the hidden composer metadata
-// blocks from the original message so resend keeps the same references.
-export function appendOriginalComposerPromptBlocks(input: {
-  editedPrompt: string;
-  originalPrompt: string;
-  messageId?: MessageId;
-}): string {
-  let remainingPrompt = input.originalPrompt;
-  const originalBlocks: string[] = [];
-  if (input.messageId) {
-    const extractedBrowserAnnotations = extractTrailingBrowserAnnotations(
-      input.originalPrompt,
-      input.messageId,
-    );
-    if (extractedBrowserAnnotations.annotations.length > 0) {
-      remainingPrompt = extractedBrowserAnnotations.promptText;
-      originalBlocks.push(
-        buildBrowserAnnotationsPromptBlock(
-          extractedBrowserAnnotations.annotations,
-          input.messageId,
-        ),
-      );
-    }
-  }
-  let strippedBlock = true;
-  while (strippedBlock) {
-    strippedBlock = false;
-    for (const pattern of TRAILING_SERIALIZED_COMPOSER_BLOCK_PATTERNS) {
-      const match = pattern.exec(remainingPrompt);
-      const rawBlock = match?.[1];
-      if (!match || !rawBlock) {
-        continue;
-      }
-      originalBlocks.unshift(rawBlock.trim());
-      remainingPrompt = remainingPrompt.slice(0, match.index).replace(/\n+$/u, "");
-      strippedBlock = true;
-      break;
-    }
-  }
-
-  const editedPrompt = input.editedPrompt.trim();
-  if (originalBlocks.length === 0) {
-    return editedPrompt;
-  }
-  const serializedBlocks = originalBlocks.join("\n\n");
-  return editedPrompt.length > 0 ? `${editedPrompt}\n\n${serializedBlocks}` : serializedBlocks;
-}
-
 export function extractTrailingTerminalContexts(prompt: string): ExtractedTerminalContexts {
   const match = TRAILING_TERMINAL_CONTEXT_BLOCK_PATTERN.exec(prompt);
   if (!match) {
@@ -301,45 +245,19 @@ export function extractTrailingTerminalContexts(prompt: string): ExtractedTermin
   };
 }
 
-export function deriveDisplayedUserMessageState(
-  prompt: string,
-  options: DisplayedUserMessageOptions,
-): DisplayedUserMessageState {
-  // Trailing blocks are serialized in order: assistant selections, terminal
-  // contexts, file comments, pasted text, pull request contexts, then browser
-  // annotations (outermost). Strip them in reverse so each extractor sees its
-  // block at the end.
-  const extractedBrowserAnnotations =
-    options.messageId === undefined
-      ? { promptText: prompt, annotations: [] }
-      : extractTrailingBrowserAnnotations(prompt, options.messageId);
-  const extractedPullRequestContexts = extractTrailingPullRequestContexts(
-    extractedBrowserAnnotations.promptText,
-  );
-  const extractedPastedTexts = extractTrailingPastedTexts(extractedPullRequestContexts.promptText);
-  const extractedFileComments = extractTrailingFileComments(extractedPastedTexts.promptText);
-  const extractedContexts = extractTrailingTerminalContexts(extractedFileComments.promptText);
-  const extractedAssistantSelections = extractTrailingAssistantSelections(
-    extractedContexts.promptText,
-  );
-  const hidePrompt =
-    options.hideImageOnlyBootstrapPrompt === true &&
-    extractedAssistantSelections.promptText.trim() === IMAGE_ONLY_BOOTSTRAP_PROMPT;
+export function deriveDisplayedUserMessageState(prompt: string): DisplayedUserMessageState {
+  // Order matters: send-time appends `<terminal_context>` first, then
+  // `<element_context>` last. Strip element first so the (now-trailing)
+  // terminal block can be matched by `extractTrailingTerminalContexts`.
+  const extractedElement = extractTrailingElementContexts(prompt);
+  const extractedTerminal = extractTrailingTerminalContexts(extractedElement.promptText);
   return {
-    // Keep the internal bootstrap prompt hidden while still giving image-only
-    // user messages a visible bubble in the transcript.
-    visibleText: hidePrompt
-      ? IMAGE_ONLY_VISIBLE_PLACEHOLDER
-      : extractedAssistantSelections.promptText,
-    copyText: hidePrompt ? "" : extractedAssistantSelections.promptText,
-    contextCount: extractedContexts.contextCount,
-    previewTitle: extractedContexts.previewTitle,
-    contexts: extractedContexts.contexts,
-    assistantSelections: extractedAssistantSelections.selections,
-    fileComments: extractedFileComments.comments,
-    pastedTexts: extractedPastedTexts.pastedTexts,
-    pullRequestContexts: extractedPullRequestContexts.pullRequestContexts,
-    browserAnnotations: extractedBrowserAnnotations.annotations,
+    visibleText: extractedTerminal.promptText,
+    copyText: prompt,
+    contextCount: extractedTerminal.contextCount,
+    previewTitle: extractedTerminal.previewTitle,
+    contexts: extractedTerminal.contexts,
+    elementContexts: extractedElement.contexts,
   };
 }
 

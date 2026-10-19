@@ -1,0 +1,1151 @@
+import type { CompanyId } from "@spiritdevs/contracts/company";
+import {
+  CommandId,
+  MessageId,
+  ORCHESTRATION_V2_WS_METHODS,
+  OrchestrationV2CheckpointUnavailableError,
+  WS_METHODS,
+  type ModelSelection,
+  type OrchestrationV2Command,
+  type OrchestrationV2CreationSource,
+  type PlanId,
+  type PendingChatAttachment,
+  type ProjectFaviconPath,
+  type ProjectId,
+  type ProjectScript,
+  type ProviderApprovalDecision,
+  type ProviderInteractionMode,
+  type ProviderUserInputAnswers,
+  type RunId,
+  type RuntimeMode,
+  type RuntimeRequestId,
+  type ThreadLocation,
+  type ThreadId,
+  type ThreadEnvMode,
+  type UploadChatAttachment,
+  UserInputAttachments,
+} from "@spiritdevs/contracts";
+import * as Crypto from "effect/Crypto";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+
+import { request } from "../rpc/client.ts";
+
+interface CommandMetadata {
+  readonly commandId?: CommandId;
+  readonly createdAt?: string;
+  readonly creationSource?: OrchestrationV2CreationSource;
+}
+
+export interface CreateProjectInput extends CommandMetadata {
+  readonly projectId: ProjectId;
+  readonly title: string;
+  readonly workspaceRoot: string | null;
+  readonly createWorkspaceRootIfMissing?: boolean;
+  readonly defaultModelSelection?: ModelSelection | null;
+  readonly scripts?: ReadonlyArray<ProjectScript>;
+}
+
+export interface UpdateProjectInput extends CommandMetadata {
+  readonly projectId: ProjectId;
+  readonly title?: string;
+  readonly titleIsCustom?: boolean;
+  readonly workspaceRoot?: string;
+  readonly useInternalWorkspace?: boolean;
+  readonly copyInternalWorkspaceFiles?: boolean;
+  readonly disconnectInternalWorkspace?: boolean;
+  readonly createWorkspaceRootIfMissing?: boolean;
+  readonly defaultModelSelection?: ModelSelection | null;
+  readonly defaultThreadEnvMode?: ThreadEnvMode | null;
+  readonly faviconPath?: ProjectFaviconPath | null;
+  readonly scripts?: ReadonlyArray<ProjectScript>;
+}
+
+export interface DeleteProjectInput extends CommandMetadata {
+  readonly projectId: ProjectId;
+  readonly force?: boolean;
+}
+
+export interface CreateThreadInput extends CommandMetadata {
+  readonly threadId: ThreadId;
+  readonly projectId: ProjectId | null;
+  readonly temporary?: boolean;
+  readonly conversationCompanyId?: CompanyId | null;
+  readonly title: string;
+  readonly modelSelection: ModelSelection;
+  readonly runtimeMode: RuntimeMode;
+  readonly interactionMode: ProviderInteractionMode;
+  readonly locations?: ReadonlyArray<ThreadLocation>;
+  readonly branch: string | null;
+  readonly worktreePath: string | null;
+}
+
+export interface ThreadCommandInput extends CommandMetadata {
+  readonly threadId: ThreadId;
+}
+
+export interface DeleteThreadInput extends ThreadCommandInput {
+  readonly replaceableInitialThread?: { readonly messageId: MessageId; readonly runId: RunId };
+}
+export type ArchiveThreadInput = ThreadCommandInput;
+export type UnarchiveThreadInput = ThreadCommandInput;
+export interface SettleThreadInput extends ThreadCommandInput {
+  readonly force?: boolean;
+  readonly discardChanges?: boolean;
+}
+
+export interface AttachThreadProjectInput extends ThreadCommandInput {
+  readonly projectId: ProjectId;
+}
+
+export interface SetThreadTemporaryInput extends ThreadCommandInput {
+  readonly temporary: boolean;
+  readonly keep?: boolean;
+}
+
+export interface SettleAfterCompletionInput extends ThreadCommandInput {
+  readonly enabled: boolean;
+}
+
+export interface UnsettleThreadInput extends ThreadCommandInput {
+  readonly reason: "user";
+}
+
+export interface PinThreadInput extends ThreadCommandInput {
+  /** Initial slot in the user-arranged pinned order; omit to pin keyless. */
+  readonly orderKey?: string;
+}
+export type UnpinThreadInput = ThreadCommandInput;
+
+export interface ReorderPinnedThreadInput extends ThreadCommandInput {
+  /** Fractional-index key that sorts between the drop position's neighbors. */
+  readonly orderKey: string;
+}
+
+export interface SnoozeThreadInput extends ThreadCommandInput {
+  readonly snoozedUntil: string;
+}
+
+export interface UnsnoozeThreadInput extends ThreadCommandInput {
+  readonly reason: "user";
+}
+
+export interface VisitThreadInput extends ThreadCommandInput {
+  /** Watermark of the thread state the viewer has seen (ISO timestamp). */
+  readonly visitedAt: string;
+}
+
+export type MarkThreadUnreadInput = ThreadCommandInput;
+
+export interface RequestWorkspaceMoveInput extends ThreadCommandInput {
+  readonly stopTerminals: boolean;
+}
+
+export interface AttachPullRequestInput extends ThreadCommandInput {
+  readonly cwd: string;
+  readonly reference: string;
+}
+
+export interface DetachPullRequestInput extends ThreadCommandInput {
+  readonly pullRequest: { readonly number: number; readonly url: string };
+}
+
+/** Ask the server to take the Preview browser away from the agent. The
+    allocated command id becomes the takeover id every later command fences on. */
+export type RequestBrowserTakeoverInput = ThreadCommandInput;
+
+/** Continue (or retry continuing) the thread after a takeover. */
+export interface ResolveBrowserTakeoverInput extends ThreadCommandInput {
+  readonly takeoverId: CommandId;
+}
+
+export interface UpdateThreadMetadataInput extends ThreadCommandInput {
+  readonly title?: string;
+  readonly modelSelection?: ModelSelection;
+  readonly branch?: string | null;
+  readonly worktreePath?: string | null;
+  /** Kick off an async title regeneration for the thread. */
+  readonly regenerateTitle?: boolean;
+}
+
+export interface SetThreadRuntimeModeInput extends ThreadCommandInput {
+  readonly runtimeMode: RuntimeMode;
+}
+
+export interface SetThreadInteractionModeInput extends ThreadCommandInput {
+  readonly interactionMode: ProviderInteractionMode;
+}
+
+interface StartThreadBootstrap {
+  readonly createThread?: {
+    readonly projectId: ProjectId | null;
+    readonly temporary?: boolean;
+    readonly conversationCompanyId?: CompanyId | null;
+    readonly title: string;
+    readonly modelSelection: ModelSelection;
+    readonly runtimeMode: RuntimeMode;
+    readonly interactionMode: ProviderInteractionMode;
+    readonly locations?: ReadonlyArray<ThreadLocation>;
+    readonly branch: string | null;
+    readonly worktreePath: string | null;
+    readonly createdAt: string;
+  };
+  readonly prepareWorktree?: {
+    readonly projectCwd: string;
+    readonly baseBranch: string;
+    readonly branch?: string;
+    readonly startFromOrigin?: boolean;
+  };
+  readonly runSetupScript?: boolean;
+}
+
+export interface StartThreadTurnInput extends ThreadCommandInput {
+  /** Root checkout metadata to persist before this turn runs. */
+  readonly branch?: string | null;
+  /** Local notification after preparation, immediately before a launch request can reach the server. */
+  readonly onLaunchDispatch?: () => void;
+  readonly message: {
+    readonly messageId: MessageId;
+    readonly role: "user";
+    readonly text: string;
+    readonly attachments: ReadonlyArray<PendingChatAttachment | UploadChatAttachment>;
+  };
+  readonly modelSelection?: ModelSelection;
+  readonly titleSeed?: string;
+  readonly runtimeMode: RuntimeMode;
+  readonly interactionMode: ProviderInteractionMode;
+  readonly bootstrap?: StartThreadBootstrap;
+  readonly sourceProposedPlan?: { readonly threadId: ThreadId; readonly planId: PlanId };
+  readonly dispatchMode?: "auto" | "queue" | "steer" | "restart";
+  /** The chat switch; the server also reads a user's `/computer-use` from the text. */
+  readonly enableComputerControl?: boolean;
+  /** The thread's Computer revocation generation the intent was formed against. */
+  readonly computerControlGeneration?: number;
+}
+
+export interface InterruptThreadTurnInput extends ThreadCommandInput {
+  readonly runId?: RunId;
+  /** Temporary caller compatibility while UI naming moves from turns to runs. */
+  readonly turnId?: string;
+}
+
+export interface EditAndRestartMessageInput extends ThreadCommandInput {
+  readonly messageId: MessageId;
+  readonly replacementMessageId?: MessageId;
+  readonly text: string;
+  readonly enableComputerControl?: boolean;
+  readonly computerControlGeneration?: number;
+}
+
+export interface RespondToThreadApprovalInput extends ThreadCommandInput {
+  readonly requestId: RuntimeRequestId;
+  readonly decision: ProviderApprovalDecision;
+}
+
+export interface RespondToThreadUserInputInput extends ThreadCommandInput {
+  readonly requestId: RuntimeRequestId;
+  readonly answers: ProviderUserInputAnswers;
+  readonly attachmentsByQuestionId?: Readonly<
+    Record<string, ReadonlyArray<PendingChatAttachment | UploadChatAttachment>>
+  >;
+}
+
+export interface RevertThreadCheckpointInput extends ThreadCommandInput {
+  readonly checkpointId?: string;
+  readonly scopeId?: string;
+  readonly turnCount?: number;
+}
+
+export type StopThreadSessionInput = ThreadCommandInput;
+
+export interface ForkThreadFromRunInput extends CommandMetadata {
+  readonly sourceThreadId: ThreadId;
+  readonly targetThreadId: ThreadId;
+  readonly runId: RunId;
+  readonly forkKind?: "manual" | "side_chat";
+  readonly title?: string;
+}
+
+export interface LaunchThreadContinuationInput extends CommandMetadata {
+  readonly sourceThreadId: ThreadId;
+  readonly sourceRunId: RunId;
+  readonly targetThreadId: ThreadId;
+  readonly title?: string;
+  readonly modelSelection: ModelSelection;
+  readonly runtimeMode: RuntimeMode;
+  readonly interactionMode: ProviderInteractionMode;
+  readonly workspaceTarget: "current" | "new-worktree";
+}
+
+export interface MergeThreadBackInput extends CommandMetadata {
+  readonly sourceThreadId: ThreadId;
+  readonly targetThreadId: ThreadId;
+  readonly runId: RunId;
+}
+
+export interface ReorderQueuedRunInput extends ThreadCommandInput {
+  readonly runId: RunId;
+  readonly beforeRunId: RunId | null;
+}
+
+export interface PromoteQueuedRunInput extends ThreadCommandInput {
+  readonly queuedRunId: RunId;
+  readonly targetRunId: RunId;
+}
+
+export interface ControlWorkspacePreparationInput extends ThreadCommandInput {
+  readonly runId: RunId;
+  readonly action: "cancel" | "work_locally" | "retry";
+}
+
+export interface CancelQueuedRunInput extends ThreadCommandInput {
+  readonly runId: RunId;
+}
+
+export interface EditQueuedRunInput extends ThreadCommandInput {
+  readonly runId: RunId;
+  readonly text: string;
+}
+
+const allocateCommandId = Effect.fn("EnvironmentCommands.allocateCommandId")(function* (
+  input: CommandMetadata,
+) {
+  if (input.commandId !== undefined) return input.commandId;
+  const crypto = yield* Crypto.Crypto;
+  return CommandId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie));
+});
+
+const dispatch = (command: OrchestrationV2Command) =>
+  request(ORCHESTRATION_V2_WS_METHODS.dispatchCommand, command);
+
+const getProjection = (threadId: ThreadId) =>
+  request(ORCHESTRATION_V2_WS_METHODS.getThreadProjection, { threadId });
+
+const persistAttachments = Effect.fn("EnvironmentCommands.persistAttachments")(function* (
+  threadId: ThreadId,
+  messageId: MessageId,
+  attachments: ReadonlyArray<PendingChatAttachment | UploadChatAttachment>,
+) {
+  if (attachments.length === 0) return [];
+  const result = yield* request(WS_METHODS.assetsPersistChatAttachments, {
+    threadId,
+    messageId,
+    attachments,
+  });
+  return result.attachments;
+});
+
+const mutateProject = Effect.fn("EnvironmentCommands.mutateProject")(function* (
+  mutation:
+    | {
+        readonly type: "project.create";
+        readonly commandId: CommandId;
+        readonly projectId: ProjectId;
+        readonly title: string;
+        readonly workspaceRoot: string | null;
+        readonly createWorkspaceRootIfMissing?: boolean;
+        readonly defaultModelSelection?: ModelSelection | null;
+        readonly scripts?: ReadonlyArray<ProjectScript>;
+      }
+    | {
+        readonly type: "project.update";
+        readonly commandId: CommandId;
+        readonly projectId: ProjectId;
+        readonly title?: string;
+        readonly workspaceRoot?: string;
+        readonly useInternalWorkspace?: boolean;
+        readonly copyInternalWorkspaceFiles?: boolean;
+        readonly disconnectInternalWorkspace?: boolean;
+        readonly createWorkspaceRootIfMissing?: boolean;
+        readonly defaultModelSelection?: ModelSelection | null;
+        readonly defaultThreadEnvMode?: ThreadEnvMode | null;
+        readonly scripts?: ReadonlyArray<ProjectScript>;
+      }
+    | {
+        readonly type: "project.delete";
+        readonly commandId: CommandId;
+        readonly projectId: ProjectId;
+        readonly force?: boolean;
+      },
+) {
+  return yield* request(WS_METHODS.projectsMutate, mutation);
+});
+
+export const createProject = Effect.fn("EnvironmentCommands.createProject")(function* (
+  input: CreateProjectInput,
+) {
+  return yield* mutateProject({
+    type: "project.create",
+    commandId: yield* allocateCommandId(input),
+    projectId: input.projectId,
+    title: input.title,
+    workspaceRoot: input.workspaceRoot,
+    ...(input.createWorkspaceRootIfMissing === undefined
+      ? {}
+      : { createWorkspaceRootIfMissing: input.createWorkspaceRootIfMissing }),
+    ...(input.defaultModelSelection === undefined
+      ? {}
+      : { defaultModelSelection: input.defaultModelSelection }),
+    ...(input.scripts === undefined ? {} : { scripts: input.scripts }),
+  });
+});
+
+export const updateProject = Effect.fn("EnvironmentCommands.updateProject")(function* (
+  input: UpdateProjectInput,
+) {
+  return yield* mutateProject({
+    type: "project.update",
+    commandId: yield* allocateCommandId(input),
+    projectId: input.projectId,
+    ...(input.title === undefined ? {} : { title: input.title }),
+    ...(input.titleIsCustom === undefined ? {} : { titleIsCustom: input.titleIsCustom }),
+    ...(input.workspaceRoot === undefined ? {} : { workspaceRoot: input.workspaceRoot }),
+    ...(input.useInternalWorkspace === undefined
+      ? {}
+      : { useInternalWorkspace: input.useInternalWorkspace }),
+    ...(input.copyInternalWorkspaceFiles === undefined
+      ? {}
+      : { copyInternalWorkspaceFiles: input.copyInternalWorkspaceFiles }),
+    ...(input.disconnectInternalWorkspace === undefined
+      ? {}
+      : { disconnectInternalWorkspace: input.disconnectInternalWorkspace }),
+    ...(input.createWorkspaceRootIfMissing === undefined
+      ? {}
+      : { createWorkspaceRootIfMissing: input.createWorkspaceRootIfMissing }),
+    ...(input.defaultModelSelection === undefined
+      ? {}
+      : { defaultModelSelection: input.defaultModelSelection }),
+    ...(input.defaultThreadEnvMode === undefined
+      ? {}
+      : { defaultThreadEnvMode: input.defaultThreadEnvMode }),
+    ...(input.faviconPath === undefined ? {} : { faviconPath: input.faviconPath }),
+    ...(input.scripts === undefined ? {} : { scripts: input.scripts }),
+  });
+});
+
+export const deleteProject = Effect.fn("EnvironmentCommands.deleteProject")(function* (
+  input: DeleteProjectInput,
+) {
+  return yield* mutateProject({
+    type: "project.delete",
+    commandId: yield* allocateCommandId(input),
+    projectId: input.projectId,
+    ...(input.force === undefined ? {} : { force: input.force }),
+  });
+});
+
+export const createThread = Effect.fn("EnvironmentCommands.createThread")(function* (
+  input: CreateThreadInput,
+) {
+  return yield* dispatch({
+    type: "thread.create",
+    commandId: yield* allocateCommandId(input),
+    createdBy: "user",
+    creationSource: input.creationSource ?? "web",
+    threadId: input.threadId,
+    projectId: input.projectId,
+    ...(input.temporary === undefined ? {} : { temporary: input.temporary }),
+    ...(input.conversationCompanyId === undefined
+      ? {}
+      : { conversationCompanyId: input.conversationCompanyId }),
+    title: input.title,
+    modelSelection: input.modelSelection,
+    runtimeMode: input.runtimeMode,
+    interactionMode: input.interactionMode,
+    ...(input.locations === undefined ? {} : { locations: input.locations }),
+    branch: input.branch,
+    worktreePath: input.worktreePath,
+  });
+});
+
+function simpleThreadCommand(
+  type:
+    | "thread.delete"
+    | "thread.archive"
+    | "thread.unarchive"
+    | "thread.settle"
+    | "thread.pin"
+    | "thread.unpin",
+  input: ThreadCommandInput,
+) {
+  return allocateCommandId(input).pipe(
+    Effect.flatMap((commandId) => dispatch({ type, commandId, threadId: input.threadId })),
+  );
+}
+
+export const deleteThread = Effect.fn("EnvironmentCommands.deleteThread")(function* (
+  input: DeleteThreadInput,
+) {
+  return yield* dispatch({
+    type: "thread.delete",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    ...(input.replaceableInitialThread === undefined
+      ? {}
+      : { replaceableInitialThread: input.replaceableInitialThread }),
+  });
+});
+
+export const archiveThread = Effect.fn("EnvironmentCommands.archiveThread")(function* (
+  input: ArchiveThreadInput,
+) {
+  return yield* simpleThreadCommand("thread.archive", input);
+});
+
+export const unarchiveThread = Effect.fn("EnvironmentCommands.unarchiveThread")(function* (
+  input: UnarchiveThreadInput,
+) {
+  return yield* simpleThreadCommand("thread.unarchive", input);
+});
+
+export const settleThread = Effect.fn("EnvironmentCommands.settleThread")(function* (
+  input: SettleThreadInput,
+) {
+  return yield* dispatch({
+    type: "thread.settle",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    ...(input.force === undefined ? {} : { force: input.force }),
+    ...(input.discardChanges === undefined ? {} : { discardChanges: input.discardChanges }),
+  });
+});
+
+export const attachThreadProject = Effect.fn("EnvironmentCommands.attachThreadProject")(function* (
+  input: AttachThreadProjectInput,
+) {
+  return yield* dispatch({
+    type: "thread.project.attach",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    projectId: input.projectId,
+  });
+});
+
+export const setThreadTemporary = Effect.fn("EnvironmentCommands.setThreadTemporary")(function* (
+  input: SetThreadTemporaryInput,
+) {
+  return yield* dispatch({
+    type: "thread.temporary.set",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    temporary: input.temporary,
+    ...(input.keep === undefined ? {} : { keep: input.keep }),
+  });
+});
+
+export const attachPullRequest = Effect.fn("EnvironmentCommands.attachPullRequest")(function* (
+  input: AttachPullRequestInput,
+) {
+  const resolved = yield* request(WS_METHODS.gitResolvePullRequest, {
+    cwd: input.cwd,
+    reference: input.reference,
+  });
+  yield* dispatch({
+    type: "thread.source-control.record",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    committed: false,
+    pullRequestAction: "attached",
+    pullRequest: {
+      number: resolved.pullRequest.number,
+      url: resolved.pullRequest.url,
+    },
+  });
+  return resolved.pullRequest;
+});
+
+export const detachPullRequest = Effect.fn("EnvironmentCommands.detachPullRequest")(function* (
+  input: DetachPullRequestInput,
+) {
+  yield* dispatch({
+    type: "thread.source-control.record",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    committed: false,
+    pullRequestAction: "detached",
+    pullRequest: input.pullRequest,
+  });
+});
+
+export const setSettleAfterCompletion = Effect.fn("EnvironmentCommands.setSettleAfterCompletion")(
+  function* (input: SettleAfterCompletionInput) {
+    return yield* dispatch({
+      type: "thread.settle-after-completion.set",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+      enabled: input.enabled,
+    });
+  },
+);
+
+export const pinThread = Effect.fn("EnvironmentCommands.pinThread")(function* (
+  input: PinThreadInput,
+) {
+  const commandId = yield* allocateCommandId(input);
+  return yield* dispatch({
+    type: "thread.pin",
+    commandId,
+    threadId: input.threadId,
+    ...(input.orderKey === undefined ? {} : { orderKey: input.orderKey }),
+  });
+});
+
+export const reorderPinnedThread = Effect.fn("EnvironmentCommands.reorderPinnedThread")(function* (
+  input: ReorderPinnedThreadInput,
+) {
+  const commandId = yield* allocateCommandId(input);
+  return yield* dispatch({
+    type: "thread.pin.reorder",
+    commandId,
+    threadId: input.threadId,
+    orderKey: input.orderKey,
+  });
+});
+
+export const unpinThread = Effect.fn("EnvironmentCommands.unpinThread")(function* (
+  input: UnpinThreadInput,
+) {
+  return yield* simpleThreadCommand("thread.unpin", input);
+});
+
+export const unsettleThread = Effect.fn("EnvironmentCommands.unsettleThread")(function* (
+  input: UnsettleThreadInput,
+) {
+  return yield* dispatch({
+    type: "thread.unsettle",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    reason: input.reason,
+  });
+});
+
+export const snoozeThread = Effect.fn("EnvironmentCommands.snoozeThread")(function* (
+  input: SnoozeThreadInput,
+) {
+  return yield* dispatch({
+    type: "thread.snooze",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    snoozedUntil: input.snoozedUntil,
+  });
+});
+
+export const unsnoozeThread = Effect.fn("EnvironmentCommands.unsnoozeThread")(function* (
+  input: UnsnoozeThreadInput,
+) {
+  return yield* dispatch({
+    type: "thread.unsnooze",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    reason: input.reason,
+  });
+});
+
+export const requestBrowserTakeover = Effect.fn("EnvironmentCommands.requestBrowserTakeover")(
+  function* (input: RequestBrowserTakeoverInput) {
+    return yield* dispatch({
+      type: "thread.browser-takeover.request",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+    });
+  },
+);
+
+export const proceedBrowserTakeover = Effect.fn("EnvironmentCommands.proceedBrowserTakeover")(
+  function* (input: ResolveBrowserTakeoverInput) {
+    return yield* dispatch({
+      type: "thread.browser-takeover.proceed",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+      takeoverId: input.takeoverId,
+    });
+  },
+);
+
+export const releaseBrowserTakeover = Effect.fn("EnvironmentCommands.releaseBrowserTakeover")(
+  function* (input: ResolveBrowserTakeoverInput) {
+    return yield* dispatch({
+      type: "thread.browser-takeover.release",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+      takeoverId: input.takeoverId,
+    });
+  },
+);
+
+export const visitThread = Effect.fn("EnvironmentCommands.visitThread")(function* (
+  input: VisitThreadInput,
+) {
+  return yield* dispatch({
+    type: "thread.visit",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    visitedAt: input.visitedAt,
+  });
+});
+
+export const markThreadUnread = Effect.fn("EnvironmentCommands.markThreadUnread")(function* (
+  input: MarkThreadUnreadInput,
+) {
+  return yield* dispatch({
+    type: "thread.mark-unread",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+  });
+});
+
+export const requestWorkspaceMove = Effect.fn("EnvironmentCommands.requestWorkspaceMove")(
+  function* (input: RequestWorkspaceMoveInput) {
+    return yield* dispatch({
+      type: "thread.workspace-move.request",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+      stopTerminals: input.stopTerminals,
+    });
+  },
+);
+
+export const updateThreadMetadata = Effect.fn("EnvironmentCommands.updateThreadMetadata")(
+  function* (input: UpdateThreadMetadataInput) {
+    const commandId = yield* allocateCommandId(input);
+    let result = null;
+    if (
+      input.title !== undefined ||
+      input.branch !== undefined ||
+      input.worktreePath !== undefined ||
+      input.regenerateTitle !== undefined
+    ) {
+      result = yield* dispatch({
+        type: "thread.metadata.update",
+        commandId,
+        threadId: input.threadId,
+        ...(input.title === undefined ? {} : { title: input.title }),
+        ...(input.branch === undefined ? {} : { branch: input.branch }),
+        ...(input.worktreePath === undefined ? {} : { worktreePath: input.worktreePath }),
+        ...(input.regenerateTitle === undefined ? {} : { regenerateTitle: input.regenerateTitle }),
+      });
+    }
+    if (input.modelSelection !== undefined) {
+      const projection = yield* getProjection(input.threadId);
+      const type =
+        projection.thread.providerInstanceId === input.modelSelection.instanceId
+          ? ("thread.model-selection.set" as const)
+          : ("provider.switch" as const);
+      result = yield* dispatch({
+        type,
+        commandId: result === null ? commandId : CommandId.make(`${commandId}:model-selection`),
+        threadId: input.threadId,
+        modelSelection: input.modelSelection,
+      });
+    }
+    return result ?? { sequence: 0 };
+  },
+);
+
+export const setThreadRuntimeMode = Effect.fn("EnvironmentCommands.setThreadRuntimeMode")(
+  function* (input: SetThreadRuntimeModeInput) {
+    return yield* dispatch({
+      type: "thread.runtime-mode.set",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+      runtimeMode: input.runtimeMode,
+    });
+  },
+);
+
+export const setThreadInteractionMode = Effect.fn("EnvironmentCommands.setThreadInteractionMode")(
+  function* (input: SetThreadInteractionModeInput) {
+    return yield* dispatch({
+      type: "thread.interaction-mode.set",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+      interactionMode: input.interactionMode,
+    });
+  },
+);
+
+/** The optional Computer intent fields `message.dispatch` and edit-and-restart carry. */
+export function computerControlFields(input: {
+  readonly enableComputerControl?: boolean;
+  readonly computerControlGeneration?: number;
+}): { enableComputerControl?: boolean; computerControlGeneration?: number } {
+  return {
+    ...(input.enableComputerControl === undefined
+      ? {}
+      : { enableComputerControl: input.enableComputerControl }),
+    ...(input.computerControlGeneration === undefined
+      ? {}
+      : { computerControlGeneration: input.computerControlGeneration }),
+  };
+}
+
+export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(function* (
+  input: StartThreadTurnInput,
+) {
+  const commandId = yield* allocateCommandId(input);
+  const attachments = yield* persistAttachments(
+    input.threadId,
+    input.message.messageId,
+    input.message.attachments,
+  );
+  const bootstrap = input.bootstrap?.createThread;
+  const prepareWorktree = input.bootstrap?.prepareWorktree;
+  if (bootstrap !== undefined || prepareWorktree !== undefined) {
+    const existingProjection =
+      bootstrap === undefined ? yield* getProjection(input.threadId) : null;
+    const thread = bootstrap ?? existingProjection!.thread;
+    const workspaceStrategy =
+      prepareWorktree !== undefined
+        ? {
+            type: "worktree" as const,
+            baseRef: prepareWorktree.baseBranch,
+            ...(prepareWorktree.branch === undefined ? {} : { branch: prepareWorktree.branch }),
+            ...(prepareWorktree.startFromOrigin === undefined
+              ? {}
+              : { startFromOrigin: prepareWorktree.startFromOrigin }),
+          }
+        : bootstrap?.worktreePath
+          ? {
+              type: "existing_worktree" as const,
+              worktreePath: bootstrap.worktreePath,
+              ...(bootstrap.branch === null ? {} : { branch: bootstrap.branch }),
+            }
+          : {
+              type: "root" as const,
+              ...(bootstrap?.branch === null || bootstrap?.branch === undefined
+                ? {}
+                : { branch: bootstrap.branch }),
+            };
+    if (input.onLaunchDispatch) yield* Effect.sync(input.onLaunchDispatch);
+    return yield* request(ORCHESTRATION_V2_WS_METHODS.launchThread, {
+      commandId,
+      creationSource: input.creationSource ?? "web",
+      threadId: input.threadId,
+      ...(bootstrap === undefined ? { reuseExistingThread: true } : {}),
+      projectId: thread.projectId,
+      ...(thread.temporary === undefined ? {} : { temporary: thread.temporary }),
+      ...(thread.conversationCompanyId === undefined
+        ? {}
+        : { conversationCompanyId: thread.conversationCompanyId }),
+      title: input.titleSeed ?? thread.title,
+      generateTitle: input.titleSeed !== undefined,
+      modelSelection: input.modelSelection ?? thread.modelSelection,
+      runtimeMode: input.runtimeMode,
+      interactionMode: input.interactionMode,
+      ...(bootstrap?.locations === undefined ? {} : { locations: bootstrap.locations }),
+      workspaceStrategy,
+      initialMessage: {
+        messageId: input.message.messageId,
+        text: input.message.text,
+        attachments,
+        ...computerControlFields(input),
+      },
+    });
+  }
+
+  const projection = yield* getProjection(input.threadId);
+  const activeRun = projection.runs.findLast(
+    (run) =>
+      run.status === "preparing" ||
+      run.status === "starting" ||
+      run.status === "running" ||
+      run.status === "waiting",
+  );
+  const requestedMode = input.dispatchMode ?? "auto";
+  const activeProviderThread =
+    activeRun === undefined
+      ? undefined
+      : projection.providerThreads.find((thread) => thread.id === activeRun.providerThreadId);
+  const activeProviderSession =
+    activeProviderThread?.providerSessionId === null ||
+    activeProviderThread?.providerSessionId === undefined
+      ? undefined
+      : projection.providerSessions.find(
+          (session) => session.id === activeProviderThread.providerSessionId,
+        );
+  const turnCapabilities = activeProviderSession?.capabilities.turns;
+  const dispatchMode =
+    activeRun === undefined
+      ? ({ type: "start_immediately" } as const)
+      : requestedMode === "steer"
+        ? ({ type: "steer_active", targetRunId: activeRun.id } as const)
+        : requestedMode === "restart"
+          ? ({ type: "restart_active", targetRunId: activeRun.id } as const)
+          : requestedMode === "queue"
+            ? ({ type: "queue_after_active" } as const)
+            : turnCapabilities?.supportsActiveSteering === true
+              ? ({ type: "steer_active", targetRunId: activeRun.id } as const)
+              : turnCapabilities?.supportsQueuedMessages === true
+                ? ({ type: "queue_after_active" } as const)
+                : turnCapabilities?.supportsSteeringByInterruptRestart === true
+                  ? ({ type: "restart_active", targetRunId: activeRun.id } as const)
+                  : ({ type: "queue_after_active" } as const);
+  return yield* dispatch({
+    type: "message.dispatch",
+    ...(input.branch === undefined ? {} : { branch: input.branch }),
+    runtimeMode: input.runtimeMode,
+    interactionMode: input.interactionMode,
+    commandId,
+    createdBy: "user",
+    creationSource: input.creationSource ?? "web",
+    threadId: input.threadId,
+    messageId: input.message.messageId,
+    text: input.message.text,
+    attachments,
+    ...(input.titleSeed === undefined || projection.messages.length > 0
+      ? {}
+      : { titleSeed: input.titleSeed }),
+    ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
+    ...(input.sourceProposedPlan === undefined ? {} : { sourcePlanRef: input.sourceProposedPlan }),
+    ...computerControlFields(input),
+    dispatchMode,
+  });
+});
+
+export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThreadTurn")(function* (
+  input: InterruptThreadTurnInput,
+) {
+  const projection = yield* getProjection(input.threadId);
+  const runId =
+    input.runId ??
+    (input.turnId as RunId | undefined) ??
+    projection.runs.findLast(
+      (run) =>
+        run.status === "preparing" ||
+        run.status === "starting" ||
+        run.status === "running" ||
+        run.status === "waiting",
+    )?.id;
+  if (runId === undefined) return { sequence: 0 };
+  return yield* dispatch({
+    type: "run.interrupt",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    runId,
+  });
+});
+
+export const editAndRestartMessage = Effect.fn("EnvironmentCommands.editAndRestartMessage")(
+  function* (input: EditAndRestartMessageInput) {
+    const crypto = yield* Crypto.Crypto;
+    const replacementMessageId =
+      input.replacementMessageId ?? MessageId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie));
+    return yield* dispatch({
+      type: "message.edit-and-restart",
+      commandId: yield* allocateCommandId(input),
+      createdBy: "user",
+      creationSource: input.creationSource ?? "web",
+      threadId: input.threadId,
+      messageId: input.messageId,
+      replacementMessageId,
+      text: input.text,
+      ...computerControlFields(input),
+    });
+  },
+);
+
+export const respondToThreadApproval = Effect.fn("EnvironmentCommands.respondToThreadApproval")(
+  function* (input: RespondToThreadApprovalInput) {
+    return yield* dispatch({
+      type: "runtime-request.respond",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+      requestId: input.requestId,
+      decision: input.decision,
+    });
+  },
+);
+
+const decodeQuestionAttachments = Schema.decodeUnknownEffect(UserInputAttachments);
+
+export const respondToThreadUserInput = Effect.fn("EnvironmentCommands.respondToThreadUserInput")(
+  function* (input: RespondToThreadUserInputInput) {
+    const commandId = yield* allocateCommandId(input);
+    const entries = Object.entries(input.attachmentsByQuestionId ?? {});
+    const saved = yield* persistAttachments(
+      input.threadId,
+      MessageId.make(`question:${commandId}`),
+      entries.flatMap(([, attachments]) => attachments),
+    );
+    let offset = 0;
+    const attachmentsByQuestionId = yield* decodeQuestionAttachments(
+      Object.fromEntries(
+        entries.map(([id, attachments]) => {
+          const claimed = saved.slice(offset, offset + attachments.length);
+          offset += attachments.length;
+          return [id, claimed];
+        }),
+      ),
+    );
+    return yield* dispatch({
+      type: "runtime-request.respond",
+      commandId,
+      threadId: input.threadId,
+      requestId: input.requestId,
+      answers: input.answers,
+      ...(entries.length > 0 ? { attachmentsByQuestionId } : {}),
+    });
+  },
+);
+
+export const revertThreadCheckpoint = Effect.fn("EnvironmentCommands.revertThreadCheckpoint")(
+  function* (input: RevertThreadCheckpointInput) {
+    const projection = yield* getProjection(input.threadId);
+    const firstRun = projection.runs.find((run) => run.ordinal === 1);
+    const firstRunRootScope = projection.checkpointScopes.find(
+      (scope) => scope.runId === firstRun?.id && scope.kind === "root_run",
+    );
+    const checkpoint =
+      projection.checkpoints.find(
+        (candidate) => candidate.id === input.checkpointId && candidate.scopeId === input.scopeId,
+      ) ??
+      projection.checkpoints.findLast((candidate) =>
+        input.turnCount === 0
+          ? firstRunRootScope !== undefined &&
+            candidate.scopeId === firstRunRootScope.id &&
+            candidate.ordinalWithinScope === 0 &&
+            candidate.appRunOrdinal === null
+          : candidate.appRunOrdinal === input.turnCount,
+      );
+    if (checkpoint === undefined || checkpoint.status !== "ready") {
+      const target =
+        input.checkpointId === undefined
+          ? `run ordinal ${input.turnCount ?? "unknown"}`
+          : `checkpoint ${input.checkpointId}`;
+      return yield* new OrchestrationV2CheckpointUnavailableError({
+        threadId: input.threadId,
+        target,
+      });
+    }
+    return yield* dispatch({
+      type: "checkpoint.rollback",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+      scopeId: checkpoint.scopeId,
+      checkpointId: checkpoint.id,
+    });
+  },
+);
+
+export const stopThreadSession = Effect.fn("EnvironmentCommands.stopThreadSession")(function* (
+  input: StopThreadSessionInput,
+) {
+  const projection = yield* getProjection(input.threadId);
+  const commandId = yield* allocateCommandId(input);
+  let result = { sequence: 0 };
+  for (const session of projection.providerSessions) {
+    result = yield* dispatch({
+      type: "provider-session.detach",
+      commandId: CommandId.make(`${commandId}:detach:${session.id}`),
+      threadId: input.threadId,
+      providerSessionId: session.id,
+      reason: "client-requested",
+    });
+  }
+  return result;
+});
+
+export const forkThreadFromRun = Effect.fn("EnvironmentCommands.forkThreadFromRun")(function* (
+  input: ForkThreadFromRunInput,
+) {
+  return yield* dispatch({
+    type: "thread.fork",
+    commandId: yield* allocateCommandId(input),
+    createdBy: "user",
+    creationSource: input.creationSource ?? "web",
+    sourceThreadId: input.sourceThreadId,
+    targetThreadId: input.targetThreadId,
+    sourcePoint: { type: "run", runId: input.runId },
+    ...(input.forkKind === undefined ? {} : { forkKind: input.forkKind }),
+    ...(input.title === undefined ? {} : { title: input.title }),
+  });
+});
+
+export const launchThreadContinuation = Effect.fn("EnvironmentCommands.launchThreadContinuation")(
+  function* (input: LaunchThreadContinuationInput) {
+    return yield* request(ORCHESTRATION_V2_WS_METHODS.launchContinuation, {
+      commandId: yield* allocateCommandId(input),
+      creationSource: input.creationSource ?? "web",
+      sourceThreadId: input.sourceThreadId,
+      sourceRunId: input.sourceRunId,
+      targetThreadId: input.targetThreadId,
+      ...(input.title === undefined ? {} : { title: input.title }),
+      modelSelection: input.modelSelection,
+      runtimeMode: input.runtimeMode,
+      interactionMode: input.interactionMode,
+      workspaceTarget: input.workspaceTarget,
+    });
+  },
+);
+
+export const mergeThreadBack = Effect.fn("EnvironmentCommands.mergeThreadBack")(function* (
+  input: MergeThreadBackInput,
+) {
+  return yield* dispatch({
+    type: "thread.merge_back",
+    commandId: yield* allocateCommandId(input),
+    createdBy: "user",
+    creationSource: input.creationSource ?? "web",
+    sourceThreadId: input.sourceThreadId,
+    targetThreadId: input.targetThreadId,
+    sourcePoint: { type: "run", runId: input.runId },
+  });
+});
+
+export const reorderQueuedRun = Effect.fn("EnvironmentCommands.reorderQueuedRun")(function* (
+  input: ReorderQueuedRunInput,
+) {
+  return yield* dispatch({
+    type: "queued-run.reorder",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    runId: input.runId,
+    beforeRunId: input.beforeRunId,
+  });
+});
+
+export const promoteQueuedRun = Effect.fn("EnvironmentCommands.promoteQueuedRun")(function* (
+  input: PromoteQueuedRunInput,
+) {
+  return yield* dispatch({
+    type: "queued-message.promote-to-steer",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    queuedRunId: input.queuedRunId,
+    targetRunId: input.targetRunId,
+  });
+});
+
+export const controlWorkspacePreparation = Effect.fn(
+  "EnvironmentCommands.controlWorkspacePreparation",
+)(function* (input: ControlWorkspacePreparationInput) {
+  return yield* request(ORCHESTRATION_V2_WS_METHODS.controlWorkspacePreparation, {
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    runId: input.runId,
+    action: input.action,
+  });
+});
+
+export const cancelQueuedRun = Effect.fn("EnvironmentCommands.cancelQueuedRun")(function* (
+  input: CancelQueuedRunInput,
+) {
+  return yield* dispatch({
+    type: "queued-run.cancel",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    runId: input.runId,
+  });
+});
+
+export const editQueuedRun = Effect.fn("EnvironmentCommands.editQueuedRun")(function* (
+  input: EditQueuedRunInput,
+) {
+  return yield* dispatch({
+    type: "queued-run.edit",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    runId: input.runId,
+    text: input.text,
+  });
+});

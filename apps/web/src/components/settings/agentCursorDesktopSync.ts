@@ -1,22 +1,20 @@
-// FILE: agentCursorDesktopSync.ts
-// Purpose: Mirror the agent cursor colors to the desktop main process, which
-//          persists them and pushes them to the running Cua driver. A plain
-//          browser has no bridge, so every path here is a no-op there.
-// Layer: Settings UI wiring
-
-import type { DesktopAgentCursorStyle } from "@synara/contracts";
-import { useEffect } from "react";
+// Mirror the agent cursor colors to the desktop main process, which persists
+// them and pushes them to the running driver. A plain browser has no bridge, so
+// every path here is a no-op there.
 
 import {
-  DEFAULT_AGENT_CURSOR_COLOR_MODE,
   resolveAgentCursorColors,
-  type AppSettings,
-} from "~/appSettings";
+  type ClientSettings,
+  type DesktopAgentCursorStyle,
+} from "@spiritdevs/contracts";
+import { useEffect } from "react";
+
+import { useClientSettings } from "../../hooks/useSettings";
 
 /**
  * Send one cursor-style value to the desktop main process. A rejected send is
  * swallowed: main already holds the last durable value, and a background
- * mirror failing must not surface as an error in the settings UI.
+ * mirror failing must not surface as an error.
  */
 export function pushAgentCursorStyleToDesktop(style: DesktopAgentCursorStyle | null): void {
   if (typeof window === "undefined") return;
@@ -25,16 +23,19 @@ export function pushAgentCursorStyleToDesktop(style: DesktopAgentCursorStyle | n
   void bridge.setCursorStyle(style).catch(() => undefined);
 }
 
+const selectAgentCursorMode = (settings: ClientSettings) => settings.agentCursorColorMode;
+const selectAgentCursorFill = (settings: ClientSettings) => settings.agentCursorFillColor;
+const selectAgentCursorRim = (settings: ClientSettings) => settings.agentCursorRimColor;
+
 /**
  * Mirror the current agent cursor colors on mount and on every change. The
- * panel stays mounted for the settings route's lifetime, so the mount push
- * also refreshes a value that predates the desktop preference file. Stock
- * pushes null, which removes any stored override.
+ * mount push also refreshes a value that predates the desktop preference file.
+ * Stock pushes null, which removes any stored override.
  */
-export function useAgentCursorDesktopSync(settings: AppSettings): void {
-  const mode = settings.agentCursorColorMode ?? DEFAULT_AGENT_CURSOR_COLOR_MODE;
-  const fill = settings.agentCursorFillColor ?? "";
-  const rim = settings.agentCursorRimColor ?? "";
+export function useAgentCursorDesktopSync(): void {
+  const mode = useClientSettings(selectAgentCursorMode);
+  const fill = useClientSettings(selectAgentCursorFill);
+  const rim = useClientSettings(selectAgentCursorRim);
   useEffect(() => {
     pushAgentCursorStyleToDesktop(
       resolveAgentCursorColors({
@@ -44,4 +45,10 @@ export function useAgentCursorDesktopSync(settings: AppSettings): void {
       }),
     );
   }, [mode, fill, rim]);
+}
+
+/** App-root mount point, beside the other appearance syncs. Renders nothing. */
+export function AgentCursorDesktopSync(): null {
+  useAgentCursorDesktopSync();
+  return null;
 }

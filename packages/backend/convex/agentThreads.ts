@@ -1,0 +1,401 @@
+import { readEnvironmentRuntime, patchEnvironmentRuntime } from "./lib/environmentRuntime.ts";
+import { notifyOrchestratorThreadUpdate } from "./lib/aiOrchestratorSignals.ts";
+// @effect-diagnostics globalDate:off -- Convex mutations use the transaction clock.
+/** Environment-published, cloud-safe Agent Thread discovery metadata. */
+import { v } from "convex/values";
+
+import type { Doc } from "./_generated/dataModel.js";
+import { mutation, type MutationCtx } from "./_generated/server.js";
+import { appendCompanyChanges, encodeAgentThread } from "./lib/companyApply.ts";
+import { backendError } from "./lib/errors.ts";
+import { deleteThreadAlertPolicies } from "./lib/threadAlertPolicy.ts";
+import {
+  actorRecord,
+  requireCompanyActor,
+  type EnvironmentActor,
+  requirePermission,
+  requireRecordPermission,
+} from "./lib/identity.ts";
+import { domainIdArg } from "./lib/validators.ts";
+import {
+  publisherInventoryFingerprint,
+  publisherReconciliationDue,
+} from "./lib/publisherReconciliation.ts";
+import {
+  finishQueueListingHandoff,
+  scheduleOrphanQueueCleanup,
+} from "./lib/threadQueueRetention.ts";
+
+const MAX_RECONCILE_REMOVALS = 100;
+/** Must cover every field of the contracts `CloudAgentThreadShell`; upserts with unknown fields are rejected. */
+export const AGENT_THREAD_SHELL_FIELDS = new Set([
+  "createdBy",
+  "creationSource",
+  "id",
+  "projectId",
+  "conversationPath",
+  "conversationCompanyId",
+  "orchestratorOrigin",
+  "temporary",
+  "ownedWorktreePath",
+  "ownedBranch",
+  "keptAt",
+  "title",
+  "providerInstanceId",
+  "modelSelection",
+  "runtimeMode",
+  "interactionMode",
+  "branch",
+  "worktreePath",
+  "workspaceMove",
+  "lineage",
+  "forkKind",
+  "locations",
+  "forkedFrom",
+  "activeProviderThreadId",
+  "latestRunId",
+  "latestRunRequestedAt",
+  "latestRunStartedAt",
+  "latestRunCompletedAt",
+  "activeRunId",
+  "activityRunStatus",
+  "status",
+  "allowanceHold",
+  "lastError",
+  "pendingRuntimeRequest",
+  "latestVisibleMessage",
+  "latestUserMessageAt",
+  "attachedPullRequest",
+  "attachedPullRequests",
+  "detachedPullRequestUrls",
+  "hasActionableProposedPlan",
+  "pendingBackgroundTasks",
+  "itemCount",
+  "visibleItemCount",
+  "createdAt",
+  "updatedAt",
+  "archivedAt",
+  "settledOverride",
+  "settledAt",
+  "settleAfterCompletion",
+  "snoozedUntil",
+  "snoozedAt",
+  "pinnedAt",
+  "pinOrderKey",
+  "lastVisitedAt",
+  "titleRegeneration",
+  "deletedAt",
+]);
+const LATEST_VISIBLE_MESSAGE_FIELDS = new Set(["id", "role", "updatedAt"]);
+
+function agentThreadId(environmentId: string, threadId: string): string {
+  return `${environmentId}:${threadId}`;
+}
+
+function requireTrimmed(value: string, label: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed !== value) {
+    throw backendError("invalid-arguments", `${label} must be a non-empty, trimmed string.`);
+  }
+  return trimmed;
+}
+
+function requireEnvironmentActor(
+  actor: Awaited<ReturnType<typeof requireCompanyActor>>,
+  environmentId: string,
+): asserts actor is EnvironmentActor {
+  requirePermission(actor, "projects.manage");
+  if (actor.kind !== "environment" || actor.registration.environmentId !== environmentId) {
+    throw backendError(
+      "permission-denied",
+      "An environment may publish Agent Threads only for itself.",
+    );
+  }
+}
+
+async function activeBinding(
+  ctx: MutationCtx,
+  companyId: Doc<"companies">["_id"],
+  environmentId: string,
+  localProjectId: string,
+) {
+  return (
+    await ctx.db
+      .query("environmentBindings")
+      .withIndex("by_company_environment_local_project", (q) =>
+        q
+          .eq("companyId", companyId)
+          .eq("environmentId", environmentId)
+          .eq("localProjectId", localProjectId),
+      )
+      .collect()
+  ).find((binding) => binding.localProjectId === localProjectId && binding.status === "active");
+}
+
+/**
+ * Upserts one shell after proving that its local project has an active company binding.
+ *
+ * A new thread whose project has no active binding is reported as `unbound` rather than thrown:
+ * environments publish every local thread, and a checkout that was never assigned to this
+ * company (or whose binding was revoked) is an expected steady state, not a fault. Throwing left
+ * an uncaught error in the deployment log for every probe of every such thread.
+ */
+export const upsert = mutation({
+  args: {
+    companyId: domainIdArg,
+    environmentId: v.string(),
+    threadId: v.string(),
+    localProjectId: v.union(v.string(), v.null()),
+    shell: v.any(),
+  },
+  returns: v.object({
+    outcome: v.union(v.literal("published"), v.literal("unchanged"), v.literal("unbound")),
+  }),
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    const environmentId = requireTrimmed(args.environmentId, "Environment id");
+    const threadId = requireTrimmed(args.threadId, "Thread id");
+    const localProjectId =
+      args.localProjectId === null ? null : requireTrimmed(args.localProjectId, "Local project id");
+    requireEnvironmentActor(actor, environmentId);
+
+    if (typeof args.shell !== "object" || args.shell === null || Array.isArray(args.shell)) {
+      throw backendError("invalid-arguments", "Agent Thread shell must be an object.");
+    }
+    const shell = args.shell as Record<string, unknown>;
+    if (localProjectId === null && shell["conversationCompanyId"] !== actor.company.id) {
+      throw backendError(
+        "permission-denied",
+        "A conversation may only be published to its owning company.",
+      );
+    }
+    if (Object.keys(shell).some((key) => !AGENT_THREAD_SHELL_FIELDS.has(key))) {
+      throw backendError("invalid-arguments", "Agent Thread metadata contains an unknown field.");
+    }
+    if (shell["id"] !== threadId || shell["projectId"] !== localProjectId) {
+      throw backendError(
+        "invalid-arguments",
+        "Agent Thread shell identity must match its thread and local project.",
+      );
+    }
+    const latestVisibleMessage = shell["latestVisibleMessage"];
+    if (typeof latestVisibleMessage === "object" && latestVisibleMessage !== null) {
+      if (
+        Array.isArray(latestVisibleMessage) ||
+        Object.keys(latestVisibleMessage).some((key) => !LATEST_VISIBLE_MESSAGE_FIELDS.has(key))
+      ) {
+        throw backendError(
+          "invalid-arguments",
+          "Agent Thread metadata may not contain message text.",
+        );
+      }
+    }
+
+    const id = agentThreadId(environmentId, threadId);
+    const existing = await ctx.db
+      .query("agentThreads")
+      .withIndex("by_company_and_domain_id", (q) =>
+        q.eq("companyId", actor.company._id).eq("id", id),
+      )
+      .unique();
+    const binding =
+      localProjectId === null
+        ? undefined
+        : await activeBinding(ctx, actor.company._id, environmentId, localProjectId);
+    // Discovery of a NEW thread still requires an active binding. A thread
+    // already in the index was published while its binding was active; its
+    // shell must stay updatable after the binding is revoked (e.g. duplicate
+    // project identities merged away), or one such thread wedges the
+    // environment's reconcile loop forever.
+    const cloudProjectId =
+      localProjectId === null
+        ? null
+        : (binding?.cloudProjectId ??
+          (existing?.localProjectId === localProjectId
+            ? (existing.cloudProjectId ?? undefined)
+            : undefined));
+    if (cloudProjectId === undefined) {
+      // Attachment now follows its project. Remove an earlier conversation entry from a company
+      // that has no binding to the attached project rather than leaving stale visibility behind.
+      if (existing?.localProjectId === null) await removeRows(ctx, actor, [existing]);
+      return { outcome: "unbound" as const };
+    }
+    await finishQueueListingHandoff(ctx, actor.company._id, environmentId, threadId);
+    if (
+      existing !== null &&
+      existing.cloudProjectId === cloudProjectId &&
+      existing.localProjectId === localProjectId &&
+      JSON.stringify(existing.shell) === JSON.stringify(args.shell)
+    ) {
+      return { outcome: "unchanged" as const };
+    }
+    const now = Date.now();
+    let row: Doc<"agentThreads">;
+    if (existing === null) {
+      const rowId = await ctx.db.insert("agentThreads", {
+        id,
+        companyId: actor.company._id,
+        environmentId,
+        cloudProjectId,
+        localProjectId,
+        threadId,
+        shell: args.shell,
+        updatedAt: now,
+      });
+      const inserted = await ctx.db.get(rowId);
+      if (inserted === null) throw backendError("entity-not-found", "The Agent Thread vanished.");
+      row = inserted;
+    } else {
+      await ctx.db.patch(existing._id, {
+        cloudProjectId,
+        localProjectId,
+        shell: args.shell,
+        updatedAt: now,
+      });
+      const updated = await ctx.db.get(existing._id);
+      if (updated === null) throw backendError("entity-not-found", "The Agent Thread vanished.");
+      row = updated;
+    }
+
+    const project = cloudProjectId === null ? null : await ctx.db.get(cloudProjectId);
+    if (cloudProjectId !== null && project === null)
+      throw backendError("entity-not-found", "The cloud project is missing.");
+    await appendCompanyChanges(ctx, {
+      companyId: actor.company._id,
+      actor: actorRecord(actor),
+      changes: [
+        {
+          entityKind: "agentThread",
+          entityId: row.id,
+          changeKind: "upsert",
+          teamIds: project?.teamIds ?? [],
+          versionDocId: row._id,
+          payload: await encodeAgentThread(ctx, row),
+        },
+      ],
+    });
+    await notifyOrchestratorThreadUpdate(ctx, row, existing?.shell);
+    return { outcome: "published" as const };
+  },
+});
+
+async function removeRows(
+  ctx: MutationCtx,
+  actor: Awaited<ReturnType<typeof requireCompanyActor>>,
+  rows: readonly Doc<"agentThreads">[],
+) {
+  if (rows.length === 0) return;
+  const changes = [];
+  for (const row of rows) {
+    const project = row.cloudProjectId === null ? null : await ctx.db.get(row.cloudProjectId);
+    await deleteThreadAlertPolicies(ctx, row.environmentId, row.threadId);
+    await ctx.db.delete(row._id);
+    await scheduleOrphanQueueCleanup(ctx, row.companyId, row.environmentId, row.threadId);
+    changes.push({
+      entityKind: "agentThread" as const,
+      entityId: row.id,
+      changeKind: "tombstone" as const,
+      teamIds: project?.teamIds ?? [],
+      versionDocId: null,
+      payload: null,
+    });
+  }
+  await appendCompanyChanges(ctx, {
+    companyId: actor.company._id,
+    actor: actorRecord(actor),
+    changes,
+  });
+}
+
+/** Removes one deleted local thread from the shared index. */
+export const remove = mutation({
+  args: { companyId: domainIdArg, environmentId: v.string(), threadId: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    const environmentId = requireTrimmed(args.environmentId, "Environment id");
+    const threadId = requireTrimmed(args.threadId, "Thread id");
+    requireEnvironmentActor(actor, environmentId);
+    const row = await ctx.db
+      .query("agentThreads")
+      .withIndex("by_company_and_environment_and_thread", (q) =>
+        q
+          .eq("companyId", actor.company._id)
+          .eq("environmentId", environmentId)
+          .eq("threadId", threadId),
+      )
+      .unique();
+    if (row === null) {
+      await deleteThreadAlertPolicies(ctx, environmentId, threadId);
+      await scheduleOrphanQueueCleanup(ctx, actor.company._id, environmentId, threadId);
+    }
+    await removeRows(ctx, actor, row === null ? [] : [row]);
+    return null;
+  },
+});
+
+/** Removes a discovery shell that a person confirmed no longer resolves on its owning environment. */
+export const removeMissing = mutation({
+  args: { companyId: domainIdArg, environmentId: v.string(), threadId: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    const environmentId = requireTrimmed(args.environmentId, "Environment id");
+    const threadId = requireTrimmed(args.threadId, "Thread id");
+    const row = await ctx.db
+      .query("agentThreads")
+      .withIndex("by_company_and_environment_and_thread", (q) =>
+        q
+          .eq("companyId", actor.company._id)
+          .eq("environmentId", environmentId)
+          .eq("threadId", threadId),
+      )
+      .unique();
+    if (row !== null) {
+      const project = row.cloudProjectId === null ? null : await ctx.db.get(row.cloudProjectId);
+      requireRecordPermission(actor, "projects.manage", project?.teamIds ?? []);
+    }
+    await removeRows(ctx, actor, row === null ? [] : [row]);
+    return null;
+  },
+});
+
+/** Repairs missed delete events without replacing transcript content or issuing work. */
+export const reconcile = mutation({
+  args: {
+    companyId: domainIdArg,
+    environmentId: v.string(),
+    currentThreadIds: v.array(v.string()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    const environmentId = requireTrimmed(args.environmentId, "Environment id");
+    requireEnvironmentActor(actor, environmentId);
+    const current = new Set(args.currentThreadIds.map((id) => requireTrimmed(id, "Thread id")));
+    // Authorization is checked on every call, including calls that skip the inventory scan.
+    const runtime = await readEnvironmentRuntime(ctx, actor.registration);
+    const fingerprint = await publisherInventoryFingerprint(current);
+    const now = Date.now();
+    if (!publisherReconciliationDue(runtime.agentThreadReconciliation, fingerprint, now))
+      return null;
+    const stale = (
+      await ctx.db
+        .query("agentThreads")
+        .withIndex("by_company_and_environment", (q) =>
+          q.eq("companyId", actor.company._id).eq("environmentId", environmentId),
+        )
+        .collect()
+    )
+      .filter((row) => !current.has(row.threadId))
+      .slice(0, MAX_RECONCILE_REMOVALS);
+    await removeRows(ctx, actor, stale);
+    // Keep draining bounded removal batches on subsequent ticks until the entire inventory agrees.
+    if (stale.length < MAX_RECONCILE_REMOVALS) {
+      await patchEnvironmentRuntime(ctx, actor.registration, {
+        agentThreadReconciliation: { fingerprint, completedAt: now },
+      });
+    }
+    return null;
+  },
+});

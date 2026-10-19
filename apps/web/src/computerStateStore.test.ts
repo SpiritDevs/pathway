@@ -1,207 +1,78 @@
-import type { ThreadComputerState, ThreadId } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import { EnvironmentId, ThreadId, type ComputerStatusResult } from "@spiritdevs/contracts";
+import { scopedThreadKey } from "@spiritdevs/client-runtime/environment";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import {
-  selectThreadComputerAction,
-  selectThreadComputerState,
-  useComputerStateStore,
-} from "./computerStateStore";
+import { threadComputerState } from "./components/computer/computerTestFixtures";
+import { computerEnvironmentFence, useComputerStateStore } from "./computerStateStore";
 
-const FULL_CAPABILITIES: ThreadComputerState["capabilities"] = {
-  windows: true,
-  windowBounds: true,
-  stacking: true,
-  capture: true,
-  input: true,
-  clipboard: true,
-  focus: true,
-  raise: true,
-  ghostCursor: true,
-  visibleDesktop: true,
-};
+const ENV = EnvironmentId.make("environment-1");
+const OTHER_ENV = EnvironmentId.make("environment-2");
+const THREAD = ThreadId.make("thread-1");
 
-const baseState: ThreadComputerState = {
-  threadId: "thread-1" as ThreadId,
-  version: 2,
-  computerId: "desktop",
-  capabilities: FULL_CAPABILITIES,
-  windows: [],
-  screenSize: { width: 5120, height: 2520 },
-  agentActive: false,
-  controlledByOtherThread: false,
-  availability: { kind: "available" },
-  health: { status: "connected", consecutiveFailures: 0, reconnects: 0, captureAvailable: true },
-  lastError: null,
-};
+function status(): ComputerStatusResult {
+  const { computerId, availability, capabilities, health } = threadComputerState();
+  return { computerId, availability, capabilities, health };
+}
+
+afterEach(() => {
+  useComputerStateStore.getState().clearEnvironment(ENV);
+  useComputerStateStore.getState().clearEnvironment(OTHER_ENV);
+});
 
 describe("computerStateStore", () => {
-  it("keeps the newest thread snapshot and exposes its selector", () => {
-    useComputerStateStore.getState().clear();
-    useComputerStateStore.getState().upsertThreadState(baseState);
-    useComputerStateStore
-      .getState()
-      .upsertThreadState({ ...baseState, version: 1, agentActive: true });
-
-    expect(
-      selectThreadComputerState("thread-1" as ThreadId)(useComputerStateStore.getState()),
-    ).toEqual(baseState);
-  });
-
-  it("takes a newer snapshot's degraded health", () => {
-    useComputerStateStore.getState().clear();
-    useComputerStateStore.getState().upsertThreadState(baseState);
-    const degraded: ThreadComputerState = {
-      ...baseState,
-      version: 3,
-      availability: { kind: "backend-unavailable", message: "Reconnecting to the desktop." },
-      health: {
-        status: "reconnecting",
-        consecutiveFailures: 1,
-        reconnects: 0,
-        lastFailure: { message: "The backend vanished", at: "2026-08-16T10:00:00.000Z" },
-        captureAvailable: false,
-      },
-    };
-
-    useComputerStateStore.getState().upsertThreadState(degraded);
-
-    expect(
-      selectThreadComputerState("thread-1" as ThreadId)(useComputerStateStore.getState())?.health,
-    ).toEqual(degraded.health);
-  });
-
-  it("applies window changes and records the latest action", () => {
-    useComputerStateStore.getState().clear();
-    useComputerStateStore.getState().upsertThreadState(baseState);
-    const window = {
-      id: "window-1",
-      title: "Terminal",
-      bounds: { x: 0, y: 0, width: 100, height: 100 },
-      focused: true,
-      minimized: false,
-      visible: true,
-    };
-    useComputerStateStore.getState().applyWindowsChanged([window]);
-    const action = {
-      type: "computer.action",
-      action: "click",
-      ok: true,
-      threadId: "thread-1" as ThreadId,
-    } as const;
-    useComputerStateStore.getState().recordAction(action);
-
-    expect(useComputerStateStore.getState().threadStatesByThreadId["thread-1"]?.windows).toEqual([
-      window,
-    ]);
-    expect(
-      selectThreadComputerAction("thread-1" as ThreadId)(useComputerStateStore.getState()),
-    ).toEqual(action);
-  });
-
-  it("attributes an action to its thread and leaves other threads untouched", () => {
-    useComputerStateStore.getState().clear();
-    const typed = {
-      type: "computer.action",
-      action: "computer_type_text",
-      ok: true,
-      threadId: "thread-1" as ThreadId,
-    } as const;
-    const paneClick = { type: "computer.action", action: "computer_click", ok: true } as const;
-
-    useComputerStateStore.getState().recordAction(typed);
-    const beforePaneClick = useComputerStateStore.getState();
-    useComputerStateStore.getState().recordAction(paneClick);
-
-    expect(
-      selectThreadComputerAction("thread-1" as ThreadId)(useComputerStateStore.getState()),
-    ).toBe(typed);
-    expect(
-      selectThreadComputerAction("thread-2" as ThreadId)(useComputerStateStore.getState()),
-    ).toBeUndefined();
-    // Unattributed pane input belongs to no thread, so it must not become any
-    // thread's last action — and it leaves the store identity untouched, since
-    // nothing reads a cross-thread "newest action".
-    expect(useComputerStateStore.getState().lastActionByThreadId).toEqual({ "thread-1": typed });
-    expect(beforePaneClick).toBe(useComputerStateStore.getState());
-  });
-
-  it("shares immutable window inventory and ignores the same inventory object", () => {
+  it("stamps the Escape latch onto the environment's cached thread states", () => {
     const store = useComputerStateStore.getState();
-    store.clear();
-    store.upsertThreadState(baseState);
-    store.upsertThreadState({ ...baseState, threadId: "thread-2" as ThreadId });
-    const windows = Object.freeze([
-      Object.freeze({
-        id: "window-1",
-        title: "Terminal",
-        focused: false,
-        minimized: false,
-        visible: true,
-      }),
-    ]);
-    store.applyWindowsChanged(windows);
-    const updated = useComputerStateStore.getState();
-    expect(updated.threadStatesByThreadId["thread-1"]?.windows).toBe(windows);
-    expect(updated.threadStatesByThreadId["thread-2"]?.windows).toBe(windows);
-    store.applyWindowsChanged(windows);
-    expect(useComputerStateStore.getState()).toBe(updated);
-  });
+    store.upsertThreadState(ENV, threadComputerState({ threadId: THREAD }));
+    store.upsertThreadState(OTHER_ENV, threadComputerState({ threadId: THREAD }));
 
-  it("stamps the host-wide Escape stop onto every cached thread state", () => {
-    const store = useComputerStateStore.getState();
-    store.clear();
-    store.upsertThreadState(baseState);
-    store.upsertThreadState({ ...baseState, threadId: "thread-2" as ThreadId });
-
-    store.setInputStopped(true);
-
+    store.setInputStopped(ENV, true);
     const stopped = useComputerStateStore.getState();
-    expect(stopped.inputStopped).toBe(true);
-    expect(stopped.threadStatesByThreadId["thread-1"]?.inputStopped).toBe(true);
-    expect(stopped.threadStatesByThreadId["thread-2"]?.inputStopped).toBe(true);
-
-    store.setInputStopped(false);
-
-    const rearmed = useComputerStateStore.getState();
-    expect(rearmed.inputStopped).toBe(false);
-    expect(rearmed.threadStatesByThreadId["thread-1"]?.inputStopped).toBe(false);
-    // Repeating the same flag is a no-op that preserves store identity.
-    const before = useComputerStateStore.getState();
-    useComputerStateStore.getState().setInputStopped(false);
-    expect(useComputerStateStore.getState()).toBe(before);
-  });
-
-  it("drops the Escape latch on a wholesale reset", () => {
-    const store = useComputerStateStore.getState();
-    store.clear();
-    store.setInputStopped(true);
-
-    store.clear();
-
-    expect(useComputerStateStore.getState().inputStopped).toBe(false);
-  });
-
-  it("forgets a removed thread's action along with its snapshot", () => {
-    useComputerStateStore.getState().clear();
-    useComputerStateStore.getState().upsertThreadState(baseState);
-    useComputerStateStore.getState().recordAction({
-      type: "computer.action",
-      action: "computer_click",
-      ok: true,
-      threadId: "thread-1" as ThreadId,
-    });
-
-    useComputerStateStore.getState().removeThreadState("thread-1" as ThreadId);
-
+    expect(stopped.inputStoppedByEnvironment[ENV]).toBe(true);
     expect(
-      selectThreadComputerAction("thread-1" as ThreadId)(useComputerStateStore.getState()),
+      stopped.threadStates[scopedThreadKey({ environmentId: ENV, threadId: THREAD })],
+    ).toMatchObject({ inputStopped: true });
+    expect(
+      stopped.threadStates[scopedThreadKey({ environmentId: OTHER_ENV, threadId: THREAD })]
+        ?.inputStopped,
     ).toBeUndefined();
-    expect(useComputerStateStore.getState().threadStatesByThreadId["thread-1"]).toBeUndefined();
+
+    // Repeating the same flag is a no-op that preserves store identity.
+    store.setInputStopped(ENV, true);
+    expect(useComputerStateStore.getState()).toBe(stopped);
   });
 
-  it("clears snapshots and action history", () => {
-    useComputerStateStore.getState().clear();
-    expect(useComputerStateStore.getState().threadStatesByThreadId).toEqual({});
-    expect(useComputerStateStore.getState().lastActionByThreadId).toEqual({});
+  it("keeps store identity when a refresh answers the same status", () => {
+    const store = useComputerStateStore.getState();
+    store.setStatus(ENV, status());
+    const before = useComputerStateStore.getState();
+    store.setStatus(ENV, status());
+    expect(useComputerStateStore.getState()).toBe(before);
+
+    store.setStatus(ENV, {
+      ...status(),
+      availability: { kind: "backend-unavailable", message: "Off" },
+    });
+    expect(useComputerStateStore.getState().statusByEnvironment[ENV]?.availability.kind).toBe(
+      "backend-unavailable",
+    );
+  });
+
+  it("drops the Escape latch, the status and late answers when the environment is reset", () => {
+    const store = useComputerStateStore.getState();
+    store.upsertThreadState(ENV, threadComputerState({ threadId: THREAD }));
+    store.setInputStopped(ENV, true);
+    store.setStatus(ENV, status());
+    store.setStatus(OTHER_ENV, status());
+    const isCurrent = computerEnvironmentFence(ENV);
+
+    store.clearEnvironment(ENV);
+    const reset = useComputerStateStore.getState();
+    expect(reset.inputStoppedByEnvironment[ENV]).toBeUndefined();
+    expect(reset.threadStates).toEqual({});
+    expect(reset.statusByEnvironment[ENV]).toBeUndefined();
+    expect(reset.statusByEnvironment[OTHER_ENV]).toBeDefined();
+    // A status requested before the reset must not repopulate it.
+    expect(isCurrent()).toBe(false);
+    expect(computerEnvironmentFence(ENV)()).toBe(true);
   });
 });

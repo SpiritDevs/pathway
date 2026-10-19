@@ -1,0 +1,284 @@
+import { ConversationRowMenu } from "./ConversationRowMenu";
+import { useState, useEffect, type RefObject } from "react";
+import {
+  ArchiveIcon,
+  SearchIcon,
+  SquarePenIcon,
+  PanelLeftIcon,
+  PinIcon,
+  BellOffIcon,
+} from "lucide-react";
+import { ContextualSidebarHeader } from "../sidebar/ContextualSidebarHeader";
+import { Button } from "../ui/button";
+import { useOrchestrators } from "./OrchestratorContext";
+import { ConversationAvatar } from "./OrchestratorAvatar";
+import { Dialog } from "@base-ui/react/dialog";
+import {
+  unreadMessageTotal,
+  unreadLabel,
+  conversationTime,
+  conversationPanelLayout,
+} from "./conversationList";
+import { cn } from "../../lib/utils";
+
+export function ConversationList({ onSelect }: { onSelect?: () => void }) {
+  const state = useOrchestrators();
+  const [search, setSearch] = useState("");
+  const [archived, setArchived] = useState(false);
+  const chats = state.chats
+    .toSorted(
+      (a, b) =>
+        Number(!!b.pinned) - Number(!!a.pinned) ||
+        (b.lastMessageAt ?? b.updatedAt) - (a.lastMessageAt ?? a.updatedAt),
+    )
+    .filter(
+      (chat) =>
+        chat.archived === archived &&
+        (chat.title + " " + chat.lastMessage).toLowerCase().includes(search.toLowerCase()),
+    );
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="px-3 pb-3">
+        <label className="flex items-center gap-2 rounded-xl bg-muted/65 px-3 py-2 text-muted-foreground">
+          <SearchIcon className="size-4" />
+          <input
+            aria-label="Search conversations"
+            placeholder="Search conversations"
+            className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </label>
+      </div>
+      <div className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2">
+        {chats.map((chat) => (
+          <ConversationRowMenu key={chat.id} chat={chat}>
+            <button
+              type="button"
+              onClick={() => {
+                if (chat.markedUnread)
+                  void state
+                    .request("aiOrchestrators:setChatPreferences", {
+                      chatId: chat.id,
+                      markedUnread: false,
+                    })
+                    .catch(() => state.setError("Could not mark conversation as read."));
+                state.selectChat(chat.id);
+                onSelect?.();
+              }}
+              aria-current={chat.id === state.selectedId ? "true" : undefined}
+              className={cn(
+                "flex w-full items-center gap-3 rounded-xl px-3 py-3.5 text-left hover:bg-muted/60",
+                chat.id === state.selectedId && "bg-blue-500/10 hover:bg-blue-500/10",
+              )}
+            >
+              <ConversationAvatar
+                contacts={state.avatarContacts.filter((contact) =>
+                  chat.orchestratorIds.includes(contact.id ?? ""),
+                )}
+              />
+              <span className="min-w-0 flex-1">
+                <span className="flex items-baseline gap-2">
+                  {chat.pinned && <PinIcon className="size-3 shrink-0" aria-label="Pinned" />}
+                  {chat.muted && (
+                    <BellOffIcon
+                      className="size-3 shrink-0 text-muted-foreground"
+                      aria-label="Alerts hidden"
+                    />
+                  )}
+                  <span className="truncate text-sm font-semibold">{chat.title}</span>
+                  <time
+                    className="ml-auto shrink-0 text-[10px] text-muted-foreground"
+                    dateTime={new Date(chat.lastMessageAt ?? chat.updatedAt).toISOString()}
+                    title={new Date(chat.lastMessageAt ?? chat.updatedAt).toLocaleString()}
+                  >
+                    {conversationTime(chat.lastMessageAt ?? chat.updatedAt)}
+                  </time>
+                </span>
+                <span className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+                  {chat.lifecycleDetail || chat.lastMessage || "Start a conversation"}
+                </span>
+              </span>
+              {(chat.unreadCount ?? 0) > 0 ? (
+                <span
+                  className="inline-flex min-w-5 shrink-0 items-center justify-center rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-primary-foreground"
+                  aria-label={`${unreadLabel(chat.unreadCount!)} unread messages`}
+                >
+                  {unreadLabel(chat.unreadCount!)}
+                </span>
+              ) : chat.unreadCount === undefined && chat.lastSequence > chat.readSequence ? (
+                <span
+                  className="size-2 shrink-0 rounded-full bg-blue-500"
+                  aria-label="Unread messages"
+                />
+              ) : null}
+            </button>
+          </ConversationRowMenu>
+        ))}
+        {state.loading && (
+          <p className="px-3 py-8 text-center text-sm text-muted-foreground">
+            Loading conversations…
+          </p>
+        )}
+        {!state.loading && chats.length === 0 && (
+          <p className="px-3 py-6 text-center text-sm text-muted-foreground">
+            {search
+              ? "No conversations found."
+              : archived
+                ? "No archived conversations."
+                : "Your conversations will appear here."}
+          </p>
+        )}
+      </div>
+      <div className="shrink-0 border-t p-2">
+        <Button
+          variant="ghost"
+          className="w-full justify-start text-muted-foreground"
+          onClick={() => setArchived((value) => !value)}
+        >
+          <ArchiveIcon />
+          {archived ? "Back to conversations" : "Archived conversations"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+export function OrchestratorSidebar() {
+  const state = useOrchestrators();
+  return (
+    <>
+      <ContextualSidebarHeader title="Orchestrators" />
+      <div className="flex items-center justify-between px-4 pb-3">
+        <span className="text-xs text-muted-foreground">Conversations</span>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="New conversation"
+          onClick={() => state.setNewChatOpen(true)}
+        >
+          <SquarePenIcon className="size-4" />
+        </Button>
+      </div>
+      <ConversationList />
+    </>
+  );
+}
+
+export function FloatingConversationSwitcher({
+  anchor,
+}: {
+  anchor: RefObject<HTMLDivElement | null>;
+}) {
+  const state = useOrchestrators();
+  const [open, setOpen] = useState(false);
+  const [present, setPresent] = useState(false);
+  const unread = unreadMessageTotal(state.chats);
+  const [layout, setLayout] = useState<ReturnType<typeof conversationPanelLayout> | null>(null);
+  useEffect(() => {
+    const element = anchor.current?.closest("[data-floating-companion]") ?? anchor.current;
+    if (!element) return;
+    const measure = () => setLayout(conversationPanelLayout(element.getBoundingClientRect()));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [anchor]);
+  useEffect(() => {
+    if (open) setPresent(true);
+  }, [open]);
+  const docked = layout?.docked ?? false;
+
+  return (
+    <Dialog.Root open={open} onOpenChange={setOpen} onOpenChangeComplete={setPresent} modal={false}>
+      <span hidden data-companion-panel={docked && (open || present) ? "left" : undefined} />
+      <Dialog.Trigger
+        render={<Button variant="ghost" size="sm" />}
+        className="shrink-0 gap-1.5 px-2"
+        aria-label={`Conversations${unread ? `, ${unreadLabel(unread)} unread messages` : ""}`}
+      >
+        <PanelLeftIcon className="size-4" />
+        {unread > 0 && (
+          <span
+            className="rounded-full bg-primary px-1.5 text-[10px] leading-5 font-semibold tabular-nums text-primary-foreground"
+            aria-hidden="true"
+          >
+            {unreadLabel(unread)}
+          </span>
+        )}
+      </Dialog.Trigger>
+      <Dialog.Portal>
+        <Dialog.Viewport
+          className={cn(
+            "companion-drawer-viewport pointer-events-none fixed z-[130]",
+            !docked && "rounded-[26px]",
+          )}
+          style={
+            layout
+              ? {
+                  left: layout.left,
+                  top: layout.top,
+                  width: layout.width,
+                  height: layout.height,
+                  right: "auto",
+                  bottom: "auto",
+                }
+              : { visibility: "hidden" }
+          }
+        >
+          {!docked && (
+            <Dialog.Backdrop
+              onClick={() => setOpen(false)}
+              className="pointer-events-auto absolute inset-0 bg-black/40 transition-opacity duration-200 data-starting-style:opacity-0 data-ending-style:opacity-0 motion-reduce:transition-none"
+            />
+          )}
+          <Dialog.Popup
+            aria-label="Conversations"
+            data-side="left"
+            data-docked={docked}
+            style={{ width: layout?.panelWidth }}
+            className={cn(
+              "companion-drawer pointer-events-auto relative flex h-full min-h-0 flex-col border bg-popover text-popover-foreground outline-none",
+              docked ? "w-full rounded-l-[26px] border-r-0" : "rounded-l-[26px] shadow-xl",
+            )}
+          >
+            <div className="flex h-14 shrink-0 items-center justify-between border-b px-4">
+              <div className="flex items-center gap-2">
+                {!docked && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Toggle conversations"
+                    aria-expanded={open}
+                    onClick={() => setOpen(false)}
+                  >
+                    <PanelLeftIcon className="size-4" />
+                  </Button>
+                )}
+                <Dialog.Title className="text-sm font-semibold">Conversations</Dialog.Title>
+              </div>
+              <div className="flex gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="New conversation"
+                  onClick={() => {
+                    setOpen(false);
+                    state.setNewChatOpen(true);
+                  }}
+                >
+                  <SquarePenIcon className="size-4" />
+                </Button>
+              </div>
+            </div>
+            <ConversationList />
+          </Dialog.Popup>
+        </Dialog.Viewport>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}

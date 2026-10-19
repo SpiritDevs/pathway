@@ -10,8 +10,14 @@
 // plain mocked object under a stubbed `window`, matching real Electron
 // delivery where frames arrive as {windowId, seq, jpeg} payloads.
 
-import type { DesktopComputerPreviewFrame, ThreadComputerState, ThreadId } from "@synara/contracts";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { scopedThreadKey } from "@spiritdevs/client-runtime/environment";
+import {
+  EnvironmentId,
+  ThreadId,
+  type DesktopComputerPreviewFrame,
+  type ThreadComputerState,
+} from "@spiritdevs/contracts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const reactHarness = vi.hoisted(() => {
   interface EffectSlot {
@@ -87,17 +93,24 @@ vi.mock("../../computerStateStore", async (importOriginal) => {
     ...actual,
     useComputerStateStore: (selector: (store: unknown) => unknown) =>
       selector({
-        threadStatesByThreadId: tapOwnership.state
-          ? { [tapOwnership.state.threadId]: tapOwnership.state }
+        threadStates: tapOwnership.state
+          ? {
+              [scopedThreadKey({
+                environmentId: EnvironmentId.make("environment-local"),
+                threadId: tapOwnership.state.threadId,
+              })]: tapOwnership.state,
+            }
           : {},
-        lastActionByThreadId: {},
+        lastActions: {},
       }),
   };
 });
 
 import { COMPUTER_PREVIEW_TAP_QUIET_MS, useComputerPreviewTap } from "./useComputerPreviewTap";
 
-const THREAD_ID = "thread-tap" as ThreadId;
+const ENVIRONMENT_ID = EnvironmentId.make("environment-local");
+const THREAD_ID = ThreadId.make("thread-tap");
+const THREAD_REF = { environmentId: ENVIRONMENT_ID, threadId: THREAD_ID };
 
 function ownedThreadState(overrides: Partial<ThreadComputerState> = {}): ThreadComputerState {
   return {
@@ -151,20 +164,32 @@ function feed(bridge: BridgeHarness, seq: number): void {
   bridge.listener?.({ windowId: 7, seq, jpeg: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]) });
 }
 
-/** The JPEG decode awaits a mocked createImageBitmap; a few microtask turns settle it. */
-async function flushDecode(): Promise<void> {
-  for (let index = 0; index < 10; index += 1) await Promise.resolve();
+/** A fake bitmap whose `closed` settles when the hook's decode `finally` releases it. */
+function fakeBitmap(size = { width: 320, height: 200 }) {
+  let release!: () => void;
+  const closed = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { ...size, close: vi.fn(() => release()), closed };
+}
+
+/** Resolves once the hook is done with the newest decode. */
+async function decoded(): Promise<void> {
+  const bitmap = (await createImageBitmapMock.mock.results.at(-1)?.value) as ReturnType<
+    typeof fakeBitmap
+  >;
+  await bitmap.closed;
 }
 
 function render(input: {
   enabled: boolean;
   canvasRef?: { current: unknown };
-  threadId?: ThreadId;
+  threadRef?: typeof THREAD_REF;
 }) {
   reactHarness.beginRender();
   return useComputerPreviewTap({
     canvasRef: (input.canvasRef ?? { current: null }) as React.RefObject<HTMLCanvasElement | null>,
-    threadId: input.threadId,
+    threadRef: input.threadRef,
     enabled: input.enabled,
   });
 }
@@ -189,11 +214,7 @@ beforeEach(() => {
   tapOwnership.state = undefined;
   vi.unstubAllGlobals();
   createImageBitmapMock.mockReset();
-  createImageBitmapMock.mockImplementation(async () => ({
-    width: 320,
-    height: 200,
-    close: vi.fn(),
-  }));
+  createImageBitmapMock.mockImplementation(async () => fakeBitmap());
   vi.stubGlobal("createImageBitmap", createImageBitmapMock);
   stubVisibleDocument();
 });
@@ -211,7 +232,7 @@ describe("useComputerPreviewTap", () => {
 
   it("does not subscribe while disabled", () => {
     const bridge = createBridge();
-    vi.stubGlobal("window", { desktopBridge: { computerPreview: { onFrame: bridge.onFrame } } });
+    vi.stubGlobal("window", { desktopBridge: { computer: { onPreviewFrame: bridge.onFrame } } });
 
     render({ enabled: false });
     expect(bridge.onFrame).not.toHaveBeenCalled();
@@ -219,34 +240,34 @@ describe("useComputerPreviewTap", () => {
 
   it("decodes frames into the canvas and reports active", async () => {
     const bridge = createBridge();
-    vi.stubGlobal("window", { desktopBridge: { computerPreview: { onFrame: bridge.onFrame } } });
+    vi.stubGlobal("window", { desktopBridge: { computer: { onPreviewFrame: bridge.onFrame } } });
     const { canvas, context, canvasRef } = createCanvas();
 
-    expect(render({ enabled: true, canvasRef, threadId: THREAD_ID }).active).toBe(false);
+    expect(render({ enabled: true, canvasRef, threadRef: THREAD_REF }).active).toBe(false);
     feed(bridge, 1);
-    await flushDecode();
+    await decoded();
 
     expect(createImageBitmapMock).toHaveBeenCalledOnce();
     expect(canvas.width).toBe(320);
     expect(canvas.height).toBe(200);
     expect(context.drawImage).toHaveBeenCalledOnce();
-    expect(render({ enabled: true, canvasRef, threadId: THREAD_ID }).active).toBe(true);
+    expect(render({ enabled: true, canvasRef, threadRef: THREAD_REF }).active).toBe(true);
   });
 
   it("drops stale and repeated seq frames without decoding them", async () => {
     const bridge = createBridge();
-    vi.stubGlobal("window", { desktopBridge: { computerPreview: { onFrame: bridge.onFrame } } });
+    vi.stubGlobal("window", { desktopBridge: { computer: { onPreviewFrame: bridge.onFrame } } });
     const { context, canvasRef } = createCanvas();
 
-    render({ enabled: true, canvasRef, threadId: THREAD_ID });
+    render({ enabled: true, canvasRef, threadRef: THREAD_REF });
     feed(bridge, 1);
-    await flushDecode();
+    await decoded();
     feed(bridge, 3);
-    await flushDecode();
+    await decoded();
     feed(bridge, 2); // stale: behind the last decoded seq
     feed(bridge, 3); // repeat: never decode the same frame twice
     feed(bridge, 4);
-    await flushDecode();
+    await decoded();
 
     expect(createImageBitmapMock).toHaveBeenCalledTimes(3);
     expect(context.drawImage).toHaveBeenCalledTimes(3);
@@ -254,7 +275,7 @@ describe("useComputerPreviewTap", () => {
 
   it("keeps one pending decode and drops rather than queues", async () => {
     const bridge = createBridge();
-    vi.stubGlobal("window", { desktopBridge: { computerPreview: { onFrame: bridge.onFrame } } });
+    vi.stubGlobal("window", { desktopBridge: { computer: { onPreviewFrame: bridge.onFrame } } });
     const { context, canvasRef } = createCanvas();
 
     const deferred = {} as { resolve: (bitmap: unknown) => void };
@@ -265,15 +286,16 @@ describe("useComputerPreviewTap", () => {
         }),
     );
 
-    render({ enabled: true, canvasRef, threadId: THREAD_ID });
+    render({ enabled: true, canvasRef, threadRef: THREAD_REF });
     feed(bridge, 1);
     // Frames arriving mid-decode must be dropped, never queued for later.
     feed(bridge, 2);
     feed(bridge, 3);
-    deferred.resolve({ width: 320, height: 200, close: vi.fn() });
-    await flushDecode();
+    const first = fakeBitmap();
+    deferred.resolve(first);
+    await first.closed;
     feed(bridge, 4);
-    await flushDecode();
+    await decoded();
 
     // Only seq 1 and seq 4 ever decoded; 2 and 3 were dropped while busy.
     expect(createImageBitmapMock).toHaveBeenCalledTimes(2);
@@ -283,48 +305,46 @@ describe("useComputerPreviewTap", () => {
   it("goes quiet after the tap window and wakes on the next frame", async () => {
     vi.useFakeTimers();
     const bridge = createBridge();
-    vi.stubGlobal("window", { desktopBridge: { computerPreview: { onFrame: bridge.onFrame } } });
+    vi.stubGlobal("window", { desktopBridge: { computer: { onPreviewFrame: bridge.onFrame } } });
     const { canvasRef } = createCanvas();
 
-    render({ enabled: true, canvasRef, threadId: THREAD_ID });
+    render({ enabled: true, canvasRef, threadRef: THREAD_REF });
     feed(bridge, 1);
-    await vi.advanceTimersByTimeAsync(0);
-    await flushDecode();
-    expect(render({ enabled: true, canvasRef, threadId: THREAD_ID }).active).toBe(true);
+    await decoded();
+    expect(render({ enabled: true, canvasRef, threadRef: THREAD_REF }).active).toBe(true);
 
     vi.advanceTimersByTime(COMPUTER_PREVIEW_TAP_QUIET_MS + 1);
-    expect(render({ enabled: true, canvasRef, threadId: THREAD_ID }).active).toBe(false);
+    expect(render({ enabled: true, canvasRef, threadRef: THREAD_REF }).active).toBe(false);
 
     feed(bridge, 2);
-    await vi.advanceTimersByTimeAsync(0);
-    await flushDecode();
-    expect(render({ enabled: true, canvasRef, threadId: THREAD_ID }).active).toBe(true);
+    await decoded();
+    expect(render({ enabled: true, canvasRef, threadRef: THREAD_REF }).active).toBe(true);
   });
 
   it("unsubscribes but keeps the canvas it drew on disable", async () => {
     const bridge = createBridge();
-    vi.stubGlobal("window", { desktopBridge: { computerPreview: { onFrame: bridge.onFrame } } });
+    vi.stubGlobal("window", { desktopBridge: { computer: { onPreviewFrame: bridge.onFrame } } });
     const { context, canvasRef } = createCanvas();
 
-    render({ enabled: true, canvasRef, threadId: THREAD_ID });
+    render({ enabled: true, canvasRef, threadRef: THREAD_REF });
     feed(bridge, 1);
-    await flushDecode();
+    await decoded();
 
-    render({ enabled: false, canvasRef, threadId: THREAD_ID });
+    render({ enabled: false, canvasRef, threadRef: THREAD_REF });
     expect(bridge.unsubscribe).toHaveBeenCalledOnce();
     // The last decoded frame stays on the canvas: the stills stream or a
     // re-subscribed tap paints over it, so clearing would only blank the card.
     expect(context.clearRect).not.toHaveBeenCalled();
-    expect(render({ enabled: false, canvasRef, threadId: THREAD_ID }).active).toBe(false);
+    expect(render({ enabled: false, canvasRef, threadRef: THREAD_REF }).active).toBe(false);
   });
 
   it("leaves a canvas it never drew on alone", () => {
     const bridge = createBridge();
-    vi.stubGlobal("window", { desktopBridge: { computerPreview: { onFrame: bridge.onFrame } } });
+    vi.stubGlobal("window", { desktopBridge: { computer: { onPreviewFrame: bridge.onFrame } } });
     const { context, canvasRef } = createCanvas();
 
-    render({ enabled: true, canvasRef, threadId: THREAD_ID });
-    render({ enabled: false, canvasRef, threadId: THREAD_ID });
+    render({ enabled: true, canvasRef, threadRef: THREAD_REF });
+    render({ enabled: false, canvasRef, threadRef: THREAD_REF });
 
     // No frame ever decoded, so the stills stream owns the canvas content:
     // the tap must not wipe another drawer's pixels on its way out.
@@ -334,49 +354,47 @@ describe("useComputerPreviewTap", () => {
 
   it("unsubscribes while the page is hidden and resubscribes on return", async () => {
     const bridge = createBridge();
-    vi.stubGlobal("window", { desktopBridge: { computerPreview: { onFrame: bridge.onFrame } } });
+    vi.stubGlobal("window", { desktopBridge: { computer: { onPreviewFrame: bridge.onFrame } } });
     const { canvasRef } = createCanvas();
     const doc = stubVisibleDocument();
 
-    render({ enabled: true, canvasRef, threadId: THREAD_ID });
+    render({ enabled: true, canvasRef, threadRef: THREAD_REF });
     expect(bridge.onFrame).toHaveBeenCalledOnce();
 
     doc.visibilityState = "hidden";
     doc.listener?.();
-    render({ enabled: true, canvasRef, threadId: THREAD_ID });
+    render({ enabled: true, canvasRef, threadRef: THREAD_REF });
     expect(bridge.unsubscribe).toHaveBeenCalledOnce();
     expect(bridge.onFrame).toHaveBeenCalledOnce();
 
     doc.visibilityState = "visible";
     doc.listener?.();
-    render({ enabled: true, canvasRef, threadId: THREAD_ID });
+    render({ enabled: true, canvasRef, threadRef: THREAD_REF });
     expect(bridge.onFrame).toHaveBeenCalledTimes(2);
     feed(bridge, 1);
-    await flushDecode();
-    expect(render({ enabled: true, canvasRef, threadId: THREAD_ID }).active).toBe(true);
+    await decoded();
+    expect(render({ enabled: true, canvasRef, threadRef: THREAD_REF }).active).toBe(true);
   });
 
   it("reports the decoded frame size and tracks size changes", async () => {
     const bridge = createBridge();
-    vi.stubGlobal("window", { desktopBridge: { computerPreview: { onFrame: bridge.onFrame } } });
+    vi.stubGlobal("window", { desktopBridge: { computer: { onPreviewFrame: bridge.onFrame } } });
     const { canvasRef } = createCanvas();
 
-    expect(render({ enabled: true, canvasRef, threadId: THREAD_ID }).frameSize).toBeNull();
+    expect(render({ enabled: true, canvasRef, threadRef: THREAD_REF }).frameSize).toBeNull();
     feed(bridge, 1);
-    await flushDecode();
-    expect(render({ enabled: true, canvasRef, threadId: THREAD_ID }).frameSize).toEqual({
+    await decoded();
+    expect(render({ enabled: true, canvasRef, threadRef: THREAD_REF }).frameSize).toEqual({
       width: 320,
       height: 200,
     });
 
-    createImageBitmapMock.mockImplementationOnce(async () => ({
-      width: 640,
-      height: 400,
-      close: vi.fn(),
-    }));
+    createImageBitmapMock.mockImplementationOnce(async () =>
+      fakeBitmap({ width: 640, height: 400 }),
+    );
     feed(bridge, 2);
-    await flushDecode();
-    expect(render({ enabled: true, canvasRef, threadId: THREAD_ID }).frameSize).toEqual({
+    await decoded();
+    expect(render({ enabled: true, canvasRef, threadRef: THREAD_REF }).frameSize).toEqual({
       width: 640,
       height: 400,
     });
@@ -385,14 +403,13 @@ describe("useComputerPreviewTap", () => {
   it("retains the frame size through the quiet window while the stale frame shows", async () => {
     vi.useFakeTimers();
     const bridge = createBridge();
-    vi.stubGlobal("window", { desktopBridge: { computerPreview: { onFrame: bridge.onFrame } } });
+    vi.stubGlobal("window", { desktopBridge: { computer: { onPreviewFrame: bridge.onFrame } } });
     const { context, canvasRef } = createCanvas();
 
-    render({ enabled: true, canvasRef, threadId: THREAD_ID });
+    render({ enabled: true, canvasRef, threadRef: THREAD_REF });
     feed(bridge, 1);
-    await vi.advanceTimersByTimeAsync(0);
-    await flushDecode();
-    expect(render({ enabled: true, canvasRef, threadId: THREAD_ID }).frameSize).toEqual({
+    await decoded();
+    expect(render({ enabled: true, canvasRef, threadRef: THREAD_REF }).frameSize).toEqual({
       width: 320,
       height: 200,
     });
@@ -400,7 +417,7 @@ describe("useComputerPreviewTap", () => {
     // Quiet only ends tap activity: the canvas still shows the stale frame,
     // so its dimensions must stay put instead of snapping the aspect.
     vi.advanceTimersByTime(COMPUTER_PREVIEW_TAP_QUIET_MS + 1);
-    const quiet = render({ enabled: true, canvasRef, threadId: THREAD_ID });
+    const quiet = render({ enabled: true, canvasRef, threadRef: THREAD_REF });
     expect(quiet.active).toBe(false);
     expect(quiet.frameSize).toEqual({ width: 320, height: 200 });
     expect(context.clearRect).not.toHaveBeenCalled();
@@ -408,42 +425,42 @@ describe("useComputerPreviewTap", () => {
 
   it("resets the frame size on disable while keeping the canvas painted", async () => {
     const bridge = createBridge();
-    vi.stubGlobal("window", { desktopBridge: { computerPreview: { onFrame: bridge.onFrame } } });
+    vi.stubGlobal("window", { desktopBridge: { computer: { onPreviewFrame: bridge.onFrame } } });
     const { context, canvasRef } = createCanvas();
 
-    render({ enabled: true, canvasRef, threadId: THREAD_ID });
+    render({ enabled: true, canvasRef, threadRef: THREAD_REF });
     feed(bridge, 1);
-    await flushDecode();
-    expect(render({ enabled: true, canvasRef, threadId: THREAD_ID }).frameSize).toEqual({
+    await decoded();
+    expect(render({ enabled: true, canvasRef, threadRef: THREAD_REF }).frameSize).toEqual({
       width: 320,
       height: 200,
     });
 
-    const disabled = render({ enabled: false, canvasRef, threadId: THREAD_ID });
+    const disabled = render({ enabled: false, canvasRef, threadRef: THREAD_REF });
     expect(bridge.unsubscribe).toHaveBeenCalledOnce();
     // The pixels stay — a teardown never blanks the canvas — but the tap no
     // longer claims a frame worth holding, so the stills fallback may resume.
     expect(context.clearRect).not.toHaveBeenCalled();
     // Effects run after the render that triggered them, so read the settled
     // state one render later, like the disable test above.
-    const settled = render({ enabled: false, canvasRef, threadId: THREAD_ID });
+    const settled = render({ enabled: false, canvasRef, threadRef: THREAD_REF });
     expect(settled.active).toBe(false);
     expect(settled.frameSize).toBeNull();
     expect(disabled.frameSize).toEqual({ width: 320, height: 200 });
   });
 
-  it("stays inactive and draws nothing when another thread drives the desktop", async () => {
+  it("stays inactive and draws nothing when another thread drives the desktop", () => {
     // A refused call: agent mid-turn, but another thread owns the lease.
     tapOwnership.state = ownedThreadState({
-      controlOwnerThreadId: "other-thread" as ThreadId,
+      controlOwnerThreadId: ThreadId.make("other-thread"),
       agentActive: true,
       controlledByOtherThread: true,
     });
     const bridge = createBridge();
-    vi.stubGlobal("window", { desktopBridge: { computerPreview: { onFrame: bridge.onFrame } } });
+    vi.stubGlobal("window", { desktopBridge: { computer: { onPreviewFrame: bridge.onFrame } } });
     const { context, canvasRef } = createCanvas();
 
-    const output = render({ enabled: true, canvasRef, threadId: THREAD_ID });
+    const output = render({ enabled: true, canvasRef, threadRef: THREAD_REF });
     expect(output.active).toBe(false);
     expect(output.frameSize).toBeNull();
     // Not the driving thread, so the host-wide tap is never even subscribed:
@@ -451,10 +468,9 @@ describe("useComputerPreviewTap", () => {
     expect(bridge.onFrame).not.toHaveBeenCalled();
 
     feed(bridge, 1);
-    await flushDecode();
     expect(createImageBitmapMock).not.toHaveBeenCalled();
     expect(context.drawImage).not.toHaveBeenCalled();
-    const still = render({ enabled: true, canvasRef, threadId: THREAD_ID });
+    const still = render({ enabled: true, canvasRef, threadRef: THREAD_REF });
     expect(still.active).toBe(false);
     expect(still.frameSize).toBeNull();
   });
@@ -466,34 +482,34 @@ describe("useComputerPreviewTap", () => {
       controlledByOtherThread: false,
     });
     const bridge = createBridge();
-    vi.stubGlobal("window", { desktopBridge: { computerPreview: { onFrame: bridge.onFrame } } });
+    vi.stubGlobal("window", { desktopBridge: { computer: { onPreviewFrame: bridge.onFrame } } });
     const { context, canvasRef } = createCanvas();
 
-    render({ enabled: true, canvasRef, threadId: THREAD_ID });
+    render({ enabled: true, canvasRef, threadRef: THREAD_REF });
     feed(bridge, 1);
-    await flushDecode();
+    await decoded();
 
     expect(createImageBitmapMock).toHaveBeenCalledOnce();
     expect(context.drawImage).toHaveBeenCalledOnce();
-    const output = render({ enabled: true, canvasRef, threadId: THREAD_ID });
+    const output = render({ enabled: true, canvasRef, threadRef: THREAD_REF });
     expect(output.active).toBe(true);
     expect(output.frameSize).toEqual({ width: 320, height: 200 });
   });
 
-  it("leaves untagged frames to the stills fallback while background tasks share the host", async () => {
+  it("leaves untagged frames to the stills fallback while background tasks share the host", () => {
     tapOwnership.state = ownedThreadState({
       controlOwnerThreadId: THREAD_ID,
       agentActive: true,
       sharedPreviewUnavailable: true,
     });
     const bridge = createBridge();
-    vi.stubGlobal("window", { desktopBridge: { computerPreview: { onFrame: bridge.onFrame } } });
+    vi.stubGlobal("window", { desktopBridge: { computer: { onPreviewFrame: bridge.onFrame } } });
     const { context, canvasRef } = createCanvas();
-    const output = render({ enabled: true, canvasRef, threadId: THREAD_ID });
+    const output = render({ enabled: true, canvasRef, threadRef: THREAD_REF });
     expect(output.active).toBe(false);
     expect(bridge.onFrame).not.toHaveBeenCalled();
     feed(bridge, 1);
-    await flushDecode();
+    expect(createImageBitmapMock).not.toHaveBeenCalled();
     expect(context.drawImage).not.toHaveBeenCalled();
   });
 
@@ -504,14 +520,14 @@ describe("useComputerPreviewTap", () => {
       controlledByOtherThread: false,
     });
     const bridge = createBridge();
-    vi.stubGlobal("window", { desktopBridge: { computerPreview: { onFrame: bridge.onFrame } } });
+    vi.stubGlobal("window", { desktopBridge: { computer: { onPreviewFrame: bridge.onFrame } } });
     const { context, canvasRef } = createCanvas();
 
-    render({ enabled: true, canvasRef, threadId: THREAD_ID });
+    render({ enabled: true, canvasRef, threadRef: THREAD_REF });
     feed(bridge, 1);
-    await flushDecode();
+    await decoded();
 
     expect(context.drawImage).toHaveBeenCalledOnce();
-    expect(render({ enabled: true, canvasRef, threadId: THREAD_ID }).active).toBe(true);
+    expect(render({ enabled: true, canvasRef, threadRef: THREAD_REF }).active).toBe(true);
   });
 });

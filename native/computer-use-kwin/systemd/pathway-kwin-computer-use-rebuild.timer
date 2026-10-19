@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodically verify the Pathway KWin computer-use plugin install
+
+[Timer]
+OnStartupSec=1min
+OnUnitActiveSec=6h
+Persistent=true
+Unit=pathway-kwin-computer-use-rebuild.service
+
+[Install]
+WantedBy=timers.target

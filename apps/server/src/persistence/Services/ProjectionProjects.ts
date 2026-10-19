@@ -10,24 +10,28 @@ import {
   IsoDateTime,
   ModelSelection,
   ProjectId,
-  ProjectKind,
   ProjectScript,
-  SpaceId,
-} from "@synara/contracts";
-import { Option, Schema, ServiceMap } from "effect";
-import type { Effect } from "effect";
+  ThreadEnvMode,
+} from "@spiritdevs/contracts";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import * as Context from "effect/Context";
+import type * as Effect from "effect/Effect";
 
 import type { ProjectionRepositoryError } from "../Errors.ts";
 
 export const ProjectionProject = Schema.Struct({
   projectId: ProjectId,
-  kind: ProjectKind.pipe(Schema.withDecodingDefault(() => "project")),
   title: Schema.String,
-  workspaceRoot: Schema.String,
+  // SQLite boolean: 0 for inferred titles, 1 for explicit user renames.
+  titleIsCustom: Schema.optional(Schema.Number),
+  // Null for a rootless project, whose directory is attached later.
+  workspaceRoot: Schema.NullOr(Schema.String),
+  internalWorkspaceRoot: Schema.optional(Schema.NullOr(Schema.String)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
+  defaultThreadEnvMode: Schema.NullOr(ThreadEnvMode),
+  faviconPath: Schema.optional(Schema.NullOr(Schema.String)),
   scripts: Schema.Array(ProjectScript),
-  isPinned: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
-  spaceId: Schema.NullOr(SpaceId).pipe(Schema.withDecodingDefault(() => null)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),
@@ -43,13 +47,6 @@ export const DeleteProjectionProjectInput = Schema.Struct({
   projectId: ProjectId,
 });
 export type DeleteProjectionProjectInput = typeof DeleteProjectionProjectInput.Type;
-
-export const ClearProjectionProjectSpaceAssignmentsInput = Schema.Struct({
-  spaceId: SpaceId,
-  updatedAt: IsoDateTime,
-});
-export type ClearProjectionProjectSpaceAssignmentsInput =
-  typeof ClearProjectionProjectSpaceAssignmentsInput.Type;
 
 /**
  * ProjectionProjectRepositoryShape - Service API for projected project records.
@@ -85,17 +82,12 @@ export interface ProjectionProjectRepositoryShape {
   readonly deleteById: (
     input: DeleteProjectionProjectInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
-
-  /** Clear every active or soft-deleted project assignment for a deleted space. */
-  readonly clearSpaceAssignments: (
-    input: ClearProjectionProjectSpaceAssignmentsInput,
-  ) => Effect.Effect<void, ProjectionRepositoryError>;
 }
 
 /**
  * ProjectionProjectRepository - Service tag for project projection persistence.
  */
-export class ProjectionProjectRepository extends ServiceMap.Service<
+export class ProjectionProjectRepository extends Context.Service<
   ProjectionProjectRepository,
   ProjectionProjectRepositoryShape
->()("synara/persistence/Services/ProjectionProjects/ProjectionProjectRepository") {}
+>()("@spiritdevs/pathway/persistence/Services/ProjectionProjects/ProjectionProjectRepository") {}

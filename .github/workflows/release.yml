@@ -1,418 +1,402 @@
-name: Release Desktop
+name: Release
 
 on:
   push:
     tags:
       - "v*.*.*"
+      - "!v*-nightly.*"
+  schedule:
+    # Off minute zero: GitHub delays scheduled runs most at the top of the hour.
+    - cron: "7 */3 * * *"
   workflow_dispatch:
     inputs:
+      channel:
+        description: "Release channel"
+        required: false
+        default: stable
+        type: choice
+        options:
+          - stable
+          - nightly
       version:
         description: "Release version (for example 1.2.3 or v1.2.3)"
-        required: true
+        required: false
         type: string
-      publish_release:
-        description: "Publish the GitHub/npm release after successful builds"
-        required: true
-        default: false
-        type: boolean
-      platform:
-        description: "Build-only platform scope (publication requires all)"
-        type: choice
-        default: all
-        options: [all, mac-arm64, mac-x64, linux-x64, win-x64]
-      stage:
-        description: "Build-only stage (publication requires artifact; preflight runs only the quality gates)"
-        type: choice
-        default: artifact
-        options: [artifact, native, icon, js, preflight]
-      cua_benchmark_baseline:
-        description: "Optional full baseline commit for paired cold Cua builds (native, one Mac only)"
-        type: string
-        default: ""
 
-permissions: {}
-
-env:
-  # The same build setting is fingerprinted on every portable-output consumer.
-  AZURE_TRUSTED_SIGNING_SUBJECT_DN: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBJECT_DN }}
-
+# Serialize nightlies (scheduled and manual) so overlapping runs cannot build
+# the same commit twice or publish out of order. Stable tag releases get their
+# own group so a nightly never blocks them. Running publishers are never
+# canceled. GitHub retains the newest pending run for each channel, and queued
+# nightlies with no new commits skip via check_changes.
 concurrency:
-  group: synara-desktop-release
+  group: release-${{ (github.event_name == 'schedule' || inputs.channel == 'nightly') && 'nightly' || 'stable' }}
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  id-token: none
+
 jobs:
+  check_changes:
+    name: Check for changes since last nightly
+    if: github.event_name == 'schedule'
+    runs-on: ${{ fromJSON(vars.FLEET_MACOS_RUNNER || '["self-hosted","fleet-macos-arm64"]') }}
+    outputs:
+      has_changes: ${{ steps.check.outputs.has_changes }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - id: check
+        name: Compare HEAD to last nightly tag
+        run: |
+          last_nightly_tag=$(git tag --list 'v*-nightly.*' 'nightly-v*' --sort=-creatordate | head -n 1)
+          if [[ -z "$last_nightly_tag" ]]; then
+            echo "No previous nightly tag found. Proceeding with release."
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          last_nightly_sha=$(git rev-parse "$last_nightly_tag^{commit}")
+          head_sha=$(git rev-parse HEAD)
+
+          if [[ "$last_nightly_sha" == "$head_sha" ]]; then
+            echo "No changes on main since last nightly release ($last_nightly_tag). Skipping."
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Changes detected on main since $last_nightly_tag ($last_nightly_sha → $head_sha). Proceeding."
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
   preflight:
     name: Preflight
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      contents: read
+    needs: [check_changes]
+    if: |
+      !failure() && !cancelled() &&
+      (github.event_name != 'schedule' || needs.check_changes.outputs.has_changes == 'true')
+    runs-on: ${{ fromJSON(vars.FLEET_MACOS_RUNNER || '["self-hosted","fleet-macos-arm64"]') }}
+    timeout-minutes: 10
     outputs:
+      release_channel: ${{ steps.release_meta.outputs.release_channel }}
       version: ${{ steps.release_meta.outputs.version }}
       tag: ${{ steps.release_meta.outputs.tag }}
+      release_name: ${{ steps.release_meta.outputs.name }}
+      short_sha: ${{ steps.release_meta.outputs.short_sha }}
+      previous_tag: ${{ steps.previous_tag.outputs.previous_tag }}
+      cli_dist_tag: ${{ steps.release_meta.outputs.cli_dist_tag }}
       is_prerelease: ${{ steps.release_meta.outputs.is_prerelease }}
       make_latest: ${{ steps.release_meta.outputs.make_latest }}
-      mirror_to_stable_channel: ${{ steps.release_meta.outputs.mirror_to_stable_channel }}
-      publish_release: ${{ steps.release_mode.outputs.publish_release }}
-      release_lane: ${{ steps.release_meta.outputs.release_lane }}
-      bridge_tag: ${{ steps.release_meta.outputs.bridge_tag }}
-      update_channel: ${{ steps.release_meta.outputs.update_channel }}
-      source_commit: ${{ steps.source_provenance.outputs.source_commit }}
-      source_tag: ${{ steps.source_provenance.outputs.source_tag }}
-      lockfile_sha256: ${{ steps.source_provenance.outputs.lockfile_sha256 }}
-      ref: ${{ steps.source_provenance.outputs.source_commit }}
-      matrix: ${{ steps.scope.outputs.matrix }}
-      build_icon: ${{ steps.scope.outputs.build_icon }}
-      build_js: ${{ steps.scope.outputs.build_js }}
-      build_native: ${{ steps.scope.outputs.build_native }}
-      benchmark_native: ${{ steps.scope.outputs.benchmark_native }}
-      quality_gates: ${{ steps.scope.outputs.quality_gates }}
-      package_artifacts: ${{ steps.scope.outputs.package_artifacts }}
-      build_server: ${{ steps.scope.outputs.build_server }}
+      ref: ${{ github.sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
 
-      - name: Setup Node
-        uses: actions/setup-node@v6
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        env:
+          # The next step installs and verifies Electron with download retries.
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         with:
           node-version-file: package.json
+          cache: true
+          run-install: true
 
-      - id: release_mode
-        name: Resolve publication mode
-        shell: bash
-        env:
-          PUBLISH_RELEASE: ${{ github.event_name == 'push' || inputs.publish_release }}
-        run: |
-          echo "publish_release=$PUBLISH_RELEASE" >> "$GITHUB_OUTPUT"
-          if [[ "$PUBLISH_RELEASE" == "true" ]]; then
-            echo "Publication enabled."
-          else
-            echo "Build-only validation enabled; no release or package will be published."
-          fi
-
-      - id: scope
-        name: Validate build scope
-        env:
-          BUILD_PLATFORM: ${{ inputs.platform || 'all' }}
-          BUILD_STAGE: ${{ inputs.stage || 'artifact' }}
-          PUBLISH_RELEASE: ${{ steps.release_mode.outputs.publish_release }}
-          CUA_BENCHMARK_BASELINE: ${{ inputs.cua_benchmark_baseline }}
-        run: node scripts/resolve-release-build-scope.ts
+      - name: Ensure Electron runtime is installed
+        run: vp run --filter @spiritdevs/desktop ensure:electron
 
       - id: release_meta
-        name: Resolve release policy
+        name: Resolve release version
+        shell: bash
         env:
-          RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }}
-        run: node scripts/resolve-release-update-policy.ts "$RELEASE_VERSION"
-
-      - id: source_provenance
-        name: Verify exact release source
-        env:
-          RELEASE_VERSION: ${{ steps.release_meta.outputs.version }}
-          RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
-          PUBLISH_RELEASE: ${{ steps.release_mode.outputs.publish_release }}
-          EXPECTED_COMMIT: ${{ github.sha }}
-          SOURCE_REF_TYPE: ${{ github.ref_type }}
-          SOURCE_REF_NAME: ${{ github.ref_name }}
+          DISPATCH_CHANNEL: ${{ github.event.inputs.channel }}
+          DISPATCH_VERSION: ${{ github.event.inputs.version }}
+          NIGHTLY_SHA: ${{ github.sha }}
+          NIGHTLY_RUN_NUMBER: ${{ github.run_number }}
         run: |
-          node scripts/verify-release-source-provenance.ts \
-            "$RELEASE_VERSION" \
-            "$RELEASE_TAG" \
-            "$PUBLISH_RELEASE" \
-            "$EXPECTED_COMMIT" \
-            "$SOURCE_REF_TYPE" \
-            "$SOURCE_REF_NAME"
+          if [[ "${GITHUB_EVENT_NAME}" == "schedule" || ( "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${DISPATCH_CHANNEL:-stable}" == "nightly" ) ]]; then
+            nightly_date="$(date -u +%Y%m%d)"
 
-      - name: Verify public updater repository
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          visibility="$(gh api "repos/${GITHUB_REPOSITORY}" --jq .visibility)"
-          if [[ "$visibility" != "public" ]]; then
-            echo "The dedicated updater channel requires the public GitHub provider; repository visibility is $visibility." >&2
-            exit 1
-          fi
+            node scripts/resolve-nightly-release.ts \
+              --date "$nightly_date" \
+              --run-number "$NIGHTLY_RUN_NUMBER" \
+              --sha "$NIGHTLY_SHA" \
+              --github-output
 
-      - name: Verify pinned compatibility feed
-        if: ${{ steps.release_meta.outputs.release_lane == 'clean' && steps.release_mode.outputs.publish_release == 'true' && steps.release_meta.outputs.mirror_to_stable_channel == 'true' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BRIDGE_TAG: ${{ steps.release_meta.outputs.bridge_tag }}
-          UPDATE_CHANNEL: ${{ steps.release_meta.outputs.update_channel }}
-        run: |
-          actual_latest="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)"
-          if [[ "$actual_latest" != "$BRIDGE_TAG" ]]; then
-            echo "Expected GitHub Latest to remain pinned to $BRIDGE_TAG, got $actual_latest." >&2
-            exit 1
-          fi
+            echo "release_channel=nightly" >> "$GITHUB_OUTPUT"
+            echo "cli_dist_tag=nightly" >> "$GITHUB_OUTPUT"
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "make_latest=false" >> "$GITHUB_OUTPUT"
+          else
+            if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+              raw="${DISPATCH_VERSION}"
+              if [[ -z "$raw" ]]; then
+                echo "workflow_dispatch stable releases require the version input." >&2
+                exit 1
+              fi
+            else
+              raw="${GITHUB_REF_NAME}"
+            fi
 
-          bridge_release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${BRIDGE_TAG}" --jq .id)"
-          bridge_assets="$(
-            gh api --paginate \
-              "repos/${GITHUB_REPOSITORY}/releases/${bridge_release_id}/assets?per_page=100" \
-              --jq '.[].name'
-          )"
-          required_assets=(
-            latest-mac.yml
-            latest.yml
-            latest-linux.yml
-            "${UPDATE_CHANNEL}-mac.yml"
-            "${UPDATE_CHANNEL}.yml"
-            "${UPDATE_CHANNEL}-linux.yml"
-          )
-          for required_asset in "${required_assets[@]}"; do
-            if ! grep -Fxq "$required_asset" <<< "$bridge_assets"; then
-              echo "Pinned compatibility feed is missing $required_asset." >&2
+            version="${raw#v}"
+            if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+              echo "Invalid release version: $raw" >&2
               exit 1
             fi
-          done
 
-  # Preflight resolves policy only, so the quality gates fan out immediately.
-  # The serial server suite is the longest gate; it runs in its own shards below.
-  quality:
-    name: Quality gates
-    needs: preflight
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.preflight.outputs.ref }}
+            echo "release_channel=stable" >> "$GITHUB_OUTPUT"
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            echo "tag=v$version" >> "$GITHUB_OUTPUT"
+            echo "name=Pathway v$version" >> "$GITHUB_OUTPUT"
+            echo "cli_dist_tag=latest" >> "$GITHUB_OUTPUT"
+            if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+              echo "make_latest=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+              echo "make_latest=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
 
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version-file: package.json
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-
-      # Five workspace packages patch the one shared TypeScript install in their
-      # prepare scripts; concurrent patching of that file is a race, so lifecycle
-      # scripts run one at a time here.
-      - name: Install dependencies
-        run: bun install --frozen-lockfile --concurrent-scripts=1
-
-      - name: Verify Synara identity
-        run: bun run brand:check
-
-      - name: Lint
-        if: needs.preflight.outputs.quality_gates == 'true'
-        run: bun run lint
-
-      - name: Typecheck
-        if: needs.preflight.outputs.quality_gates == 'true'
-        run: bun run typecheck
-
-      - name: Test every package except the server
-        if: needs.preflight.outputs.quality_gates == 'true'
-        run: bunx turbo run test --filter='!@synara/cli'
-
-  # The server package runs its files serially (see apps/server/package.json).
-  # Vitest's native shards keep every file and assertion; only the distribution
-  # across runners changes, matching the measured three-way split in ci.yml.
-  server_tests:
-    name: Server tests (${{ matrix.shard }})
-    needs: preflight
-    if: needs.preflight.outputs.quality_gates == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    strategy:
-      # One shard's failure must not cancel the others, so every lane reports
-      # complete signal for the release gate.
-      fail-fast: false
-      matrix:
-        shard: ["1/3", "2/3", "3/3"]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.preflight.outputs.ref }}
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version-file: package.json
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile --concurrent-scripts=1
-
-      - name: Test server shard ${{ matrix.shard }}
-        run: bunx turbo run test --filter=@synara/cli -- --shard=${{ matrix.shard }}
-
-  build_portable:
-    name: Build portable JavaScript
-    needs: [preflight, quality, server_tests]
-    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.quality.result == 'success' && (needs.server_tests.result == 'success' || needs.server_tests.result == 'skipped') && needs.preflight.outputs.build_js == 'true' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.preflight.outputs.ref }}
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-      - uses: actions/setup-node@v6
-        with:
-          node-version-file: package.json
-      - name: Report runner capacity
-        run: node scripts/report-build-runner.ts
-      - name: Install frozen dependencies
-        run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
-      - name: Build portable outputs
-        run: bun run build:desktop
-      - name: Record portable output provenance
-        env:
-          SOURCE_COMMIT: ${{ needs.preflight.outputs.source_commit }}
+      - name: Check release formatting
         run: |
-          mkdir -p "$RUNNER_TEMP/portable-build"
-          node scripts/portable-build.ts create "$RUNNER_TEMP/portable-build/manifest.json" "$SOURCE_COMMIT"
-          tar -cf "$RUNNER_TEMP/portable-build/outputs.tar" apps/desktop/dist-electron apps/server/dist
-      - uses: actions/upload-artifact@v7
-        with:
-          name: portable-build
-          path: ${{ runner.temp }}/portable-build/*
-          compression-level: 1
-          if-no-files-found: error
+          vp fmt --check \
+            .github/workflows/release.yml \
+            apps/server/src/cloud/publicConfig.test.ts \
+            apps/web/src/cloud/connectCliAuth.test.ts \
+            apps/web/src/components/clerk/authRedirect.test.ts \
+            apps/web/src/hostedPairing.test.ts \
+            apps/web/src/hostedPairing.ts \
+            apps/web/vercel.ts \
+            packages/shared/src/connectAuth.test.ts \
+            packages/shared/src/connectAuth.ts \
+            packages/shared/src/remote.test.ts
 
-  build_mac_icon:
-    name: Compile macOS icon
-    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.quality.result == 'success' && (needs.server_tests.result == 'success' || needs.server_tests.result == 'skipped') && needs.preflight.outputs.build_icon == 'true' }}
-    needs: [preflight, quality, server_tests]
-    runs-on: macos-26
-    timeout-minutes: 10
-    permissions:
-      contents: read
+      - name: Typecheck hosted web packages
+        run: |
+          vp run --filter @spiritdevs/shared typecheck
+          vp run --filter @spiritdevs/web typecheck
+
+      - name: Test release paths
+        run: |
+          vp test run \
+            apps/desktop/src/electron/ElectronUpdater.test.ts \
+            apps/desktop/src/settings/DesktopAppSettings.test.ts \
+            apps/desktop/src/updates/DesktopUpdates.test.ts \
+            apps/server/src/cloud/publicConfig.test.ts \
+            apps/web/src/cloud/connectCliAuth.test.ts \
+            apps/web/src/components/clerk/authRedirect.test.ts \
+            apps/web/src/hostedPairing.test.ts \
+            packages/shared/src/connectAuth.test.ts \
+            packages/shared/src/remote.test.ts \
+            scripts/build-desktop-artifact.test.ts \
+            scripts/resolve-nightly-release.test.ts \
+            scripts/resolve-previous-release-tag.test.ts
+
+      - id: previous_tag
+        name: Resolve previous release tag
+        run: |
+          node scripts/resolve-previous-release-tag.ts \
+            --channel "${{ steps.release_meta.outputs.release_channel }}" \
+            --current-tag "${{ steps.release_meta.outputs.tag }}" \
+            --github-output
+
+  relay_public_config:
+    name: Resolve Pathway public config
+    # Consumes only the commit SHA, not preflight's resolved version, so it runs
+    # alongside preflight instead of after it. The condition mirrors preflight's:
+    # check_changes is skipped on non-schedule events (skipped is neither failure
+    # nor success, so success() would be wrong here).
+    needs: [check_changes]
+    if: |
+      !failure() && !cancelled() &&
+      (github.event_name != 'schedule' || needs.check_changes.outputs.has_changes == 'true')
+    runs-on: ${{ fromJSON(vars.FLEET_MACOS_RUNNER || '["self-hosted","fleet-macos-arm64"]') }}
+    timeout-minutes: 5
+    environment:
+      name: production
+    outputs:
+      clerk_publishable_key: ${{ steps.public_config.outputs.clerk_publishable_key }}
+      clerk_jwt_template: ${{ steps.public_config.outputs.clerk_jwt_template }}
+      clerk_cli_oauth_client_id: ${{ steps.public_config.outputs.clerk_cli_oauth_client_id }}
+      relay_url: ${{ steps.public_config.outputs.relay_url }}
+      convex_url: ${{ steps.public_config.outputs.convex_url }}
+      hosted_app_url: ${{ steps.public_config.outputs.hosted_app_url }}
+      hosted_app_domain: ${{ steps.public_config.outputs.hosted_app_domain }}
+    env:
+      RELAY_DOMAIN: ${{ vars.RELAY_DOMAIN }}
+      CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
+      CLERK_JWT_TEMPLATE: ${{ vars.CLERK_JWT_TEMPLATE }}
+      CLERK_CLI_OAUTH_CLIENT_ID: ${{ vars.CLERK_CLI_OAUTH_CLIENT_ID }}
+      PATHWAY_CONVEX_URL: ${{ vars.CONVEX_URL }}
+      RELEASE_CHANNEL: ${{ (github.event_name == 'schedule' || inputs.channel == 'nightly') && 'nightly' || 'stable' }}
+      PATHWAY_WEB_NIGHTLY_DOMAIN: ${{ vars.PATHWAY_WEB_NIGHTLY_DOMAIN }}
+      PATHWAY_WEB_LATEST_DOMAIN: ${{ vars.PATHWAY_WEB_LATEST_DOMAIN }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.preflight.outputs.ref }}
-
-      - name: Compile Icon Composer catalog
-        env:
-          DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      - id: public_config
+        name: Resolve production public config
+        shell: bash
         run: |
           set -euo pipefail
-          xcodebuild -version
-          mkdir -p "$RUNNER_TEMP/mac-icon"
-          xcrun actool assets/prod/Synara.icon --compile "$RUNNER_TEMP/mac-icon" --platform macosx --minimum-deployment-target 26.0 --app-icon Synara --include-all-app-icons --output-partial-info-plist "$RUNNER_TEMP/icon-partial.plist" --output-format human-readable-text
-          test -s "$RUNNER_TEMP/mac-icon/Assets.car"
 
-      - name: Upload icon catalog
-        uses: actions/upload-artifact@v7
-        with:
-          name: mac-icon-catalog
-          path: ${{ runner.temp }}/mac-icon/Assets.car
-          if-no-files-found: error
+          relay_domain="${RELAY_DOMAIN:-relay.spiritdevs.com}"
+          required=(
+            relay_domain
+            CLERK_PUBLISHABLE_KEY
+            CLERK_JWT_TEMPLATE
+            CLERK_CLI_OAUTH_CLIENT_ID
+            PATHWAY_CONVEX_URL
+          )
+          missing=()
+          for name in "${required[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Missing required release configuration: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+          echo "clerk_publishable_key=$CLERK_PUBLISHABLE_KEY" >> "$GITHUB_OUTPUT"
+          echo "clerk_jwt_template=$CLERK_JWT_TEMPLATE" >> "$GITHUB_OUTPUT"
+          echo "clerk_cli_oauth_client_id=$CLERK_CLI_OAUTH_CLIENT_ID" >> "$GITHUB_OUTPUT"
+          echo "relay_url=https://$relay_domain" >> "$GITHUB_OUTPUT"
+          echo "convex_url=$PATHWAY_CONVEX_URL" >> "$GITHUB_OUTPUT"
+
+          if [[ "$RELEASE_CHANNEL" == "stable" ]]; then
+            channel_domain="${PATHWAY_WEB_LATEST_DOMAIN:-}"
+            test -n "$channel_domain" || { echo "Set PATHWAY_WEB_LATEST_DOMAIN before a stable release." >&2; exit 1; }
+          else
+            channel_domain="${PATHWAY_WEB_NIGHTLY_DOMAIN:-app.pathwayos.dev}"
+          fi
+          if [[ ! "$channel_domain" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]]; then
+            echo "Hosted app domain must be a hostname without a scheme or path." >&2
+            exit 1
+          fi
+          echo "hosted_app_url=https://$channel_domain" >> "$GITHUB_OUTPUT"
+          echo "hosted_app_domain=$channel_domain" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build ${{ matrix.label }}
-    needs: [preflight, quality, server_tests, build_mac_icon, build_portable]
-    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.quality.result == 'success' && (needs.server_tests.result == 'success' || needs.server_tests.result == 'skipped') && needs.preflight.outputs.build_native == 'true' && (needs.build_mac_icon.result == 'success' || needs.build_mac_icon.result == 'skipped') && (needs.build_portable.result == 'success' || needs.build_portable.result == 'skipped') }}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: ${{ needs.preflight.outputs.benchmark_native == 'true' && 25 || 60 }}
-    permissions:
-      contents: read
+    needs: [preflight, relay_public_config]
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.relay_public_config.result == 'success' }}
+    runs-on: ${{ fromJSON(vars.FLEET_MACOS_RUNNER || '["self-hosted","fleet-macos-arm64"]') }}
+    timeout-minutes: 45
+    environment:
+      name: production
+    env:
+      PATHWAY_CLERK_PUBLISHABLE_KEY: ${{ needs.relay_public_config.outputs.clerk_publishable_key }}
+      PATHWAY_CLERK_JWT_TEMPLATE: ${{ needs.relay_public_config.outputs.clerk_jwt_template }}
+      PATHWAY_CLERK_CLI_OAUTH_CLIENT_ID: ${{ needs.relay_public_config.outputs.clerk_cli_oauth_client_id }}
+      PATHWAY_RELAY_URL: ${{ needs.relay_public_config.outputs.relay_url }}
+      PATHWAY_CONVEX_URL: ${{ needs.relay_public_config.outputs.convex_url }}
+      CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+      PATHWAY_HOSTED_APP_URL: ${{ needs.relay_public_config.outputs.hosted_app_url }}
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.preflight.outputs.matrix) }}
+      matrix:
+        include:
+          - label: macOS arm64
+            platform: mac
+            target: dmg
+            arch: arm64
+            rust_target: aarch64-apple-darwin
+            resource_key: darwin-arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.ref }}
-          fetch-depth: 0
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         with:
           node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@spiritdevs/desktop...
+              - --filter=@spiritdevs/pathway...
+              - --filter=@spiritdevs/scripts...
 
-      - name: Install dependencies
-        if: needs.preflight.outputs.package_artifacts == 'true'
-        # Preflight validates the entire workspace. Native artifacts retain all
-        # runtime/build dependencies but do not install the unrelated marketing site.
-        run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
+      - name: Ensure Electron runtime is installed
+        run: vp run --filter @spiritdevs/desktop ensure:electron
 
-      - name: Download macOS icon catalog
-        if: matrix.platform == 'mac' && needs.preflight.outputs.package_artifacts == 'true'
-        uses: actions/download-artifact@v8
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          name: mac-icon-catalog
-          path: ${{ runner.temp }}/mac-icon
-
-      - name: Select macOS native toolchain
-        if: matrix.platform == 'mac' && needs.preflight.outputs.package_artifacts == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          # The pinned apple-metal bridge requires the macOS 15 SDK.
-          # Icon Composer runs separately on macOS 26 to avoid AssetRuntime
-          # framework crashes on the older native-build host.
-          native_developer_dir=/Applications/Xcode_16.4.app/Contents/Developer
-          test -d "$native_developer_dir"
-          test -s "$RUNNER_TEMP/mac-icon/Assets.car"
-          echo "DEVELOPER_DIR=$native_developer_dir" >> "$GITHUB_ENV"
-          echo "SYNARA_MAC_ICON_CATALOG=$RUNNER_TEMP/mac-icon/Assets.car" >> "$GITHUB_ENV"
-          DEVELOPER_DIR="$native_developer_dir" xcodebuild -version
-
-      - name: Report runner capacity
-        run: node scripts/report-build-runner.ts
+          targets: ${{ matrix.rust_target }}
 
       - name: Provision verified Cua
         if: matrix.platform == 'mac' || matrix.platform == 'linux'
         uses: ./.github/actions/provision-cua
         with:
-          benchmark-baseline: ${{ inputs.cua_benchmark_baseline || '' }}
+          targets: ${{ matrix.rust_target }}
 
-      - name: Upload Cua benchmark evidence
-        if: ${{ always() && needs.preflight.outputs.benchmark_native == 'true' }}
-        uses: actions/upload-artifact@v7
+      - name: Align package versions to release version
+        run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
+
+      - name: Download WSL node-pty prebuild
+        if: matrix.platform == 'win'
+        uses: actions/download-artifact@v7
         with:
-          name: cua-benchmark-${{ matrix.arch }}
-          path: ${{ runner.temp }}/cua-benchmark/evidence
-          if-no-files-found: error
+          name: wsl-node-pty-x64
+          path: wsl-prebuild
 
-      - name: Restore portable outputs
-        if: needs.preflight.outputs.package_artifacts == 'true'
-        uses: ./.github/actions/restore-portable-build
-        with:
-          source-commit: ${{ needs.preflight.outputs.source_commit }}
+      - name: Install Spectre-mitigated MSVC libs
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installPath = & $vswhere -products * -latest -property installationPath
+          $setupExe = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
+          $proc = Start-Process -FilePath $setupExe `
+            -ArgumentList "modify", "--installPath", "`"$installPath`"", "--add", `
+            "Microsoft.VisualStudio.Component.VC.Tools.x86.x64.Spectre", "--quiet", "--norestart" `
+            -Wait -PassThru -NoNewWindow
+          if ($null -eq $proc -or $proc.ExitCode -ne 0) {
+            $code = if ($null -ne $proc) { $proc.ExitCode } else { 1 }
+            Write-Error "Visual Studio Installer failed with exit code $code"
+            exit $code
+          }
 
-      - id: build_artifact
-        if: needs.preflight.outputs.package_artifacts == 'true'
-        name: Build desktop artifact
+      - name: Install ImageMagick
+        if: matrix.platform == 'linux'
         shell: bash
+        run: |
+          if ! command -v magick >/dev/null 2>&1 && ! command -v convert >/dev/null 2>&1; then
+              sudo apt-get update
+              sudo apt-get install -y imagemagick
+          fi
+
+          if command -v magick >/dev/null 2>&1; then
+              magick -version
+          else
+              convert -version
+          fi
+
+      - name: Prepare Azure Trusted Signing
+        if: matrix.platform == 'win'
+        shell: pwsh
         env:
-          NODE_OPTIONS: --max-old-space-size=4096
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
@@ -420,29 +404,78 @@ jobs:
           AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
           AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
           AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
-          AZURE_TRUSTED_SIGNING_SUBJECT_DN: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBJECT_DN }}
-          SYNARA_PUBLISH_RELEASE: ${{ needs.preflight.outputs.publish_release }}
-          ALLOW_UNSIGNED_WINDOWS_PUBLICATION: ${{ vars.SYNARA_ALLOW_UNSIGNED_WINDOWS_RELEASE == needs.preflight.outputs.version }}
-          SOURCE_COMMIT: ${{ needs.preflight.outputs.source_commit }}
-          SOURCE_TAG: ${{ needs.preflight.outputs.source_tag }}
-          LOCKFILE_SHA256: ${{ needs.preflight.outputs.lockfile_sha256 }}
         run: |
-          signed=false
+          $ErrorActionPreference = "Stop"
+
+          $requiredSecrets = @(
+            $env:AZURE_TENANT_ID,
+            $env:AZURE_CLIENT_ID,
+            $env:AZURE_CLIENT_SECRET,
+            $env:AZURE_TRUSTED_SIGNING_ENDPOINT,
+            $env:AZURE_TRUSTED_SIGNING_ACCOUNT_NAME,
+            $env:AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME,
+            $env:AZURE_TRUSTED_SIGNING_PUBLISHER_NAME
+          )
+          if ($requiredSecrets | Where-Object { [string]::IsNullOrWhiteSpace($_) }) {
+            Write-Host "Azure Trusted Signing disabled; skipping TrustedSigning module preparation."
+            exit 0
+          }
+
+          try {
+            Install-PackageProvider `
+              -Name NuGet `
+              -MinimumVersion 2.8.5.201 `
+              -Force `
+              -Scope CurrentUser `
+              -ErrorAction Stop
+          } catch {
+            Write-Warning "Could not bootstrap NuGet package provider. Continuing because the runner may already have a usable provider. $($_.Exception.Message)"
+          }
+
+          Install-Module `
+            -Name TrustedSigning `
+            -MinimumVersion 0.5.0 `
+            -Force `
+            -AllowClobber `
+            -Repository PSGallery `
+            -Scope CurrentUser `
+            -ErrorAction Stop
+
+          Import-Module TrustedSigning -MinimumVersion 0.5.0 -Force
+          Get-Command Invoke-TrustedSigning -ErrorAction Stop
+
+          $moduleRoots = @(
+            [System.IO.Path]::Combine([Environment]::GetFolderPath("MyDocuments"), "PowerShell", "Modules"),
+            [System.IO.Path]::Combine([Environment]::GetFolderPath("MyDocuments"), "WindowsPowerShell", "Modules"),
+            [System.IO.Path]::Combine($env:ProgramFiles, "PowerShell", "Modules"),
+            [System.IO.Path]::Combine($env:ProgramFiles, "WindowsPowerShell", "Modules")
+          )
+          $modulePathEntries = @($moduleRoots + ($env:PSModulePath -split ";")) |
+            Where-Object { $_ -and (Test-Path $_) } |
+            Select-Object -Unique
+          "PSModulePath=$($modulePathEntries -join ';')" >> $env:GITHUB_ENV
+
+      - name: Build desktop artifact
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          MACOS_PROVISIONING_PROFILE: ${{ secrets.MACOS_PROVISIONING_PROFILE }}
+          PATHWAY_CLERK_PASSKEY_RP_DOMAINS: ${{ vars.CLERK_PASSKEY_RP_DOMAINS }}
+        run: |
+          set -euo pipefail
+          umask 077
           args=(
             --platform "${{ matrix.platform }}"
             --target "${{ matrix.target }}"
             --arch "${{ matrix.arch }}"
             --build-version "${{ needs.preflight.outputs.version }}"
-            --source-commit "$SOURCE_COMMIT"
-            --lockfile-sha256 "$LOCKFILE_SHA256"
-            --skip-build
-            --keep-stage
             --verbose
           )
-
-          if [[ -n "$SOURCE_TAG" ]]; then
-            args+=(--source-tag "$SOURCE_TAG")
-          fi
 
           has_all() {
             for value in "$@"; do
@@ -453,50 +486,89 @@ jobs:
             return 0
           }
 
-          if [[ "${{ matrix.platform }}" == "mac" ]]; then
-            if has_all "$CSC_LINK" "$CSC_KEY_PASSWORD" "$APPLE_API_KEY" "$APPLE_API_KEY_ID" "$APPLE_API_ISSUER" "$APPLE_TEAM_ID"; then
-              key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
-              printf '%s' "$APPLE_API_KEY" > "$key_path"
-              export APPLE_API_KEY="$key_path"
-              echo "macOS signing enabled."
-              signed=true
-              args+=(--signed)
-            elif [[ "$SYNARA_PUBLISH_RELEASE" == "true" ]]; then
-              echo "Publishing macOS artifacts requires every signing and notarization secret."
-              exit 1
-            else
-              echo "Build-only macOS artifact will be unsigned because publication is disabled."
-            fi
-          elif [[ "${{ matrix.platform }}" == "win" ]]; then
-            if has_all \
-              "$AZURE_TENANT_ID" \
-              "$AZURE_CLIENT_ID" \
-              "$AZURE_CLIENT_SECRET" \
-              "$AZURE_TRUSTED_SIGNING_ENDPOINT" \
-              "$AZURE_TRUSTED_SIGNING_ACCOUNT_NAME" \
-              "$AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME" \
-              "$AZURE_TRUSTED_SIGNING_PUBLISHER_NAME" \
-              "$AZURE_TRUSTED_SIGNING_SUBJECT_DN"; then
-              echo "Windows signing enabled (Azure Trusted Signing)."
-              signed=true
-              args+=(--signed)
-            elif [[ "$SYNARA_PUBLISH_RELEASE" == "true" && "$ALLOW_UNSIGNED_WINDOWS_PUBLICATION" != "true" ]]; then
-              echo "Publishing Windows artifacts requires every Azure Trusted Signing secret."
-              exit 1
-            else
-              echo "Windows artifact will be unsigned under the explicit version-scoped release exception."
-            fi
-          else
-            echo "Signing disabled for ${{ matrix.platform }}."
+          if ! has_all \
+            "$CSC_LINK" \
+            "$CSC_KEY_PASSWORD" \
+            "$APPLE_API_KEY" \
+            "$APPLE_API_KEY_ID" \
+            "$APPLE_API_ISSUER" \
+            "$APPLE_TEAM_ID" \
+            "$MACOS_PROVISIONING_PROFILE"; then
+            echo "macOS releases require all signing and notarization secrets." >&2
+            exit 1
           fi
 
-          # Never retry source, signing or notarization failures as downloads.
-          bun run dist:desktop:artifact -- "${args[@]}"
+          key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+          profile_path="$RUNNER_TEMP/pathway.provisionprofile"
+          trap 'rm -f "$key_path" "$profile_path"' EXIT
+          printf '%s' "$APPLE_API_KEY" > "$key_path"
+          export APPLE_API_KEY="$key_path"
 
-          echo "signed=$signed" >> "$GITHUB_OUTPUT"
+          printf '%s' "$MACOS_PROVISIONING_PROFILE" | base64 -D > "$profile_path"
+          security cms -D -i "$profile_path" >/dev/null
+          export PATHWAY_APPLE_TEAM_ID="$APPLE_TEAM_ID"
+          export PATHWAY_MACOS_PROVISIONING_PROFILE="$profile_path"
+
+          echo "macOS signing enabled."
+          args+=(--signed)
+
+          vp run dist:desktop:artifact "${args[@]}"
+
+      - name: Verify signed and notarized macOS release
+        if: matrix.platform == 'mac'
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+          RELEASE_ARCH: ${{ matrix.arch }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          umask 077
+          archive="$GITHUB_WORKSPACE/release/Pathway-Code-${RELEASE_VERSION}-${RELEASE_ARCH}.zip"
+          test -f "$archive" || { echo "Expected release ZIP is missing." >&2; exit 1; }
+          test -n "$APPLE_TEAM_ID" || { echo "Expected Apple team is missing." >&2; exit 1; }
+          verification_dir="$(mktemp -d "$RUNNER_TEMP/pathway-release-check.XXXXXX")"
+          trap 'rm -rf "$verification_dir"' EXIT
+          /usr/bin/ditto -x -k "$archive" "$verification_dir"
+
+          shopt -s nullglob
+          apps=("$verification_dir"/*.app)
+          if [[ "${#apps[@]}" -ne 1 ]]; then
+            echo "Release ZIP must contain exactly one app." >&2
+            exit 1
+          fi
+          app="${apps[0]}"
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "$app"
+          signature="$(/usr/bin/codesign --display --verbose=4 "$app" 2>&1)"
+          if ! /usr/bin/grep -q '^Authority=Developer ID Application: ' <<< "$signature"; then
+            echo "Release app must have a Developer ID Application signature." >&2
+            exit 1
+          fi
+          if ! /usr/bin/grep -Fxq "TeamIdentifier=$APPLE_TEAM_ID" <<< "$signature"; then
+            echo "Release app was signed by an unexpected Apple team." >&2
+            exit 1
+          fi
+          # The Computer Use binaries embed an Info.plist so electron-builder's
+          # re-sign keeps their identifiers; macOS ties TCC grants to them.
+          for nested in \
+            "cua-driver/cua-driver=com.spiritdevs.pathway.cua.driver" \
+            "pathway-helper/pathway-helper=com.spiritdevs.pathway.helper"; do
+            nested_signature="$(/usr/bin/codesign -d --verbose=2 "$app/Contents/Resources/${nested%%=*}" 2>&1)"
+            if ! /usr/bin/grep -Fxq "Identifier=${nested#*=}" <<< "$nested_signature"; then
+              echo "Release ${nested%%=*} must keep signing identifier ${nested#*=}." >&2
+              exit 1
+            fi
+          done
+          executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
+          actual_arch="$(/usr/bin/lipo -archs "$app/Contents/MacOS/$executable")"
+          if [[ "$actual_arch" != "$RELEASE_ARCH" ]]; then
+            echo "Release app has unexpected architecture: $actual_arch" >&2
+            exit 1
+          fi
+          xcrun stapler validate "$app"
+          echo "Verified Developer ID signature, Apple team, nested signing identifiers, $RELEASE_ARCH architecture, and stapled notarization ticket."
 
       - name: Collect release assets
-        if: needs.preflight.outputs.package_artifacts == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -509,155 +581,141 @@ jobs:
             "release/*.AppImage" \
             "release/*.exe" \
             "release/*.blockmap" \
-            "release/latest*.yml"; do
+            "release/*.yml"; do
             for file in $pattern; do
               cp "$file" release-publish/
             done
           done
 
           if [[ "${{ matrix.platform }}" == "mac" && "${{ matrix.arch }}" != "arm64" ]]; then
-            if [[ -f release-publish/latest-mac.yml ]]; then
-              mv release-publish/latest-mac.yml "release-publish/latest-mac-${{ matrix.arch }}.yml"
-            fi
+            shopt -s nullglob
+            for manifest in release-publish/*-mac.yml; do
+              mv "$manifest" "${manifest%.yml}-${{ matrix.arch }}.yml"
+            done
           fi
 
-      - name: Verify and record artifact provenance
-        if: needs.preflight.outputs.package_artifacts == 'true'
-        shell: bash
-        env:
-          EXPECTED_MAC_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          EXPECTED_WINDOWS_PUBLISHER: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
-          EXPECTED_WINDOWS_SUBJECT_DN: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBJECT_DN }}
-          SOURCE_COMMIT: ${{ needs.preflight.outputs.source_commit }}
-          SOURCE_TAG: ${{ needs.preflight.outputs.source_tag }}
-          LOCKFILE_SHA256: ${{ needs.preflight.outputs.lockfile_sha256 }}
-          PUBLISH_RELEASE: ${{ needs.preflight.outputs.publish_release }}
-          SIGNED_ARTIFACT: ${{ steps.build_artifact.outputs.signed }}
-          ALLOW_UNSIGNED_WINDOWS_PUBLICATION: ${{ vars.SYNARA_ALLOW_UNSIGNED_WINDOWS_RELEASE == needs.preflight.outputs.version }}
-        run: |
-          node scripts/write-release-artifact-provenance.ts \
-            --assets-dir release-publish \
-            --platform "${{ matrix.platform }}" \
-            --arch "${{ matrix.arch }}" \
-            --target "${{ matrix.target }}" \
-            --version "${{ needs.preflight.outputs.version }}" \
-            --source-commit "$SOURCE_COMMIT" \
-            --source-tag "$SOURCE_TAG" \
-            --lockfile-sha256 "$LOCKFILE_SHA256" \
-            --publication "$PUBLISH_RELEASE" \
-            --signed "$SIGNED_ARTIFACT" \
-            --allow-unsigned-windows-publication "$ALLOW_UNSIGNED_WINDOWS_PUBLICATION" \
-            --expected-mac-team-id "$EXPECTED_MAC_TEAM_ID" \
-            --expected-windows-publisher "$EXPECTED_WINDOWS_PUBLISHER" \
-            --expected-windows-subject-dn "$EXPECTED_WINDOWS_SUBJECT_DN"
+          # Enable if Windows arm64 builds are enabled.
+          # Windows updater metadata is channel-specific (for example
+          # "latest.yml" or "nightly.yml"). Suffix each per-arch copy so the
+          # release job can merge matching arm64/x64 manifests back into one
+          # canonical manifest per channel.
+          # if [[ "${{ matrix.platform }}" == "win" ]]; then
+          #   shopt -s nullglob
+          #   for manifest in release-publish/*.yml; do
+          #     mv "$manifest" "${manifest%.yml}-win-${{ matrix.arch }}.yml"
+          #   done
+          # fi
 
-      - name: Smoke packaged desktop startup
-        if: needs.preflight.outputs.package_artifacts == 'true'
+      - name: Collect resource monitor
         shell: bash
         run: |
-          node scripts/verify-packaged-desktop-startup.ts \
-            --assets-dir release-publish \
-            --platform "${{ matrix.platform }}" \
-            --arch "${{ matrix.arch }}" \
-            --version "${{ needs.preflight.outputs.version }}"
+          set -euo pipefail
+          binary_name="pathway-resource-monitor"
+          if [[ "${{ matrix.platform }}" == "win" ]]; then
+            binary_name="${binary_name}.exe"
+          fi
+          source_path="native/resource-monitor/target/${{ matrix.rust_target }}/release/${binary_name}"
+          target_dir="resource-monitor-publish/${{ matrix.resource_key }}"
+          mkdir -p "$target_dir"
+          cp "$source_path" "$target_dir/$binary_name"
 
       - name: Upload build artifacts
-        if: needs.preflight.outputs.package_artifacts == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
           path: release-publish/*
           if-no-files-found: error
 
-  publish_cli:
-    name: Publish CLI to npm
-    if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_PUBLISH_CLI == '1' }}
-    needs: [preflight, build, build_portable]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.preflight.outputs.ref }}
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version-file: package.json
-          registry-url: https://registry.npmjs.org
-
-      - name: Install dependencies
-        # Preflight already validates lifecycle scripts; the publish job only
-        # needs dependencies available to build the package.
-        run: bun install --frozen-lockfile --ignore-scripts
-
-      - name: Restore portable outputs
-        uses: ./.github/actions/restore-portable-build
-        with:
-          source-commit: ${{ needs.preflight.outputs.source_commit }}
-
-      - name: Publish CLI package
-        run: node apps/server/scripts/cli.ts publish --tag latest --app-version "${{ needs.preflight.outputs.version }}" --verbose
-
-  build_server_tarball:
-    name: Build server tarball
-    if: needs.preflight.outputs.build_server == 'true'
-    needs: [preflight, build_portable]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.preflight.outputs.ref }}
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version-file: package.json
-
-      - name: Install dependencies
-        # Preflight already validates lifecycle scripts; this job only needs
-        # dependencies available to build the package.
-        run: bun install --frozen-lockfile --ignore-scripts
-
-      - name: Restore portable outputs
-        uses: ./.github/actions/restore-portable-build
-        with:
-          source-commit: ${{ needs.preflight.outputs.source_commit }}
-
-      - name: Pack server tarball
-        run: node apps/server/scripts/cli.ts pack --out release-server --app-version "${{ needs.preflight.outputs.version }}"
-
-      - name: Upload server tarball
+      - name: Upload resource monitor
         uses: actions/upload-artifact@v7
         with:
-          name: server-tarball
-          path: release-server/*.tar.gz
+          name: resource-monitor-${{ matrix.resource_key }}
+          path: resource-monitor-publish/${{ matrix.resource_key }}/*
           if-no-files-found: error
+
+  publish_cli:
+    name: Stage CLI for npm approval
+    needs: [preflight, relay_public_config, build]
+    # Native runners stage the package; a maintainer approves publication in npm.
+    if: ${{ needs.preflight.outputs.release_channel == 'stable' }}
+    runs-on: ${{ fromJSON(vars.FLEET_MACOS_RUNNER || '["self-hosted","fleet-macos-arm64"]') }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      PATHWAY_CLERK_PUBLISHABLE_KEY: ${{ needs.relay_public_config.outputs.clerk_publishable_key }}
+      PATHWAY_CLERK_JWT_TEMPLATE: ${{ needs.relay_public_config.outputs.clerk_jwt_template }}
+      PATHWAY_CLERK_CLI_OAUTH_CLIENT_ID: ${{ needs.relay_public_config.outputs.clerk_cli_oauth_client_id }}
+      PATHWAY_RELAY_URL: ${{ needs.relay_public_config.outputs.relay_url }}
+      PATHWAY_CONVEX_URL: ${{ needs.relay_public_config.outputs.convex_url }}
+      PATHWAY_HOSTED_APP_URL: ${{ needs.relay_public_config.outputs.hosted_app_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@spiritdevs/pathway...
+              - --filter=@spiritdevs/web...
+              - --filter=@spiritdevs/scripts...
+
+      - name: Align package versions to release version
+        run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
+
+      # The Pathway server build task depends on @spiritdevs/web#build, so the web client is
+      # built (once) as part of this step.
+      - name: Build CLI package
+        run: vp run --filter @spiritdevs/pathway build
+
+      - name: Download resource monitors
+        uses: actions/download-artifact@v8
+        with:
+          pattern: resource-monitor-*
+          path: ${{ runner.temp }}/resource-monitors
+
+      - name: Bundle resource monitors into CLI package
+        shell: bash
+        run: |
+          set -euo pipefail
+          for artifact_dir in "$RUNNER_TEMP"/resource-monitors/resource-monitor-*; do
+            resource_key="${artifact_dir##*/resource-monitor-}"
+            target_dir="apps/server/dist/resource-monitor/${resource_key}"
+            mkdir -p "$target_dir"
+            cp "$artifact_dir"/pathway-resource-monitor* "$target_dir/"
+            chmod +x "$target_dir"/pathway-resource-monitor 2>/dev/null || true
+          done
+
+      - name: Stage CLI package for maintainer approval
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_STAGE_TOKEN }}
+          NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/npm-stage.npmrc
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$NODE_AUTH_TOKEN" || { echo "Configure the package-scoped NPM_STAGE_TOKEN secret." >&2; exit 1; }
+          umask 077
+          trap 'rm -f "$NPM_CONFIG_USERCONFIG"' EXIT
+          printf '//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\n' > "$NPM_CONFIG_USERCONFIG"
+          node apps/server/scripts/cli.ts publish --stage --tag "${{ needs.preflight.outputs.cli_dist_tag }}" --app-version "${{ needs.preflight.outputs.version }}" --verbose
+          echo '### npm package staged; publication requires maintainer approval in npm.' >> "$GITHUB_STEP_SUMMARY"
 
   release:
     name: Publish GitHub Release
-    if: ${{ needs.preflight.outputs.publish_release == 'true' }}
-    needs: [preflight, build, build_server_tarball]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    needs: [preflight, build]
+    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.build.result == 'success' }}
+    runs-on: ${{ fromJSON(vars.FLEET_MACOS_RUNNER || '["self-hosted","fleet-macos-arm64"]') }}
+    timeout-minutes: 30
     permissions:
       contents: write
     steps:
@@ -665,11 +723,10 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.ref }}
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version-file: package.json
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
 
       - name: Download all desktop artifacts
         uses: actions/download-artifact@v8
@@ -678,175 +735,163 @@ jobs:
           merge-multiple: true
           path: release-assets
 
-      - name: Download server tarball
-        uses: actions/download-artifact@v8
-        with:
-          name: server-tarball
-          path: release-assets
+      # - name: Merge Windows updater manifests
+      #   run: |
+      #     shopt -s nullglob
+      #     found_windows_manifest=false
+      #     for x64_manifest in release-assets/*-win-x64.yml; do
+      #       if [[ "$(basename "$x64_manifest")" == builder-debug-* ]]; then
+      #         continue
+      #       fi
 
-      - name: Merge macOS updater manifests
-        run: |
-          node scripts/merge-mac-update-manifests.ts \
-            release-assets/latest-mac.yml \
-            release-assets/latest-mac-x64.yml
-          rm -f release-assets/latest-mac-x64.yml
+      #       arm64_manifest="${x64_manifest/-x64.yml/-arm64.yml}"
+      #       output_manifest="${x64_manifest/-win-x64.yml/.yml}"
+      #       if [[ ! -f "$arm64_manifest" ]]; then
+      #         echo "Missing matching arm64 Windows manifest for $x64_manifest" >&2
+      #         exit 1
+      #       fi
 
-      - name: Prepare updater feed metadata
-        run: node scripts/prepare-release-update-feed.ts release-assets
+      #       found_windows_manifest=true
+      #       node scripts/merge-update-manifests.ts --platform win \
+      #         "$arm64_manifest" \
+      #         "$x64_manifest" \
+      #         "$output_manifest"
+      #       rm -f "$arm64_manifest" "$x64_manifest"
+      #     done
 
-      - name: Prevent compatibility channel rollback
-        if: ${{ needs.preflight.outputs.release_lane == 'bridge' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BRIDGE_TAG: ${{ needs.preflight.outputs.bridge_tag }}
-          BRIDGE_VERSION: ${{ needs.preflight.outputs.version }}
-          UPDATE_CHANNEL: ${{ needs.preflight.outputs.update_channel }}
-        run: |
-          set -euo pipefail
-
-          if ! bridge_release_json="$(
-            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${BRIDGE_TAG}" 2>&1
-          )"; then
-            if grep -q "HTTP 404" <<< "$bridge_release_json"; then
-              exit 0
-            fi
-            echo "$bridge_release_json" >&2
-            exit 1
-          fi
-          bridge_release_id="$(jq -r .id <<< "$bridge_release_json")"
-
-          bridge_assets="$(
-            gh api --paginate \
-              "repos/${GITHUB_REPOSITORY}/releases/${bridge_release_id}/assets?per_page=100" \
-              --jq '.[].name'
-          )"
-          channel_manifests=(
-            "${UPDATE_CHANNEL}-mac.yml"
-            "${UPDATE_CHANNEL}.yml"
-            "${UPDATE_CHANNEL}-linux.yml"
-          )
-          existing_manifests=()
-          for manifest in "${channel_manifests[@]}"; do
-            if grep -Fxq "$manifest" <<< "$bridge_assets"; then
-              existing_manifests+=("$manifest")
-            fi
-          done
-
-          if [[ "${#existing_manifests[@]}" -eq 0 ]]; then
-            exit 0
-          fi
-          if [[ "${#existing_manifests[@]}" -ne "${#channel_manifests[@]}" ]]; then
-            echo "Compatibility feed has a partial dedicated-channel manifest set: ${existing_manifests[*]}." >&2
-            exit 1
-          fi
-
-          manifest_directory="$(mktemp -d)"
-          trap 'rm -rf "$manifest_directory"' EXIT
-          for manifest in "${channel_manifests[@]}"; do
-            gh release download "$BRIDGE_TAG" \
-              --repo "$GITHUB_REPOSITORY" \
-              --pattern "$manifest" \
-              --dir "$manifest_directory"
-            manifest_version="$(
-              sed -n 's/^version:[[:space:]]*//p' "$manifest_directory/$manifest" \
-                | head -n 1 \
-                | tr -d "[:space:]'\""
-            )"
-            if [[ "$manifest_version" != "$BRIDGE_VERSION" ]]; then
-              echo "Refusing to replace $manifest version ${manifest_version:-unknown} with compatibility version $BRIDGE_VERSION." >&2
-              exit 1
-            fi
-          done
-
-      - name: Recheck pinned compatibility feed
-        if: ${{ needs.preflight.outputs.release_lane == 'clean' && needs.preflight.outputs.mirror_to_stable_channel == 'true' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BRIDGE_TAG: ${{ needs.preflight.outputs.bridge_tag }}
-        run: |
-          actual_latest="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)"
-          if [[ "$actual_latest" != "$BRIDGE_TAG" ]]; then
-            echo "Expected GitHub Latest to remain pinned to $BRIDGE_TAG, got $actual_latest." >&2
-            exit 1
-          fi
+      #     if [[ "$found_windows_manifest" != true ]]; then
+      #       echo "No Windows updater manifests found to merge." >&2
+      #       exit 1
+      #     fi
 
       - name: Publish release
-        uses: softprops/action-gh-release@v2
+        if: needs.preflight.outputs.previous_tag != ''
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.preflight.outputs.tag }}
           target_commitish: ${{ needs.preflight.outputs.ref }}
-          name: Synara v${{ needs.preflight.outputs.version }}
+          name: ${{ needs.preflight.outputs.release_name }}
+          generate_release_notes: true
+          previous_tag: ${{ needs.preflight.outputs.previous_tag }}
+          prerelease: ${{ needs.preflight.outputs.is_prerelease }}
+          make_latest: ${{ needs.preflight.outputs.make_latest }}
+          files: |
+            release-assets/*.dmg
+            release-assets/*.zip
+            release-assets/*.blockmap
+            release-assets/*.yml
+          fail_on_unmatched_files: true
+          token: ${{ github.token }}
+
+      - name: Publish first release
+        if: needs.preflight.outputs.previous_tag == ''
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          target_commitish: ${{ needs.preflight.outputs.ref }}
+          name: ${{ needs.preflight.outputs.release_name }}
           generate_release_notes: true
           prerelease: ${{ needs.preflight.outputs.is_prerelease }}
           make_latest: ${{ needs.preflight.outputs.make_latest }}
           files: |
             release-assets/*.dmg
             release-assets/*.zip
-            release-assets/*.AppImage
-            release-assets/*.exe
             release-assets/*.blockmap
             release-assets/*.yml
-            release-assets/*.provenance.json
-            release-assets/*.tar.gz
           fail_on_unmatched_files: true
+          token: ${{ github.token }}
 
-      - name: Mirror Synara artifacts onto the pinned updater feed
-        if: ${{ needs.preflight.outputs.mirror_to_stable_channel == 'true' }}
+  deploy_web:
+    name: Deploy hosted web app
+    needs: [preflight, relay_public_config, release]
+    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.relay_public_config.result == 'success' && needs.release.result == 'success' }}
+    runs-on: ${{ fromJSON(vars.FLEET_MACOS_RUNNER || '["self-hosted","fleet-macos-arm64"]') }}
+    timeout-minutes: 10
+    env:
+      PATHWAY_CLERK_PUBLISHABLE_KEY: ${{ needs.relay_public_config.outputs.clerk_publishable_key }}
+      PATHWAY_CLERK_JWT_TEMPLATE: ${{ needs.relay_public_config.outputs.clerk_jwt_template }}
+      PATHWAY_CLERK_CLI_OAUTH_CLIENT_ID: ${{ needs.relay_public_config.outputs.clerk_cli_oauth_client_id }}
+      PATHWAY_RELAY_URL: ${{ needs.relay_public_config.outputs.relay_url }}
+      PATHWAY_CONVEX_URL: ${{ needs.relay_public_config.outputs.convex_url }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      VERCEL_TEAM_SLUG: ${{ vars.VERCEL_TEAM_SLUG }}
+      PATHWAY_WEB_RELEASE_DOMAIN: ${{ needs.relay_public_config.outputs.hosted_app_domain }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@spiritdevs/scripts...
+              - --filter=@spiritdevs/web...
+
+      - name: Align package versions to release version
+        run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
+
+      - name: Refresh release lockfile
+        run: vp install --lockfile-only --ignore-scripts
+
+      - name: Deploy hosted web app for release channel
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BRIDGE_TAG: ${{ needs.preflight.outputs.bridge_tag }}
-          UPDATE_CHANNEL: ${{ needs.preflight.outputs.update_channel }}
         run: |
           set -euo pipefail
 
-          actual_latest="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)"
-          if [[ "$actual_latest" != "$BRIDGE_TAG" ]]; then
-            echo "Expected GitHub Latest to remain pinned to $BRIDGE_TAG, got $actual_latest." >&2
+          if [[ -z "${VERCEL_TOKEN:-}" || -z "${VERCEL_ORG_ID:-}" || -z "${VERCEL_PROJECT_ID:-}" ]]; then
+            echo "Missing one or more required Vercel secrets: VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID." >&2
             exit 1
           fi
 
-          shopt -s nullglob
-          payloads=(
-            release-assets/*.dmg
-            release-assets/*.zip
-            release-assets/*.AppImage
-            release-assets/*.exe
-            release-assets/*.blockmap
-          )
-          manifests=(
-            "release-assets/${UPDATE_CHANNEL}-mac.yml"
-            "release-assets/${UPDATE_CHANNEL}.yml"
-            "release-assets/${UPDATE_CHANNEL}-linux.yml"
-          )
-
-          if [[ "${#payloads[@]}" -eq 0 ]]; then
-            echo "No desktop payloads found for the pinned updater feed." >&2
-            exit 1
+          if [[ "${{ needs.preflight.outputs.release_channel }}" == "stable" ]]; then
+            channel_name="latest"
+            vercel_target="production"
+          else
+            channel_name="nightly"
+            vercel_target="beta"
           fi
-          for manifest in "${manifests[@]}"; do
-            if [[ ! -f "$manifest" ]]; then
-              echo "Missing updater manifest: $manifest" >&2
-              exit 1
-            fi
-          done
+          channel_domain="$PATHWAY_WEB_RELEASE_DOMAIN"
+          vercel_scope="${VERCEL_TEAM_SLUG:-$VERCEL_ORG_ID}"
 
-          # Payloads must exist before a manifest is visible, otherwise an
-          # updater can observe a version whose installer is not uploaded yet.
-          gh release upload "$BRIDGE_TAG" "${payloads[@]}" --clobber --repo "$GITHUB_REPOSITORY"
-          gh release upload "$BRIDGE_TAG" "${manifests[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          echo "Linking the Vercel project for this runner."
+          vp dlx vercel@59.11.2 link \
+            --yes \
+            --scope "$vercel_scope" \
+            --project "$VERCEL_PROJECT_ID" \
+            --token "$VERCEL_TOKEN"
 
-          actual_latest="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)"
-          if [[ "$actual_latest" != "$BRIDGE_TAG" ]]; then
-            echo "Pinned updater feed moved during publication: $actual_latest." >&2
-            exit 1
-          fi
+          echo "Deploying hosted web app for $channel_name channel to Vercel $vercel_target."
+          vp dlx vercel@59.11.2 deploy \
+            --archive=tgz \
+            --target "$vercel_target" \
+            --yes \
+            --scope "$vercel_scope" \
+            --token "$VERCEL_TOKEN" \
+            --build-env "APP_VERSION=${{ needs.preflight.outputs.version }}" \
+            --build-env "PATHWAY_CLERK_PUBLISHABLE_KEY=${PATHWAY_CLERK_PUBLISHABLE_KEY:-}" \
+            --build-env "PATHWAY_CLERK_JWT_TEMPLATE=${PATHWAY_CLERK_JWT_TEMPLATE:-}" \
+            --build-env "PATHWAY_CLERK_CLI_OAUTH_CLIENT_ID=${PATHWAY_CLERK_CLI_OAUTH_CLIENT_ID:-}" \
+            --build-env "PATHWAY_RELAY_URL=${PATHWAY_RELAY_URL:-}" \
+            --build-env "PATHWAY_CONVEX_URL=${PATHWAY_CONVEX_URL:-}" \
+            --build-env "VITE_HOSTED_APP_URL=https://$channel_domain" \
+            --build-env "VITE_HOSTED_APP_CHANNEL=$channel_name"
 
   finalize:
     name: Finalize release
-    if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_FINALIZE_RELEASE == '1' }}
+    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.release.result == 'success' && needs.preflight.outputs.release_channel == 'stable' }}
     needs: [preflight, release]
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(vars.FLEET_MACOS_RUNNER || '["self-hosted","fleet-macos-arm64"]') }}
     timeout-minutes: 10
     steps:
       - id: app_token
@@ -856,8 +901,6 @@ jobs:
           app-id: ${{ secrets.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: write
 
       - name: Checkout
         uses: actions/checkout@v6
@@ -866,6 +909,10 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.app_token.outputs.token }}
           persist-credentials: true
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
 
       - id: app_bot
         name: Resolve GitHub App bot identity
@@ -877,15 +924,15 @@ jobs:
           echo "name=${APP_SLUG}[bot]" >> "$GITHUB_OUTPUT"
           echo "email=${user_id}+${APP_SLUG}[bot]@users.noreply.github.com" >> "$GITHUB_OUTPUT"
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@spiritdevs/scripts...
+              - --filter=@spiritdevs/oxlint-plugin-pathway...
 
       - id: update_versions
         name: Update version strings
@@ -895,11 +942,11 @@ jobs:
 
       - name: Format package.json files
         if: steps.update_versions.outputs.changed == 'true'
-        run: bunx oxfmt apps/server/package.json apps/desktop/package.json apps/web/package.json packages/contracts/package.json
+        run: vp fmt apps/server/package.json apps/desktop/package.json apps/web/package.json packages/contracts/package.json
 
       - name: Refresh lockfile
         if: steps.update_versions.outputs.changed == 'true'
-        run: bun install --lockfile-only --ignore-scripts
+        run: vp install --lockfile-only --ignore-scripts
 
       - name: Commit and push version bump
         if: steps.update_versions.outputs.changed == 'true'
@@ -907,7 +954,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
         run: |
-          if git diff --quiet -- apps/server/package.json apps/desktop/package.json apps/web/package.json packages/contracts/package.json bun.lock; then
+          if git diff --quiet -- apps/server/package.json apps/desktop/package.json apps/web/package.json packages/contracts/package.json pnpm-lock.yaml; then
             echo "No version changes to commit."
             exit 0
           fi
@@ -915,6 +962,6 @@ jobs:
           git config user.name "${{ steps.app_bot.outputs.name }}"
           git config user.email "${{ steps.app_bot.outputs.email }}"
 
-          git add apps/server/package.json apps/desktop/package.json apps/web/package.json packages/contracts/package.json bun.lock
+          git add apps/server/package.json apps/desktop/package.json apps/web/package.json packages/contracts/package.json pnpm-lock.yaml
           git commit -m "chore(release): prepare $RELEASE_TAG"
           git push origin HEAD:main

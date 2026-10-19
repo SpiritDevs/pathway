@@ -1,32 +1,67 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { RouterProvider } from "@tanstack/react-router";
+import { ClerkProvider } from "@clerk/react";
+import { createHashHistory, createBrowserHistory } from "@tanstack/react-router";
 
-import "@fontsource-variable/jetbrains-mono";
 import "./index.css";
 
-import { appHistory } from "./appNavigation";
-import { getRouter } from "./router";
-import { APP_DISPLAY_NAME } from "./branding";
 import { isElectron } from "./env";
-import { isMacPlatform } from "./lib/utils";
+import { ManagedRelayAuthProvider } from "./cloud/managedAuth";
+import { hasClerkPublicConfig, hasCloudPublicConfig } from "./cloud/publicConfig";
+import { CloudSyncRuntimeMount } from "./cloud/syncRuntimeMount";
+import { getRouter } from "./router";
+import {
+  syncDocumentElectronPlatformClasses,
+  syncDocumentWindowControlsOverlayClass,
+} from "./lib/windowControlsOverlay";
+import { AppRoot } from "./AppRoot";
+import { ClerkStartupBoundary } from "./components/clerk/ClerkStartupBoundary";
 
-const router = getRouter(appHistory);
+import { SplashScreen } from "./components/SplashScreen";
 
-document.title = APP_DISPLAY_NAME;
+const ElectronClerkProvider = React.lazy(() => import("./components/clerk/ElectronClerkProvider"));
+
+// Electron loads the app from a file-backed shell, so hash history avoids path resolution issues.
+const history = isElectron ? createHashHistory() : createBrowserHistory();
+
+const router = getRouter(history);
 
 if (isElectron) {
-  document.documentElement.dataset.runtime = "electron";
-  // macOS desktop windows are transparent vibrancy windows (see getWindowMaterialOptions
-  // in apps/desktop), and Chromium cannot render `backdrop-filter` inside transparent
-  // windows — frosted surfaces must fall back to a more opaque fill (see index.css).
-  if (isMacPlatform(navigator.platform)) {
-    document.documentElement.dataset.windowTransparent = "true";
-  }
+  syncDocumentElectronPlatformClasses(navigator.platform);
+  syncDocumentWindowControlsOverlayClass();
 }
+
+const clerkPublishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
+
+const app = <AppRoot router={router} />;
+// Cloud sync sits inside the relay auth provider because it needs the session that provider
+// publishes. It renders no UI, so it is a sibling of the app rather than a wrapper — the app never
+// waits on the sync chunk.
+const configuredApp = hasCloudPublicConfig() ? (
+  <ManagedRelayAuthProvider>
+    {app}
+    <CloudSyncRuntimeMount />
+  </ManagedRelayAuthProvider>
+) : (
+  app
+);
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <RouterProvider router={router} />
+    {clerkPublishableKey && hasClerkPublicConfig() ? (
+      isElectron ? (
+        <React.Suspense fallback={<SplashScreen reason="account" />}>
+          <ElectronClerkProvider publishableKey={clerkPublishableKey}>
+            {configuredApp}
+          </ElectronClerkProvider>
+        </React.Suspense>
+      ) : (
+        <ClerkProvider publishableKey={clerkPublishableKey}>
+          <ClerkStartupBoundary>{configuredApp}</ClerkStartupBoundary>
+        </ClerkProvider>
+      )
+    ) : (
+      app
+    )}
   </React.StrictMode>,
 );

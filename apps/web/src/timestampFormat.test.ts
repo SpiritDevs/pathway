@@ -1,78 +1,240 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { formatDayAwareTimestamp, formatShortTimestamp } from "./timestampFormat";
+import {
+  formatDayAwareTimestamp,
+  formatElapsedDurationLabel,
+  formatExpiresInLabel,
+  formatRelativeTime,
+  formatRelativeTimeLabel,
+  formatRelativeTimeUntil,
+  formatRelativeTimeUntilLabel,
+  formatShortTimestamp,
+  formatTimestamp,
+  getRelativeTimeState,
+  getTimestampFormatOptions,
+  localDayStartTimestamp,
+  millisecondsUntilNextLocalDay,
+} from "./timestampFormat";
 
-// Build ISO strings from local wall-clock components so expectations are
-// stable regardless of the timezone the test runner uses.
-function localIso(
-  year: number,
-  monthIndex: number,
-  day: number,
-  hours: number,
-  minutes: number,
-): string {
-  return new Date(year, monthIndex, day, hours, minutes).toISOString();
-}
+describe("getTimestampFormatOptions", () => {
+  it("omits hour12 when locale formatting is requested", () => {
+    expect(getTimestampFormatOptions("locale", true)).toEqual({
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  });
+
+  it("builds a 12-hour formatter with seconds when requested", () => {
+    expect(getTimestampFormatOptions("12-hour", true)).toEqual({
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: true,
+    });
+  });
+
+  it("builds a 24-hour formatter without seconds when requested", () => {
+    expect(getTimestampFormatOptions("24-hour", false)).toEqual({
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: false,
+    });
+  });
+});
+
+describe("formatRelativeTimeUntilLabel", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-07T12:00:00.000Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("returns Expired when the instant is in the past", () => {
+    expect(formatRelativeTimeUntilLabel("2026-04-07T11:59:00.000Z")).toBe("Expired");
+  });
+
+  it("formats seconds remaining", () => {
+    expect(formatRelativeTimeUntilLabel("2026-04-07T12:00:45.000Z")).toBe("45s left");
+  });
+
+  it("formats minutes remaining", () => {
+    expect(formatRelativeTimeUntilLabel("2026-04-07T12:15:00.000Z")).toBe("15m left");
+  });
+
+  it("formats hours remaining", () => {
+    expect(formatRelativeTimeUntilLabel("2026-04-07T18:00:00.000Z")).toBe("6h left");
+  });
+});
+
+describe("formatExpiresInLabel", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-07T12:00:00.000Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("returns Expired when the instant is in the past", () => {
+    expect(formatExpiresInLabel("2026-04-07T11:59:00.000Z")).toBe("Expired");
+  });
+
+  it("uses sub-minute second count", () => {
+    expect(formatExpiresInLabel("2026-04-07T12:00:45.000Z")).toBe("Expires in 45s");
+  });
+
+  it("uses minutes and seconds under one hour", () => {
+    expect(formatExpiresInLabel("2026-04-07T12:04:12.000Z")).toBe("Expires in 4m 12s");
+    expect(formatExpiresInLabel("2026-04-07T12:15:00.000Z")).toBe("Expires in 15m");
+  });
+
+  it("uses hours with minute and second remainder", () => {
+    expect(formatExpiresInLabel("2026-04-07T14:02:03.000Z")).toBe("Expires in 2h 2m 3s");
+    expect(formatExpiresInLabel("2026-04-07T18:00:00.000Z")).toBe("Expires in 6h");
+  });
+});
 
 describe("formatDayAwareTimestamp", () => {
-  const now = new Date(2026, 2, 17, 23, 0); // Tuesday, March 17 2026, 23:00 local
+  // Instants are built with the local-time Date constructor so the
+  // calendar-day boundaries hold in any test timezone or locale.
+  const iso = (y: number, monthIndex: number, d: number, h: number, mi: number) =>
+    new Date(y, monthIndex, d, h, mi).toISOString();
+  const now = new Date(2026, 7, 14, 12, 0).getTime();
+  const time = (isoDate: string) => formatShortTimestamp(isoDate, "12-hour");
 
-  it("shows only the clock time for same-day messages", () => {
-    const isoDate = localIso(2026, 2, 17, 9, 5);
-    expect(formatDayAwareTimestamp(isoDate, "24-hour", now)).toBe(
-      formatShortTimestamp(isoDate, "24-hour"),
+  it("shows time only for today", () => {
+    const messageAt = iso(2026, 7, 14, 9, 30);
+    expect(formatDayAwareTimestamp(messageAt, "12-hour", now)).toBe(time(messageAt));
+  });
+
+  it("labels the previous calendar day as yesterday even when under 24h old", () => {
+    const messageAt = iso(2026, 7, 13, 23, 30);
+    const justPastMidnight = new Date(2026, 7, 14, 0, 30).getTime();
+    expect(formatDayAwareTimestamp(messageAt, "12-hour", justPastMidnight)).toBe(
+      `yesterday at ${time(messageAt)}`,
     );
   });
 
-  it("prefixes the weekday name for messages from earlier this week", () => {
-    const isoDate = localIso(2026, 2, 16, 23, 59); // Monday, one calendar day earlier
-    const weekday = new Intl.DateTimeFormat(undefined, { weekday: "long" }).format(
-      new Date(isoDate),
-    );
-    expect(formatDayAwareTimestamp(isoDate, "24-hour", now)).toBe(
-      `${weekday} ${formatShortTimestamp(isoDate, "24-hour")}`,
-    );
-  });
-
-  it("uses the weekday name up to six calendar days back", () => {
-    const isoDate = localIso(2026, 2, 11, 8, 30); // Wednesday, six days earlier
-    const weekday = new Intl.DateTimeFormat(undefined, { weekday: "long" }).format(
-      new Date(isoDate),
-    );
-    expect(formatDayAwareTimestamp(isoDate, "24-hour", now)).toBe(
-      `${weekday} ${formatShortTimestamp(isoDate, "24-hour")}`,
+  it("prefixes older same-year messages with the numeric date", () => {
+    const messageAt = iso(2026, 7, 12, 12, 34);
+    const datePart = new Intl.DateTimeFormat(undefined, {
+      month: "numeric",
+      day: "numeric",
+    }).format(new Date(messageAt));
+    expect(formatDayAwareTimestamp(messageAt, "12-hour", now)).toBe(
+      `${datePart} ${time(messageAt)}`,
     );
   });
 
-  it("switches to a short date once the weekday name becomes ambiguous", () => {
-    const isoDate = localIso(2026, 2, 10, 8, 30); // seven days earlier, same weekday as `now`
-    const dayLabel = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(
-      new Date(isoDate),
-    );
-    expect(formatDayAwareTimestamp(isoDate, "24-hour", now)).toBe(
-      `${dayLabel} ${formatShortTimestamp(isoDate, "24-hour")}`,
-    );
-  });
-
-  it("includes the year for messages from another year", () => {
-    const isoDate = localIso(2025, 11, 31, 18, 45);
-    const dayLabel = new Intl.DateTimeFormat(undefined, {
-      month: "short",
+  it("includes the year once the calendar year differs", () => {
+    const messageAt = iso(2025, 11, 31, 18, 0);
+    const datePart = new Intl.DateTimeFormat(undefined, {
+      month: "numeric",
       day: "numeric",
       year: "numeric",
-    }).format(new Date(isoDate));
-    expect(formatDayAwareTimestamp(isoDate, "24-hour", now)).toBe(
-      `${dayLabel} ${formatShortTimestamp(isoDate, "24-hour")}`,
+    }).format(new Date(messageAt));
+    expect(formatDayAwareTimestamp(messageAt, "12-hour", now)).toBe(
+      `${datePart} ${time(messageAt)}`,
     );
   });
 
-  it("dates future days instead of borrowing a weekday name", () => {
-    const isoDate = localIso(2026, 2, 19, 10, 0); // two days ahead of `now`
-    const dayLabel = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(
-      new Date(isoDate),
-    );
-    expect(formatDayAwareTimestamp(isoDate, "24-hour", now)).toBe(
-      `${dayLabel} ${formatShortTimestamp(isoDate, "24-hour")}`,
-    );
+  it("returns an empty string for invalid input", () => {
+    expect(formatDayAwareTimestamp("not-a-date", "12-hour", now)).toBe("");
+  });
+});
+
+describe("local day boundaries", () => {
+  it("returns the start of the current local calendar day", () => {
+    const now = new Date(2026, 7, 14, 16, 45, 30, 250);
+
+    expect(localDayStartTimestamp(now.getTime())).toBe(new Date(2026, 7, 14).getTime());
+  });
+
+  it("schedules the next refresh at the next local calendar day", () => {
+    const now = new Date(2026, 7, 14, 23, 59, 59, 500);
+
+    expect(millisecondsUntilNextLocalDay(now.getTime())).toBe(500);
+  });
+});
+
+describe("invalid timestamp inputs", () => {
+  it("returns an empty timestamp instead of throwing", () => {
+    expect(() => formatTimestamp("not-a-date", "12-hour")).not.toThrow();
+    expect(formatTimestamp("not-a-date", "12-hour")).toBe("");
+  });
+
+  it("returns an empty short timestamp instead of throwing", () => {
+    expect(() => formatShortTimestamp("not-a-date", "12-hour")).not.toThrow();
+    expect(formatShortTimestamp("not-a-date", "12-hour")).toBe("");
+  });
+
+  it("returns an empty relative time label instead of a NaN label", () => {
+    expect(formatRelativeTime("not-a-date")).toBeNull();
+    expect(formatRelativeTimeLabel("not-a-date")).toBe("");
+  });
+
+  it("distinguishes missing and invalid relative time state", () => {
+    expect(getRelativeTimeState(null)).toEqual({ status: "missing" });
+    expect(getRelativeTimeState("not-a-date")).toEqual({ status: "invalid" });
+  });
+
+  it("returns an empty elapsed duration instead of a NaN label", () => {
+    expect(formatElapsedDurationLabel("not-a-date")).toBe("");
+  });
+
+  it("returns an empty relative time until label instead of a NaN label", () => {
+    expect(formatRelativeTimeUntil("not-a-date")).toBeNull();
+    expect(formatRelativeTimeUntilLabel("not-a-date")).toBe("");
+  });
+
+  it("returns an empty expires-in label instead of a NaN label", () => {
+    expect(formatExpiresInLabel("not-a-date")).toBe("");
+  });
+});
+
+describe("getRelativeTimeState", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-07T12:00:00.000Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("returns relative parts for valid timestamps", () => {
+    expect(getRelativeTimeState("2026-04-07T11:45:00.000Z")).toEqual({
+      status: "relative",
+      value: "15m",
+      suffix: "ago",
+    });
+  });
+});
+
+describe("formatElapsedDurationLabel", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-07T12:00:00.000Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("returns just now when the instant is current or in the future", () => {
+    expect(formatElapsedDurationLabel("2026-04-07T12:00:00.000Z")).toBe("just now");
+    expect(formatElapsedDurationLabel("2026-04-07T12:01:00.000Z")).toBe("just now");
+  });
+
+  it("formats seconds, minutes, hours, and days", () => {
+    expect(formatElapsedDurationLabel("2026-04-07T11:59:45.000Z")).toBe("15s");
+    expect(formatElapsedDurationLabel("2026-04-07T11:45:00.000Z")).toBe("15m");
+    expect(formatElapsedDurationLabel("2026-04-07T06:00:00.000Z")).toBe("6h");
+    expect(formatElapsedDurationLabel("2026-04-03T12:00:00.000Z")).toBe("4d");
   });
 });

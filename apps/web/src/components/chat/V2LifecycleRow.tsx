@@ -1,0 +1,569 @@
+import { Fragment, type ReactNode, useState } from "react";
+import type {
+  OrchestrationV2Run,
+  OrchestrationV2Subagent,
+  OrchestrationV2TurnItem,
+  ProviderInstanceId,
+  ServerProvider,
+  ThreadId,
+} from "@spiritdevs/contracts";
+import type { TimestampFormat } from "@spiritdevs/contracts/settings";
+import {
+  getChangeRequestTerminologyFromUrl,
+  sourceControlMarkerLabel,
+} from "@spiritdevs/shared/sourceControl";
+import {
+  ArrowRightLeftIcon,
+  ArrowRightIcon,
+  BotIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  ExternalLinkIcon,
+  GitCommitHorizontalIcon,
+  GitPullRequestIcon,
+  GitForkIcon,
+  MessageSquareIcon,
+  MessagesSquareIcon,
+  MinusIcon,
+  CopyIcon,
+  type LucideIcon,
+  XIcon,
+} from "lucide-react";
+
+import { getProviderInstanceEntry } from "../../providerInstances";
+import { formatShortTimestamp } from "../../timestampFormat";
+import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
+import { PROVIDER_ICON_BY_PROVIDER, getTriggerDisplayModelName } from "./providerIconUtils";
+import { TimelineSystemDivider } from "./TimelineSystemDivider";
+import { stackedThreadToast, toastManager } from "../ui/toast";
+import { readLocalApi } from "../../localApi";
+
+const LIFECYCLE_TYPES = new Set<OrchestrationV2TurnItem["type"]>([
+  "run_interrupt_request",
+  "run_interrupt_result",
+  "compaction",
+  "handoff",
+  "fork",
+  "source_control",
+  "subagent",
+  "thread_created",
+]);
+
+export function isV2LifecycleItem(item: OrchestrationV2TurnItem): boolean {
+  return LIFECYCLE_TYPES.has(item.type);
+}
+
+// Aborted subagents (cancelled/interrupted) keep whatever result text had
+// streamed before the abort, so only completed/failed results are final.
+const FINAL_RESULT_SUBAGENT_STATUSES = new Set<OrchestrationV2TurnItem["status"]>([
+  "completed",
+  "failed",
+]);
+
+// Once a subagent stops, its last streamed result says more than the stale
+// progress line; while it runs, live progress comes first.
+const TERMINAL_SUBAGENT_STATUSES = new Set<OrchestrationV2TurnItem["status"]>([
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted",
+]);
+
+/**
+ * The subset of a projection run that handoff rows read. Kept minimal so the
+ * timeline can hold a content-stable snapshot: run status/timestamps churn on
+ * every stream event, but these fields only change when a run is added.
+ */
+export type HandoffTimelineRun = Pick<
+  OrchestrationV2Run,
+  "id" | "ordinal" | "providerInstanceId" | "modelSelection"
+>;
+
+/**
+ * The subset of a projection subagent that subagent cards read. The turn item
+ * carries the driver and instance but not the model, so the card joins on
+ * `subagentId` to label which model the child is running.
+ */
+export type SubagentTimelineModel = Pick<OrchestrationV2Subagent, "id" | "model">;
+
+export function V2LifecycleRow(props: {
+  readonly item: OrchestrationV2TurnItem;
+  readonly createdAt: string;
+  readonly timestampFormat: TimestampFormat;
+  readonly providerStatuses: ReadonlyArray<ServerProvider>;
+  readonly runs: ReadonlyArray<HandoffTimelineRun>;
+  readonly subagents: ReadonlyArray<SubagentTimelineModel>;
+  readonly onOpenThread: (threadId: ThreadId) => void;
+  readonly onDetachPullRequest?:
+    | ((pullRequest: { readonly number: number; readonly url: string }) => void)
+    | undefined;
+}) {
+  const { item } = props;
+  if (item.type === "run_interrupt_request") {
+    return (
+      <div className="flex justify-end px-1 py-1" data-v2-item-type={item.type}>
+        <div className="flex max-w-[80%] items-center gap-2 text-xs text-destructive">
+          <span aria-hidden="true" className="font-mono">
+            ■
+          </span>
+          <span className="font-medium">Interrupt requested</span>
+          <span aria-hidden="true" className="opacity-50">
+            ·
+          </span>
+          <span className="font-medium">{item.message}</span>
+          <span className="text-[10px] text-muted-foreground">
+            {formatShortTimestamp(props.createdAt, props.timestampFormat)}
+          </span>
+        </div>
+      </div>
+    );
+  }
+  if (item.type === "run_interrupt_result") {
+    return (
+      <TimelineSystemDivider
+        label="Run interrupted"
+        detail={item.message}
+        tone="danger"
+        icon={XIcon}
+      />
+    );
+  }
+  if (item.type === "compaction") {
+    return <CompactionLifecycleRow item={item} providerStatuses={props.providerStatuses} />;
+  }
+  if (item.type === "handoff") {
+    // Items persisted before models were stamped only carry instance ids;
+    // recover the models from the thread's runs (the handoff's own run is
+    // the target, the newest earlier run per source instance is the origin).
+    // ProviderModelEndpoint falls back to the provider display name when neither
+    // source has a model.
+    const handoffRun =
+      item.runId === null ? undefined : props.runs.find((run) => run.id === item.runId);
+    const toModel =
+      item.toModel ??
+      (handoffRun !== undefined && handoffRun.providerInstanceId === item.toProviderInstanceId
+        ? handoffRun.modelSelection.model
+        : undefined);
+    const fromEndpoints: ReadonlyArray<{
+      readonly instanceId: ProviderInstanceId;
+      readonly model?: string | undefined;
+    }> =
+      item.fromModelSelections !== undefined && item.fromModelSelections.length > 0
+        ? item.fromModelSelections
+        : item.fromProviderInstanceIds.map((instanceId) => ({
+            instanceId,
+            model: latestRunModelBefore(props.runs, instanceId, handoffRun?.ordinal),
+          }));
+    return (
+      <TimelineSystemDivider
+        label="Context handoff"
+        icon={ArrowRightLeftIcon}
+        showDetailSeparator={false}
+        tone={item.status === "failed" ? "danger" : "neutral"}
+        detail={
+          <span className="inline-flex min-w-0 items-center gap-1.5">
+            {fromEndpoints.map((endpoint, index) => (
+              <Fragment key={`${endpoint.instanceId}:${endpoint.model ?? ""}`}>
+                {index > 0 ? (
+                  <span aria-hidden="true" className="-ml-1">
+                    ,
+                  </span>
+                ) : null}
+                <ProviderModelEndpoint
+                  providers={props.providerStatuses}
+                  instanceId={endpoint.instanceId}
+                  model={endpoint.model}
+                />
+              </Fragment>
+            ))}
+            {fromEndpoints.length > 0 ? (
+              <ArrowRightIcon aria-hidden="true" className="size-3 shrink-0" />
+            ) : null}
+            <ProviderModelEndpoint
+              providers={props.providerStatuses}
+              instanceId={item.toProviderInstanceId}
+              model={toModel}
+            />
+          </span>
+        }
+      />
+    );
+  }
+  if (item.type === "fork") {
+    const relatedThreadId = item.source.type === "run" ? item.source.threadId : item.targetThreadId;
+    const isSideChat = item.forkKind === "side_chat";
+    return (
+      <TimelineSystemDivider
+        label={
+          isSideChat
+            ? "Side chat created"
+            : item.source.type === "run"
+              ? "Forked from conversation"
+              : "Conversation fork"
+        }
+        icon={isSideChat ? MessagesSquareIcon : GitForkIcon}
+        actionLabel={item.source.type === "run" ? "Open source conversation" : "Open fork"}
+        onAction={() => props.onOpenThread(relatedThreadId)}
+      />
+    );
+  }
+  if (item.type === "source_control") {
+    const commitSha = item.commitSha;
+    const changeRequestLabel =
+      item.pullRequest === null
+        ? "PR"
+        : getChangeRequestTerminologyFromUrl(item.pullRequest.url).shortLabel;
+    return (
+      <TimelineSystemDivider
+        label={sourceControlMarkerLabel(item)}
+        icon={item.pullRequestAction === undefined ? GitCommitHorizontalIcon : GitPullRequestIcon}
+        detail={
+          commitSha === undefined && item.pullRequest === null ? null : (
+            <span className="inline-flex min-w-0 items-center gap-1.5">
+              {commitSha === undefined ? null : (
+                <span
+                  className="rounded border border-border/70 px-1.5 py-0.5 font-mono text-[10px]"
+                  title={`Commit ${commitSha}`}
+                >
+                  {commitSha.slice(0, 7)}
+                </span>
+              )}
+              {item.pullRequest === null ? null : (
+                <a
+                  href={item.pullRequest.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 font-medium underline-offset-2 hover:underline"
+                  aria-label={`Open ${changeRequestLabel} #${item.pullRequest.number}`}
+                  title={
+                    props.onDetachPullRequest
+                      ? `Open ${changeRequestLabel}. Right-click to detach from thread.`
+                      : undefined
+                  }
+                  onContextMenu={(event) => {
+                    if (!props.onDetachPullRequest || item.pullRequest === null) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const api = readLocalApi();
+                    if (!api) return;
+                    void api.contextMenu
+                      .show(
+                        [
+                          {
+                            id: "detach-pull-request",
+                            label: `Detach ${changeRequestLabel} from thread`,
+                          },
+                        ],
+                        { x: event.clientX, y: event.clientY },
+                      )
+                      .then((action) => {
+                        if (action === "detach-pull-request" && item.pullRequest !== null) {
+                          props.onDetachPullRequest?.(item.pullRequest);
+                        }
+                      })
+                      .catch((cause: unknown) => {
+                        console.error("[source-control-marker] context menu failed", cause);
+                      });
+                  }}
+                >
+                  #{item.pullRequest.number}
+                  <ExternalLinkIcon aria-hidden="true" className="size-2.5" />
+                </a>
+              )}
+            </span>
+          )
+        }
+      />
+    );
+  }
+  if (item.type === "thread_created") {
+    return (
+      <RelatedThreadCard
+        itemType={item.type}
+        icon={MessageSquareIcon}
+        title={item.title ?? "Created thread"}
+        detail=""
+        endpoint={
+          <ProviderModelEndpoint
+            providers={props.providerStatuses}
+            instanceId={item.targetProviderInstanceId}
+            model={item.targetModel}
+          />
+        }
+        badge="created"
+        threadId={item.targetThreadId}
+        onOpenThread={props.onOpenThread}
+      />
+    );
+  }
+  if (item.type === "subagent") {
+    const streamedResult = item.result?.trim() ? item.result : null;
+    const finalResult = FINAL_RESULT_SUBAGENT_STATUSES.has(item.status) ? streamedResult : null;
+    const detail = TERMINAL_SUBAGENT_STATUSES.has(item.status)
+      ? (streamedResult ?? item.progress ?? item.prompt)
+      : (item.progress ?? streamedResult ?? item.prompt);
+    // The item only records the instance; the model lives on the projection's
+    // subagent record, which the timeline threads through for this join.
+    const subagentModel =
+      props.subagents.find((subagent) => subagent.id === item.subagentId)?.model ?? undefined;
+    return (
+      <RelatedThreadCard
+        itemType={item.type}
+        icon={BotIcon}
+        title={subagentDisplayTitle(item.title ?? "Subagent")}
+        detail={detail}
+        endpoint={
+          <ProviderModelEndpoint
+            providers={props.providerStatuses}
+            instanceId={item.providerInstanceId}
+            model={subagentModel}
+          />
+        }
+        badge={item.status}
+        threadId={item.childThreadId}
+        expandedDetail={finalResult}
+        onOpenThread={props.onOpenThread}
+      />
+    );
+  }
+  return null;
+}
+
+function CompactionLifecycleRow(props: {
+  readonly item: Extract<OrchestrationV2TurnItem, { readonly type: "compaction" }>;
+  readonly providerStatuses: ReadonlyArray<ServerProvider>;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const { copyToClipboard, isCopied: copied } = useCopyToClipboard<null>({
+    timeout: 1_500,
+    target: "compaction summary",
+    onError: (error) => {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to copy compaction summary",
+          description: error.message,
+        }),
+      );
+    },
+  });
+  const { item } = props;
+  const isRunning = item.status === "pending" || item.status === "running";
+  const tokenDetail =
+    item.beforeTokenCount === undefined && item.afterTokenCount === undefined
+      ? null
+      : `${item.beforeTokenCount ?? "?"} → ${item.afterTokenCount ?? "?"} tokens`;
+  const methodDetail =
+    item.method === "fallback"
+      ? "Deterministic fallback"
+      : item.method === "model"
+        ? "Model summary"
+        : item.method === "direct"
+          ? "Direct handoff"
+          : null;
+  const target =
+    item.kind === "model_switch" && item.toProviderInstanceId !== undefined ? (
+      <ProviderModelEndpoint
+        providers={props.providerStatuses}
+        instanceId={item.toProviderInstanceId}
+        model={item.toModel}
+      />
+    ) : null;
+  const label = isRunning
+    ? "Compacting context…"
+    : item.kind === "provider_native"
+      ? "Claude context compacted"
+      : "Context compacted";
+  const detail =
+    target === null ? (
+      (methodDetail ?? tokenDetail)
+    ) : (
+      <span className="inline-flex min-w-0 items-center gap-1.5">
+        {target}
+        {methodDetail ? <span>· {methodDetail}</span> : null}
+        {item.coveredRunOrdinals ? (
+          <span>
+            · runs {item.coveredRunOrdinals.from}–{item.coveredRunOrdinals.to}
+          </span>
+        ) : null}
+      </span>
+    );
+  return (
+    <div data-v2-item-type="compaction">
+      <TimelineSystemDivider
+        label={label}
+        detail={detail}
+        icon={MinusIcon}
+        {...(item.summary
+          ? {
+              actionLabel: expanded ? "Hide compaction summary" : "Show compaction summary",
+              onAction: () => setExpanded((value) => !value),
+            }
+          : {})}
+      />
+      {expanded && item.summary ? (
+        <div className="mx-auto mt-1 max-w-3xl rounded-lg border border-border/60 bg-muted/20 p-3 text-xs">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <span className="font-medium text-muted-foreground">Compaction summary</span>
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+              onClick={() => copyToClipboard(item.summary ?? "", null)}
+            >
+              {copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
+          <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words font-sans leading-relaxed text-foreground/90">
+            {item.summary}
+          </pre>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function RelatedThreadCard(props: {
+  readonly itemType: "subagent" | "thread_created";
+  readonly icon: LucideIcon;
+  readonly title: string;
+  readonly detail: string;
+  /** Provider icon + model label for the thread this card points at. */
+  readonly endpoint?: ReactNode;
+  readonly expandedDetail?: string | null;
+  readonly badge: string;
+  readonly threadId: ThreadId | null;
+  readonly onOpenThread: (threadId: ThreadId) => void;
+}) {
+  const Icon = props.icon;
+  const threadId = props.threadId;
+  const expandedDetail = props.expandedDetail ?? null;
+  const content = (
+    <>
+      <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 flex-1 truncate text-xs font-medium">{props.title}</span>
+      {props.detail === "" ? null : (
+        <span className="max-w-[40%] truncate text-xs text-muted-foreground">{props.detail}</span>
+      )}
+      {props.endpoint === undefined ? null : (
+        <span className="shrink-0 text-xs text-muted-foreground">{props.endpoint}</span>
+      )}
+      <span className="rounded-full border border-border/70 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+        {props.badge}
+      </span>
+    </>
+  );
+
+  if (expandedDetail !== null) {
+    return (
+      <div
+        data-v2-item-type={props.itemType}
+        className="relative min-w-0 overflow-hidden rounded-lg border border-border/60 bg-card/30"
+      >
+        <details className="group" data-v2-subagent-result-disclosure="true">
+          <summary
+            aria-label={`Show full result for ${props.title}`}
+            className="flex min-w-0 cursor-pointer list-none items-center gap-2 px-3 py-2 pr-11 text-left transition-colors hover:bg-muted/50 [&::-webkit-details-marker]:hidden"
+          >
+            {content}
+            <ChevronDownIcon
+              className="size-3 shrink-0 text-muted-foreground transition-transform group-open:rotate-180"
+              aria-hidden="true"
+            />
+          </summary>
+          <div className="border-border/60 border-t px-3 py-2" data-v2-subagent-result="true">
+            <p className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">
+              {expandedDetail}
+            </p>
+          </div>
+        </details>
+        {threadId === null ? null : (
+          <button
+            type="button"
+            aria-label={`Open ${props.title}`}
+            onClick={() => props.onOpenThread(threadId)}
+            className="absolute top-1.5 right-1.5 flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <ExternalLinkIcon className="size-3" aria-hidden="true" />
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  return threadId === null ? (
+    <div
+      data-v2-item-type={props.itemType}
+      className="flex min-w-0 items-center gap-2 rounded-lg border border-border/60 bg-card/30 px-3 py-2"
+    >
+      {content}
+    </div>
+  ) : (
+    <button
+      type="button"
+      data-v2-item-type={props.itemType}
+      aria-label={`Open ${props.title}`}
+      onClick={() => props.onOpenThread(threadId)}
+      className="flex w-full min-w-0 items-center gap-2 rounded-lg border border-border/60 bg-card/30 px-3 py-2 text-left transition-colors hover:bg-muted/50"
+    >
+      {content}
+      <ExternalLinkIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
+    </button>
+  );
+}
+
+function subagentDisplayTitle(title: string): string {
+  return title.replace(/^Subagent:\s*/i, "");
+}
+
+/**
+ * Model of the newest run for `instanceId` that started before the handoff's
+ * own run. Legacy handoff items don't record their source models, but the
+ * covered runs are still in the projection.
+ */
+function latestRunModelBefore(
+  runs: ReadonlyArray<HandoffTimelineRun>,
+  instanceId: ProviderInstanceId,
+  beforeOrdinal: number | undefined,
+): string | undefined {
+  let latest: HandoffTimelineRun | undefined;
+  for (const run of runs) {
+    if (run.providerInstanceId !== instanceId) continue;
+    if (beforeOrdinal !== undefined && run.ordinal >= beforeOrdinal) continue;
+    if (latest === undefined || run.ordinal > latest.ordinal) latest = run;
+  }
+  return latest?.modelSelection.model;
+}
+
+/**
+ * A provider endpoint: the provider's brand icon plus the model's display
+ * name. Used for both sides of a context handoff and for the provider/model a
+ * related thread (subagent or created thread) runs on. Falls back to the raw
+ * model slug when the instance no longer lists it, and to the instance display
+ * name (or id) when no model was recorded on the item.
+ */
+function ProviderModelEndpoint(props: {
+  readonly providers: ReadonlyArray<ServerProvider>;
+  readonly instanceId: ProviderInstanceId;
+  readonly model?: string | undefined;
+}) {
+  const entry = getProviderInstanceEntry(props.providers, props.instanceId);
+  const Icon = entry === undefined ? null : (PROVIDER_ICON_BY_PROVIDER[entry.driverKind] ?? null);
+  const model = props.model?.trim();
+  const providerModel =
+    model === undefined || model.length === 0
+      ? undefined
+      : entry?.models.find((candidate) => candidate.slug === model);
+  const label =
+    providerModel !== undefined
+      ? getTriggerDisplayModelName(providerModel)
+      : model !== undefined && model.length > 0
+        ? model
+        : (entry?.displayName ?? props.instanceId);
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1">
+      {Icon === null ? null : <Icon aria-hidden="true" className="size-3 shrink-0" />}
+      <span className="max-w-40 truncate">{label}</span>
+    </span>
+  );
+}

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
 
 import { clampUtf8Bytes, decodeUtf8Clamped, utf8BoundaryBefore } from "./utf8Truncation.ts";
 

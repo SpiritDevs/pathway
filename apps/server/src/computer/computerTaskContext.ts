@@ -1,22 +1,40 @@
-import { AsyncLocalStorage } from "node:async_hooks";
-import type { CuaComputerTask } from "@synara/shared/cuaDriverProtocol";
+/**
+ * The task a computer call is attributed to: local IPC metadata, never
+ * additional model context. Detached continuations lose it once the call ends.
+ *
+ * @module computer/computerTaskContext
+ */
+import type { CuaComputerTask } from "@spiritdevs/shared/cuaDriverProtocol";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
 
-const tasks = new AsyncLocalStorage<{ task: CuaComputerTask; active: boolean }>();
-
-export function currentComputerTask(): CuaComputerTask | undefined {
-  const scope = tasks.getStore();
-  return scope?.active ? scope.task : undefined;
+interface ComputerTaskScope {
+  readonly task: CuaComputerTask;
+  active: boolean;
 }
 
-/** Task attribution is local IPC metadata, never additional model context. */
-export async function withComputerTask<A>(
+class ComputerTaskContext extends Context.Reference<ComputerTaskScope | undefined>(
+  "@spiritdevs/pathway/computer/ComputerTaskContext",
+  { defaultValue: () => undefined },
+) {}
+
+export const currentComputerTask: Effect.Effect<CuaComputerTask | undefined> = Effect.map(
+  Effect.service(ComputerTaskContext),
+  (scope) => (scope?.active ? scope.task : undefined),
+);
+
+export const withComputerTask = <A, E, R>(
   task: CuaComputerTask,
-  run: () => Promise<A>,
-): Promise<A> {
-  const scope = { task, active: true };
-  try {
-    return await tasks.run(scope, run);
-  } finally {
-    scope.active = false;
-  }
-}
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> =>
+  Effect.suspend(() => {
+    const scope: ComputerTaskScope = { task, active: true };
+    return effect.pipe(
+      Effect.provideService(ComputerTaskContext, scope),
+      Effect.ensuring(
+        Effect.sync(() => {
+          scope.active = false;
+        }),
+      ),
+    );
+  });

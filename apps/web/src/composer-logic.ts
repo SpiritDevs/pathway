@@ -1,12 +1,8 @@
 import { splitPromptIntoComposerSegments } from "./composer-editor-mentions";
-import { isBuiltInComposerSlashCommand, type ComposerSlashCommand } from "./composerSlashCommands";
-import {
-  composerMentionQuotedPathHasClosingQuote,
-  decodeComposerMentionQuotedPath,
-} from "./lib/composerMentions";
 import { INLINE_TERMINAL_CONTEXT_PLACEHOLDER } from "./lib/terminalContext";
 
-export type ComposerTriggerKind = "mention" | "slash-command" | "slash-model" | "skill";
+export type ComposerTriggerKind = "path" | "slash-command" | "skill";
+export type ComposerSlashCommand = "model" | "plan" | "default" | "computer-use";
 
 export interface ComposerTrigger {
   kind: ComposerTriggerKind;
@@ -15,24 +11,20 @@ export interface ComposerTrigger {
   rangeEnd: number;
 }
 
-export function stripComposerTriggerText(text: string, trigger: ComposerTrigger | null): string {
-  if (!trigger) {
-    return text;
-  }
-
-  return `${text.slice(0, trigger.rangeStart)}${text.slice(trigger.rangeEnd)}`;
+export function shouldSubmitComposerOnEnter(input: {
+  isMobileViewport: boolean;
+  shiftKey: boolean;
+}): boolean {
+  return !input.isMobileViewport && !input.shiftKey;
 }
 
-type ComposerSegmentLike =
-  | { type: "text"; text: string }
-  | { type: "mention" }
-  | { type: "skill" }
-  | { type: "slash-command"; command: ComposerSlashCommand }
-  | { type: "terminal-context" }
-  | { type: "agent-mention"; alias: string }
-  | { type: "link"; url: string };
-
-const isInlineTokenSegment = (segment: ComposerSegmentLike): boolean => segment.type !== "text";
+const isInlineTokenSegment = (
+  segment:
+    | { type: "text"; text: string }
+    | { type: "mention" }
+    | { type: "skill" }
+    | { type: "terminal-context" },
+): boolean => segment.type !== "text";
 
 function clampCursor(text: string, cursor: number): number {
   if (!Number.isFinite(cursor)) return text.length;
@@ -57,24 +49,6 @@ function tokenStartForCursor(text: string, cursor: number): number {
   return index + 1;
 }
 
-// Finds the `/` that opens the slash token the cursor sits in. The slash may be
-// at the line start OR immediately after whitespace, so `/command` is detected
-// mid-line (e.g. after an existing chip) — matching how `$skill` and `@mention`
-// already behave. Returns the latest such slash before the cursor on the
-// current line, or -1 when the cursor is not within a slash token region.
-function slashTokenStartForCursor(text: string, lineStart: number, cursor: number): number {
-  let slashStart = -1;
-  for (let index = lineStart; index < cursor; index += 1) {
-    if (text[index] !== "/") {
-      continue;
-    }
-    if (index === lineStart || isWhitespace(text[index - 1] ?? "")) {
-      slashStart = index;
-    }
-  }
-  return slashStart;
-}
-
 export function expandCollapsedComposerCursor(text: string, cursorInput: number): number {
   const collapsedCursor = clampCursor(text, cursorInput);
   const segments = splitPromptIntoComposerSegments(text);
@@ -87,8 +61,7 @@ export function expandCollapsedComposerCursor(text: string, cursorInput: number)
 
   for (const segment of segments) {
     if (segment.type === "mention") {
-      // Quoted tokens (`@"name with spaces"`) are longer than path.length + 1.
-      const expandedLength = segment.tokenLength ?? segment.path.length + 1;
+      const expandedLength = segment.source.length;
       if (remaining <= 1) {
         return expandedCursor + (remaining === 0 ? 0 : expandedLength);
       }
@@ -98,34 +71,6 @@ export function expandCollapsedComposerCursor(text: string, cursorInput: number)
     }
     if (segment.type === "skill") {
       const expandedLength = segment.name.length + 1;
-      if (remaining <= 1) {
-        return expandedCursor + (remaining === 0 ? 0 : expandedLength);
-      }
-      remaining -= 1;
-      expandedCursor += expandedLength;
-      continue;
-    }
-    if (segment.type === "slash-command") {
-      const expandedLength = segment.command.length + 1;
-      if (remaining <= 1) {
-        return expandedCursor + (remaining === 0 ? 0 : expandedLength);
-      }
-      remaining -= 1;
-      expandedCursor += expandedLength;
-      continue;
-    }
-    if (segment.type === "agent-mention") {
-      // @alias = 1 + alias.length
-      const expandedLength = segment.alias.length + 1;
-      if (remaining <= 1) {
-        return expandedCursor + (remaining === 0 ? 0 : expandedLength);
-      }
-      remaining -= 1;
-      expandedCursor += expandedLength;
-      continue;
-    }
-    if (segment.type === "link") {
-      const expandedLength = segment.url.length;
       if (remaining <= 1) {
         return expandedCursor + (remaining === 0 ? 0 : expandedLength);
       }
@@ -153,7 +98,13 @@ export function expandCollapsedComposerCursor(text: string, cursorInput: number)
   return expandedCursor;
 }
 
-function collapsedSegmentLength(segment: ComposerSegmentLike): number {
+function collapsedSegmentLength(
+  segment:
+    | { type: "text"; text: string }
+    | { type: "mention" }
+    | { type: "skill" }
+    | { type: "terminal-context" },
+): number {
   if (segment.type === "text") {
     return segment.text.length;
   }
@@ -161,7 +112,12 @@ function collapsedSegmentLength(segment: ComposerSegmentLike): number {
 }
 
 function clampCollapsedComposerCursorForSegments(
-  segments: ReadonlyArray<ComposerSegmentLike>,
+  segments: ReadonlyArray<
+    | { type: "text"; text: string }
+    | { type: "mention" }
+    | { type: "skill" }
+    | { type: "terminal-context" }
+  >,
   cursorInput: number,
 ): number {
   const collapsedLength = segments.reduce(
@@ -193,8 +149,7 @@ export function collapseExpandedComposerCursor(text: string, cursorInput: number
 
   for (const segment of segments) {
     if (segment.type === "mention") {
-      // Quoted tokens (`@"name with spaces"`) are longer than path.length + 1.
-      const expandedLength = segment.tokenLength ?? segment.path.length + 1;
+      const expandedLength = segment.source.length;
       if (remaining === 0) {
         return collapsedCursor;
       }
@@ -207,43 +162,6 @@ export function collapseExpandedComposerCursor(text: string, cursorInput: number
     }
     if (segment.type === "skill") {
       const expandedLength = segment.name.length + 1;
-      if (remaining === 0) {
-        return collapsedCursor;
-      }
-      if (remaining <= expandedLength) {
-        return collapsedCursor + 1;
-      }
-      remaining -= expandedLength;
-      collapsedCursor += 1;
-      continue;
-    }
-    if (segment.type === "slash-command") {
-      const expandedLength = segment.command.length + 1;
-      if (remaining === 0) {
-        return collapsedCursor;
-      }
-      if (remaining <= expandedLength) {
-        return collapsedCursor + 1;
-      }
-      remaining -= expandedLength;
-      collapsedCursor += 1;
-      continue;
-    }
-    if (segment.type === "agent-mention") {
-      // @alias = 1 + alias.length
-      const expandedLength = segment.alias.length + 1;
-      if (remaining === 0) {
-        return collapsedCursor;
-      }
-      if (remaining <= expandedLength) {
-        return collapsedCursor + 1;
-      }
-      remaining -= expandedLength;
-      collapsedCursor += 1;
-      continue;
-    }
-    if (segment.type === "link") {
-      const expandedLength = segment.url.length;
       if (remaining === 0) {
         return collapsedCursor;
       }
@@ -302,48 +220,21 @@ export function isCollapsedCursorAdjacentToInlineToken(
   return false;
 }
 
+export const isCollapsedCursorAdjacentToMention = isCollapsedCursorAdjacentToInlineToken;
+
 export function detectComposerTrigger(text: string, cursorInput: number): ComposerTrigger | null {
   const cursor = clampCursor(text, cursorInput);
   const lineStart = text.lastIndexOf("\n", Math.max(0, cursor - 1)) + 1;
   const linePrefix = text.slice(lineStart, cursor);
 
-  const slashStart = slashTokenStartForCursor(text, lineStart, cursor);
-  if (slashStart !== -1) {
-    const region = text.slice(slashStart, cursor);
-    const commandMatch = /^\/(\S*)$/.exec(region);
+  if (linePrefix.startsWith("/")) {
+    const commandMatch = /^\/(\S*)$/.exec(linePrefix);
     if (commandMatch) {
       const commandQuery = commandMatch[1] ?? "";
-      // Command names are `[a-z-]+` (see parseStandaloneComposerSlashCommand), so a
-      // query containing "/" can never be a command — e.g. a typed path or "/and/or"
-      // after a space. Treat it as plain text instead of opening an empty picker.
-      if (commandQuery.includes("/")) {
-        return null;
-      }
-      // `/model` opens the model picker; every other `/query` (known or unknown)
-      // stays in the slash-command lane so provider-native commands and skills
-      // can be suggested without borrowing the `$skill` flow.
-      if (commandQuery.toLowerCase() === "model") {
-        return {
-          kind: "slash-model",
-          query: "",
-          rangeStart: slashStart,
-          rangeEnd: cursor,
-        };
-      }
       return {
         kind: "slash-command",
         query: commandQuery,
-        rangeStart: slashStart,
-        rangeEnd: cursor,
-      };
-    }
-
-    const modelMatch = /^\/model(?:\s+(.*))?$/.exec(region);
-    if (modelMatch) {
-      return {
-        kind: "slash-model",
-        query: (modelMatch[1] ?? "").trim(),
-        rangeStart: slashStart,
+        rangeStart: lineStart,
         rangeEnd: cursor,
       };
     }
@@ -359,59 +250,26 @@ export function detectComposerTrigger(text: string, cursorInput: number): Compos
       rangeEnd: cursor,
     };
   }
-
-  // An unclosed `@"..."` mention spans whitespace, so a pure whitespace-bounded
-  // token won't catch it. Look back on the line for the last `@"` that hasn't
-  // been closed yet and treat everything after it as the active mention query.
-  const quotedMentionStart = linePrefix.lastIndexOf('@"');
-  if (quotedMentionStart !== -1) {
-    const afterOpen = linePrefix.slice(quotedMentionStart + 2);
-    if (!composerMentionQuotedPathHasClosingQuote(afterOpen)) {
-      return {
-        kind: "mention",
-        query: decodeComposerMentionQuotedPath(afterOpen),
-        rangeStart: lineStart + quotedMentionStart,
-        rangeEnd: cursor,
-      };
-    }
-  }
-
   if (!token.startsWith("@")) {
     return null;
   }
 
-  // Support adjacent mentions like `@foo@bar` by anchoring the active trigger
-  // to the last `@` within the whitespace-bounded word. Without this, a chain
-  // like `@foo@b` would expose the whole chain as the replacement range, so
-  // picking an item would clobber the earlier chip. Emails like `user@host`
-  // stay unaffected because the enclosing word doesn't start with `@`.
-  const lastAtInToken = token.lastIndexOf("@");
-  const mentionStart = tokenStart + lastAtInToken;
-  const mentionToken = token.slice(lastAtInToken);
-  if (!/^@[^()\s@]*$/.test(mentionToken)) {
-    return null;
-  }
-
   return {
-    kind: "mention",
-    query: mentionToken.slice(1),
-    rangeStart: mentionStart,
+    kind: "path",
+    query: token.slice(1),
+    rangeStart: tokenStart,
     rangeEnd: cursor,
   };
 }
 
-export function parseStandaloneComposerSlashCommand(
-  text: string,
-): Exclude<ComposerSlashCommand, "model"> | null {
-  const match = /^\/([a-z-]+)\s*$/i.exec(text.trim());
+export function parseStandaloneComposerSlashCommand(text: string): "plan" | "default" | null {
+  const match = /^\/(plan|default)\s*$/i.exec(text.trim());
   if (!match) {
     return null;
   }
   const command = match[1]?.toLowerCase();
-  if (!command || !isBuiltInComposerSlashCommand(command) || command === "model") {
-    return null;
-  }
-  return command;
+  if (command === "plan") return "plan";
+  return "default";
 }
 
 export function replaceTextRange(

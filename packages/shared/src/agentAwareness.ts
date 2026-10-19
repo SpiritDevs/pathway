@@ -1,0 +1,162 @@
+import type {
+  EnvironmentId,
+  OrchestrationV2ThreadShell,
+  Project,
+  ThreadId,
+} from "@spiritdevs/contracts";
+import type { CompanyId } from "@spiritdevs/contracts/company";
+import * as DateTime from "effect/DateTime";
+
+export type AgentAwarenessPhase =
+  | "starting"
+  | "running"
+  | "waiting_for_approval"
+  | "waiting_for_input"
+  | "completed"
+  | "failed"
+  | "stale";
+
+export interface AgentAwarenessState {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly projectTitle: string;
+  readonly conversationCompanyId?: CompanyId;
+  readonly threadTitle: string;
+  readonly phase: AgentAwarenessPhase;
+  readonly headline: string;
+  readonly detail?: string;
+  readonly modelTitle: string;
+  readonly updatedAt: string;
+  readonly startedAt?: string;
+  readonly completedAt?: string;
+  readonly deepLink: string;
+}
+
+export function buildAgentAwarenessDeepLink(input: {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+}): string {
+  return `/threads/${encodeURIComponent(input.environmentId)}/${encodeURIComponent(input.threadId)}`;
+}
+
+export interface ProjectThreadAwarenessV2Input {
+  readonly environmentId: EnvironmentId;
+  readonly project: Pick<Project, "title"> | null;
+  readonly conversationCompanyId?: CompanyId | null | undefined;
+  readonly thread: Pick<
+    OrchestrationV2ThreadShell,
+    | "activityRunStatus"
+    | "id"
+    | "modelSelection"
+    | "pendingRuntimeRequest"
+    | "status"
+    | "title"
+    | "updatedAt"
+  > &
+    Partial<
+      Pick<
+        OrchestrationV2ThreadShell,
+        | "activeRunId"
+        | "latestRunId"
+        | "latestRunRequestedAt"
+        | "latestRunStartedAt"
+        | "latestRunCompletedAt"
+      >
+    >;
+}
+
+/** Build relay activity directly from the V2 shell projection. */
+export function projectThreadAwarenessV2(
+  input: ProjectThreadAwarenessV2Input,
+): AgentAwarenessState | null {
+  const { environmentId, project, thread } = input;
+  if (project === null && input.conversationCompanyId == null) return null;
+  const phase = resolveThreadAwarenessPhaseV2(thread);
+  if (phase === null) {
+    return null;
+  }
+  const detail =
+    phase === "completed"
+      ? "Review the completed task."
+      : phase === "failed"
+        ? "The agent run failed."
+        : undefined;
+  // The shell's timing belongs to the latest run, which can differ from an
+  // older run that is still active after a newer queued turn was cancelled.
+  const hasLatestRunTiming = !thread.activeRunId || thread.activeRunId === thread.latestRunId;
+  const startedAt = hasLatestRunTiming
+    ? (thread.latestRunStartedAt ?? thread.latestRunRequestedAt)
+    : null;
+  const completedAt =
+    hasLatestRunTiming && (phase === "completed" || phase === "failed")
+      ? thread.latestRunCompletedAt
+      : null;
+  return {
+    environmentId,
+    threadId: thread.id,
+    projectTitle: project?.title ?? "Conversation",
+    ...(project === null && input.conversationCompanyId != null
+      ? { conversationCompanyId: input.conversationCompanyId }
+      : {}),
+    threadTitle: thread.title,
+    phase,
+    headline: headlineForPhase(phase),
+    ...(detail === undefined ? {} : { detail }),
+    modelTitle: thread.modelSelection.model,
+    updatedAt: DateTime.formatIso(thread.updatedAt),
+    ...(startedAt == null ? {} : { startedAt: DateTime.formatIso(startedAt) }),
+    ...(completedAt == null ? {} : { completedAt: DateTime.formatIso(completedAt) }),
+    deepLink: buildAgentAwarenessDeepLink({ environmentId, threadId: thread.id }),
+  };
+}
+
+function resolveThreadAwarenessPhaseV2(
+  thread: ProjectThreadAwarenessV2Input["thread"],
+): AgentAwarenessPhase | null {
+  if (thread.pendingRuntimeRequest?.kind === "user_input") {
+    return "waiting_for_input";
+  }
+  if (
+    thread.pendingRuntimeRequest !== null &&
+    thread.pendingRuntimeRequest.kind !== "auth_refresh"
+  ) {
+    return "waiting_for_approval";
+  }
+  switch (thread.activityRunStatus ?? thread.status) {
+    case "preparing":
+    case "starting":
+      return "starting";
+    case "running":
+    case "waiting":
+      return "running";
+    case "completed":
+      return "completed";
+    case "failed":
+      return "failed";
+    case "idle":
+    case "queued":
+    case "interrupted":
+    case "cancelled":
+    case "rolled_back":
+      return null;
+  }
+}
+
+function headlineForPhase(phase: AgentAwarenessPhase): string {
+  switch (phase) {
+    case "starting":
+      return "Starting agent";
+    case "running":
+      return "Agent is working";
+    case "waiting_for_approval":
+      return "Approval needed";
+    case "waiting_for_input":
+      return "Waiting for input";
+    case "completed":
+      return "Agent finished";
+    case "failed":
+      return "Agent failed";
+    case "stale":
+      return "Update delayed";
+  }
+}

@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { parseComputerInvocation, resolveComputerInvocationMode } from "./computerInvocation";
+import { describe, expect, it } from "@effect/vitest";
+import { parseComputerInvocation, resolveComputerInvocationMode } from "./computerInvocation.ts";
 
 describe("explicit Computer invocation", () => {
   it.each(["/computer-use open Calculator", "  /COMPUTER-USE\nopen Calculator"])(
@@ -39,6 +39,15 @@ describe("explicit Computer invocation", () => {
         dispatchOrigin,
       }),
     ).toBe("off");
+  });
+
+  it.each(["agent", "automation"])("ignores the chat switch on %s output", (dispatchOrigin) => {
+    expect(resolveComputerInvocationMode({ enableComputerControl: true, dispatchOrigin })).toBe(
+      "off",
+    );
+    expect(
+      resolveComputerInvocationMode({ enableComputerControl: true, dispatchOrigin: "user" }),
+    ).toBe("chat");
   });
 
   it("keeps Settings opt-in distinct and gives frozen queue metadata precedence", () => {

@@ -1,116 +1,119 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ProviderRuntimeEvent } from "@synara/contracts";
-import { CursorActivity, cursorRuntimeActivity, cursorToolActivity } from "./cursorActivity.ts";
+import type { ProviderRuntimeEvent } from "@spiritdevs/contracts";
+import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 
-const tick = () => vi.advanceTimersByTimeAsync(80);
-afterEach(() => vi.useRealTimers());
+import { cursorRuntimeActivity, cursorToolActivity, makeCursorActivity } from "./cursorActivity.ts";
+
+/** Lets the debounce elapse, then lets the detached publish fiber run. */
+const tick = TestClock.adjust("80 millis").pipe(
+  Effect.andThen(Effect.yieldNow),
+  Effect.andThen(Effect.yieldNow),
+);
+
+/** A publish that records every label it is handed. */
+const recorder = <E = never>(after: Effect.Effect<void, E> = Effect.void) => {
+  const labels: Array<string | null> = [];
+  const publish = (text: string | null) =>
+    Effect.suspend(() => {
+      labels.push(text);
+      return after;
+    });
+  return { labels, publish };
+};
 
 describe("cursor activity", () => {
-  it("shows live work, then thinking, without waiting on the badge backend", async () => {
-    vi.useFakeTimers();
-    const labels: Array<string | null> = [];
-    const activity = new CursorActivity(async (text) => {
-      labels.push(text);
-      await new Promise(() => {});
-    });
-    activity.setOwner("owner");
-    let finish!: () => void;
-    const work = activity.during(
-      "owner",
-      "Scrolling",
-      () =>
-        new Promise<void>((resolve) => {
-          finish = resolve;
-        }),
-    );
-    await tick();
-    expect(labels).toEqual(["Scrolling"]);
-    finish();
-    await work;
-    await tick();
-    expect(labels).toEqual(["Scrolling", "Thinking"]);
-    activity.setOwner(null);
-    await tick();
-    expect(labels.at(-1)).toBeNull();
-    activity.dispose();
-  });
+  it.effect("shows live work, then thinking, without waiting on the badge backend", () =>
+    Effect.gen(function* () {
+      const { labels, publish } = recorder(Effect.never);
+      const activity = yield* makeCursorActivity(publish);
+      yield* activity.setOwner("owner");
+      const finish = yield* Deferred.make<void>();
+      const work = yield* Effect.forkChild(
+        activity.during("owner", "Scrolling", Deferred.await(finish)),
+        { startImmediately: true },
+      );
+      yield* tick;
+      expect(labels).toEqual(["Scrolling"]);
+      yield* Deferred.succeed(finish, undefined);
+      yield* Fiber.join(work);
+      yield* tick;
+      expect(labels).toEqual(["Scrolling", "Thinking"]);
+      yield* activity.setOwner(null);
+      yield* tick;
+      expect(labels.at(-1)).toBeNull();
+      yield* activity.dispose;
+    }),
+  );
 
-  it("coalesces brief calls and repeated token events", async () => {
-    vi.useFakeTimers();
-    const publish = vi.fn(async () => {});
-    const activity = new CursorActivity(publish);
-    activity.setOwner("owner");
-    await activity.during("owner", "Clicking", async () => {});
-    for (let i = 0; i < 100; i++) activity.setRuntime("owner", "Thinking");
-    await tick();
-    expect(publish.mock.calls).toEqual([["Thinking"]]);
-    activity.dispose();
-  });
+  it.effect("coalesces brief calls and repeated token events", () =>
+    Effect.gen(function* () {
+      const { labels, publish } = recorder();
+      const activity = yield* makeCursorActivity(publish);
+      yield* activity.setOwner("owner");
+      yield* activity.during("owner", "Clicking", Effect.void);
+      for (let i = 0; i < 100; i++) yield* activity.setRuntime("owner", "Thinking");
+      yield* tick;
+      expect(labels).toEqual(["Thinking"]);
+      yield* activity.dispose;
+    }),
+  );
 
-  it("ignores other threads and keeps pending work from overwriting a new owner", async () => {
-    vi.useFakeTimers();
-    const labels: Array<string | null> = [];
-    const activity = new CursorActivity(async (text) => {
-      labels.push(text);
-    });
-    activity.setOwner("a");
-    let finish!: () => void;
-    const work = activity.during(
-      "a",
-      "Typing",
-      () =>
-        new Promise<void>((resolve) => {
-          finish = resolve;
-        }),
-    );
-    activity.setOwner("b");
-    activity.setRuntime("a", "Waiting for you");
-    activity.setRuntime("b", "Needs approval");
-    await tick();
-    finish();
-    await work;
-    await tick();
-    expect(labels).toEqual(["Needs approval"]);
-    activity.dispose();
-  });
+  it.effect("ignores other threads and keeps pending work from overwriting a new owner", () =>
+    Effect.gen(function* () {
+      const { labels, publish } = recorder();
+      const activity = yield* makeCursorActivity(publish);
+      yield* activity.setOwner("a");
+      const finish = yield* Deferred.make<void>();
+      const work = yield* Effect.forkChild(activity.during("a", "Typing", Deferred.await(finish)), {
+        startImmediately: true,
+      });
+      yield* activity.setOwner("b");
+      yield* activity.setRuntime("a", "Waiting for you");
+      yield* activity.setRuntime("b", "Needs approval");
+      yield* tick;
+      yield* Deferred.succeed(finish, undefined);
+      yield* Fiber.join(work);
+      yield* tick;
+      expect(labels).toEqual(["Needs approval"]);
+      yield* activity.dispose;
+    }),
+  );
 
-  it("keeps a pending question visible until its response arrives", async () => {
-    vi.useFakeTimers();
-    const labels: Array<string | null> = [];
-    const activity = new CursorActivity(async (text) => {
-      labels.push(text);
-    });
-    activity.setOwner("owner");
-    activity.setRuntime("owner", "Waiting for you");
-    activity.setRuntime("owner", "Responding");
-    activity.setRuntime("owner", "Thinking");
-    await tick();
-    expect(labels).toEqual(["Waiting for you"]);
-    activity.setRuntime("owner", "Thinking", true);
-    await tick();
-    expect(labels.at(-1)).toBe("Thinking");
-    activity.dispose();
-  });
+  it.effect("keeps a pending question visible until its response arrives", () =>
+    Effect.gen(function* () {
+      const { labels, publish } = recorder();
+      const activity = yield* makeCursorActivity(publish);
+      yield* activity.setOwner("owner");
+      yield* activity.setRuntime("owner", "Waiting for you");
+      yield* activity.setRuntime("owner", "Responding");
+      yield* activity.setRuntime("owner", "Thinking");
+      yield* tick;
+      expect(labels).toEqual(["Waiting for you"]);
+      yield* activity.setRuntime("owner", "Thinking", true);
+      yield* tick;
+      expect(labels.at(-1)).toBe("Thinking");
+      yield* activity.dispose;
+    }),
+  );
 
-  it("handles errors and disposal without failing input or publishing late labels", async () => {
-    vi.useFakeTimers();
-    const publish = vi.fn(async () => {
-      throw new Error("badge unavailable");
-    });
-    const activity = new CursorActivity(publish);
-    activity.setOwner("a");
-    await expect(
-      activity.during("a", "Typing", async () => {
-        throw new Error("input failed");
-      }),
-    ).rejects.toThrow("input failed");
-    await tick();
-    expect(publish).toHaveBeenCalledWith("Needs attention");
-    activity.setRuntime("a", "Thinking");
-    activity.dispose();
-    await tick();
-    expect(publish).toHaveBeenCalledTimes(1);
-  });
+  it.effect("handles errors and disposal without failing input or publishing late labels", () =>
+    Effect.gen(function* () {
+      const { labels, publish } = recorder(Effect.fail("badge unavailable"));
+      const activity = yield* makeCursorActivity(publish);
+      yield* activity.setOwner("a");
+      const error = yield* Effect.flip(activity.during("a", "Typing", Effect.fail("input failed")));
+      expect(error).toBe("input failed");
+      yield* tick;
+      expect(labels).toEqual(["Needs attention"]);
+      yield* activity.setRuntime("a", "Thinking");
+      yield* activity.dispose;
+      yield* tick;
+      expect(labels).toHaveLength(1);
+    }),
+  );
 
   it("uses concise labels for actual events, without showing private content", () => {
     expect(cursorToolActivity("computer_scroll").length).toBeLessThanOrEqual(20);

@@ -1,10 +1,5 @@
-// FILE: path.ts
-// Purpose: Shared path classification and workspace-relative conversion helpers.
-// Layer: Cross-package utility
-// Exports: absolute-path predicates plus safe workspace relative path helpers
-
 export function isWindowsDrivePath(value: string): boolean {
-  return /^[a-zA-Z]:[/\\]/.test(value);
+  return /^[a-zA-Z]:([/\\]|$)/.test(value);
 }
 
 export function isUncPath(value: string): boolean {
@@ -13,15 +8,6 @@ export function isUncPath(value: string): boolean {
 
 export function isWindowsAbsolutePath(value: string): boolean {
   return isUncPath(value) || isWindowsDrivePath(value);
-}
-
-export function isLocalAbsolutePath(
-  value: string,
-  options: { readonly allowWindowsPaths?: boolean } = {},
-): boolean {
-  return (
-    value.startsWith("/") || ((options.allowWindowsPaths ?? true) && isWindowsAbsolutePath(value))
-  );
 }
 
 export function isExplicitRelativePath(value: string): boolean {
@@ -35,86 +21,35 @@ export function isExplicitRelativePath(value: string): boolean {
   );
 }
 
-function normalizePathSeparators(value: string): string {
-  return value.replace(/\\/g, "/");
+function isRootPath(value: string): boolean {
+  // The drive separator is required: a bare `C:` is not the drive root (it
+  // means "current directory on C:"), and treating it as already-canonical
+  // would leave it as `C:` while `C:\` and `C:/` normalize to the drive root,
+  // so the same location would fail project identity/dedup comparisons.
+  return value === "/" || value === "\\" || /^[a-zA-Z]:[/\\]$/.test(value);
 }
 
-// For paths whose separators have already been normalized to forward slashes.
-export function isNormalizedWindowsAbsolutePath(value: string): boolean {
-  return isWindowsDrivePath(value) || value.startsWith("//");
-}
-
-export function localPathsEqual(left: string, right: string): boolean {
-  const normalizedLeft = normalizePathSeparators(left.trim());
-  const normalizedRight = normalizePathSeparators(right.trim());
-  const leftWithoutTrailing = normalizedLeft.replace(/\/+$/, "");
-  const rightWithoutTrailing = normalizedRight.replace(/\/+$/, "");
-  return isNormalizedWindowsAbsolutePath(normalizedLeft) &&
-    isNormalizedWindowsAbsolutePath(normalizedRight)
-    ? leftWithoutTrailing.toLowerCase() === rightWithoutTrailing.toLowerCase()
-    : leftWithoutTrailing === rightWithoutTrailing;
-}
-
-function windowsRelativePathOf(targetPath: string, workspaceRoot: string): string | null {
-  const targetSegments = targetPath.split("/");
-  const rootSegments = workspaceRoot.split("/");
-  if (targetSegments.length <= rootSegments.length) {
-    return null;
+function trimTrailingPathSeparators(value: string): string {
+  if (value.length === 0 || isRootPath(value)) {
+    return value;
   }
-  const rootMatches = rootSegments.every(
-    (segment, index) => segment.toLowerCase() === targetSegments[index]?.toLowerCase(),
-  );
-  return rootMatches ? targetSegments.slice(rootSegments.length).join("/") : null;
-}
-
-// Converts an absolute path inside `workspaceRoot` to its workspace-relative
-// form (forward-slash separated). Returns null for the root itself, for paths
-// outside the root, and for anything that still fails the relative-path safety
-// check (so callers can hand the result straight to workspace file RPCs).
-export function workspaceRelativePathOf(targetPath: string, workspaceRoot: string): string | null {
-  const trimmedTarget = targetPath.trim();
-  const trimmedRoot = workspaceRoot.trim();
-  const normalizedTarget = normalizePathSeparators(trimmedTarget);
-  const normalizedRoot = normalizePathSeparators(trimmedRoot).replace(/\/+$/, "");
-  if (normalizedRoot.length === 0 || normalizedTarget.length === 0) {
-    return null;
-  }
-
-  const compareCaseInsensitively =
-    isNormalizedWindowsAbsolutePath(normalizedTarget) &&
-    isNormalizedWindowsAbsolutePath(normalizedRoot);
-  const relativePath = (
-    compareCaseInsensitively
-      ? windowsRelativePathOf(normalizedTarget, normalizedRoot)
-      : normalizedTarget.startsWith(`${normalizedRoot}/`)
-        ? normalizedTarget.slice(normalizedRoot.length + 1)
-        : null
-  )?.replace(/\/+$/, "");
-  if (!relativePath) {
-    return null;
-  }
-  return isWorkspaceRelativePathSafe(relativePath) ? relativePath : null;
-}
-
-// Inverse of `workspaceRelativePathOf`: joins a workspace root with a
-// forward-slash relative path, matching the root's own separator style so the
-// result stays a valid native path on Windows.
-export function joinWorkspaceRelativePath(workspaceRoot: string, relativePath: string): string {
-  const separator = workspaceRoot.includes("\\") ? "\\" : "/";
-  const normalizedRoot = workspaceRoot.replace(/[\\/]+$/, "");
-  const normalizedRelativePath = relativePath.split("/").join(separator);
-  return `${normalizedRoot}${separator}${normalizedRelativePath}`;
-}
-
-// True for workspace-relative paths that cannot escape the workspace root:
-// rejects absolute paths (POSIX and Windows) and any "." / ".." segments.
-export function isWorkspaceRelativePathSafe(value: string): boolean {
-  const trimmed = value.trim();
+  const trimmed = value.startsWith("/")
+    ? value.replace(/\/+$/g, "")
+    : value.replace(/[\\/]+$/g, "");
   if (trimmed.length === 0) {
-    return false;
+    return value;
   }
-  if (trimmed.startsWith("/") || isWindowsAbsolutePath(trimmed)) {
-    return false;
+  return /^[a-zA-Z]:$/.test(trimmed) ? `${trimmed}\\` : trimmed;
+}
+
+export function normalizeProjectPathForDispatch(value: string): string {
+  return trimTrailingPathSeparators(value.trim());
+}
+
+export function normalizeProjectPathForComparison(value: string): string {
+  const normalized = normalizeProjectPathForDispatch(value);
+  if (isWindowsDrivePath(normalized) || isUncPath(normalized)) {
+    return normalized.replaceAll("/", "\\").toLowerCase();
   }
-  return trimmed.split(/[\\/]/).every((segment) => segment !== ".." && segment !== ".");
+  return normalized;
 }

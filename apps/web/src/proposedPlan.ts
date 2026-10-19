@@ -109,8 +109,14 @@ export function normalizePlanMarkdownForExport(planMarkdown: string): string {
   return `${planMarkdown.trimEnd()}\n`;
 }
 
-const PROPOSED_PLAN_BLOCK_GLOBAL_REGEX = /<proposed_plan>\s*[\s\S]*?\s*<\/proposed_plan>/gi;
-
-export function stripProposedPlanBlocksFromText(text: string): string {
-  return text.replace(PROPOSED_PLAN_BLOCK_GLOBAL_REGEX, "").trim();
+export function downloadPlanAsTextFile(filename: string, contents: string): void {
+  const blob = new Blob([contents], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  window.setTimeout(() => {
+    URL.revokeObjectURL(url);
+  }, 0);
 }

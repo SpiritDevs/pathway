@@ -1,211 +1,248 @@
-import { Effect } from "effect";
-import { describe, expect, it, vi } from "vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 
-import { ComputerApprovalGate, computerApprovalGate } from "./ComputerApprovalGate.ts";
+import {
+  ComputerApprovalRequester,
+  make as makeComputerApprovalGate,
+  type ComputerApprovalError,
+  type ComputerApprovalGateShape,
+  type ComputerApprovalOutcome,
+  type ComputerApprovalPrompt,
+} from "./ComputerApprovalGate.ts";
 import { ComputerManager } from "./ComputerManager.ts";
+import { withComputerTask } from "./computerTaskContext.ts";
 import { FakeComputerBackend } from "./FakeComputerBackend.ts";
-import { makeAgentGatewayComputerTools } from "../agentGateway/computerTools.ts";
-import { GatewayToolError, type ToolContext } from "../agentGateway/toolRuntime.ts";
 
-function deferred(): { readonly promise: Promise<void>; readonly resolve: () => void } {
-  let resolve = () => {};
-  const promise = new Promise<void>((complete) => {
-    resolve = complete;
-  });
-  return { promise, resolve };
+/**
+ * The caller a Computer tool call runs for. Synara drives these cases through
+ * the agent gateway's `computer_type_text` tool; Pathway has no gateway tool
+ * layer yet, so `typeTextTool` below reproduces the part the lease depends on:
+ * consent first, then the caller-turn check inside the admitted activity, then
+ * the dispatch.
+ */
+class CallerTurnEndedError extends Schema.TaggedErrorClass<CallerTurnEndedError>()(
+  "CallerTurnEndedError",
+  { message: Schema.String },
+) {}
+
+interface Caller {
+  readonly threadId: string;
+  readonly turnId: string;
+  readonly assertCallerTurnActive: Effect.Effect<void, CallerTurnEndedError>;
 }
 
-function context(threadId: string, turnId: string): ToolContext {
-  return {
-    principal: {
-      kind: "provider-session",
-      sessionKey: "gateway-session:approval-lease",
-      threadId,
-      provider: "claudeAgent",
-      turnId,
-    },
-    callerThreadId: threadId,
-    callerThreadLabel: null,
-    callerSessionKey: "gateway-session:approval-lease",
-    callerProvider: "claudeAgent",
-    callerCapabilities: new Set(["computer:control"]),
-    callerTurnId: turnId,
-    assertCallerTurnActive: () => Effect.void,
-    jsonRpcRequestId: 1,
+const caller = (threadId: string, turnId: string): Caller => ({
+  threadId,
+  turnId,
+  assertCallerTurnActive: Effect.void,
+});
+
+type Authorize = (caller: Caller) => Effect.Effect<ComputerApprovalOutcome, ComputerApprovalError>;
+
+const typeTextTool =
+  (manager: ComputerManager, authorize?: Authorize) => (text: string, context: Caller) =>
+    Effect.gen(function* () {
+      if (authorize !== undefined) {
+        // A failed or unanswered consent reads as denied: nothing is sent.
+        const outcome = yield* authorize(context).pipe(Effect.orElseSucceed(() => "denied"));
+        if (outcome !== "approved") return { isError: true };
+      }
+      return yield* manager
+        .withAgentActivity(
+          context.threadId,
+          Effect.andThen(
+            context.assertCallerTurnActive,
+            withComputerTask(
+              { threadId: context.threadId, turnId: context.turnId },
+              manager.typeText(context.threadId, text),
+            ),
+          ),
+          undefined,
+          context.turnId,
+        )
+        .pipe(
+          Effect.as({ isError: false }),
+          Effect.orElseSucceed(() => ({ isError: true })),
+        );
+    });
+
+/** A gate whose posted cards land in `opened`, with a hook that may answer them. */
+const gateHarness = Effect.fn(function* () {
+  const opened = yield* Queue.unbounded<ComputerApprovalPrompt>();
+  const hooks: { open: (prompt: ComputerApprovalPrompt) => Effect.Effect<void> } = {
+    open: () => Effect.void,
   };
-}
+  const gate: ComputerApprovalGateShape = yield* makeComputerApprovalGate().pipe(
+    Effect.provideService(ComputerApprovalRequester, {
+      open: (prompt) =>
+        Queue.offer(opened, prompt).pipe(Effect.andThen(Effect.suspend(() => hooks.open(prompt)))),
+      resolve: () => Effect.void,
+    }),
+  );
+  return { gate, opened, hooks };
+});
 
-describe("computer approval lease", () => {
-  it("a turn-end accept for the previous turn settles false and dispatches nothing", async () => {
-    const gate = new ComputerApprovalGate();
-    const backend = new FakeComputerBackend();
-    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
-    const threadId = "approval-lease-thread";
-    const opened = deferred();
-    let previousRequestId = "";
-    const tools = makeAgentGatewayComputerTools({
-      manager,
-      authorizeAction: (_name, _args, ctx, signal) =>
-        gate.requestTask({
-          threadId: ctx.callerThreadId,
-          turnId: ctx.callerTurnId ?? "",
-          signal,
-          publish: async (id, decision) => {
-            if (decision !== undefined) return;
-            previousRequestId = id;
-            opened.resolve();
+it.layer(NodeServices.layer)("computer approval lease", (it) => {
+  it.effect("a turn-end accept for the previous turn settles false and dispatches nothing", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { gate, opened, hooks } = yield* gateHarness();
+        const backend = new FakeComputerBackend();
+        const manager = yield* ComputerManager.make({ backend, actionSettleMs: 0 });
+        const threadId = "approval-lease-thread";
+        const tool = typeTextTool(manager, (context) =>
+          gate.requestTask({
+            threadId: context.threadId,
+            turnId: context.turnId,
+            toolName: "computer_type_text",
+          }),
+        );
+        // Turn one opens its consent prompt and waits for the user.
+        const first = yield* tool("late", caller(threadId, "turn-1")).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        const previous = yield* Queue.take(opened);
+        // The turn ends and a new one prompts: the boundary cancels the old
+        // prompt, so the user's late accept for turn one settles false.
+        hooks.open = (prompt) =>
+          prompt.turnId === "turn-2"
+            ? gate.respond(threadId, prompt.requestId, "accept").pipe(Effect.asVoid)
+            : Effect.void;
+        const next = yield* gate
+          .requestTask({ threadId, turnId: "turn-2", toolName: "computer_type_text" })
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        expect(yield* gate.respond(threadId, previous.requestId, "accept")).toBe(false);
+        expect(yield* Fiber.join(next)).toBe("approved");
+        const result = yield* Fiber.join(first);
+        expect(result.isError).toBe(true);
+        expect(backend.callsFor("typeText")).toHaveLength(0);
+      }),
+    ),
+  );
+
+  it.effect("an approval that expired before the user answered dispatches nothing", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { gate, opened, hooks } = yield* gateHarness();
+        const backend = new FakeComputerBackend();
+        const manager = yield* ComputerManager.make({ backend, actionSettleMs: 0 });
+        const threadId = "approval-expiry-thread";
+        // Synara hands the gate an already-aborted signal. Here the approval
+        // window expiring is the request's fiber being interrupted before it runs.
+        const tool = typeTextTool(manager, (context) =>
+          Effect.gen(function* () {
+            const request = yield* gate
+              .request({
+                threadId: context.threadId,
+                turnId: context.turnId,
+                callKey: "computer_type_text:expired",
+                toolName: "computer_type_text",
+              })
+              .pipe(Effect.forkChild);
+            yield* Fiber.interrupt(request);
+            const exit = yield* Fiber.await(request);
+            return Exit.isSuccess(exit) ? exit.value : ("denied" as const);
+          }),
+        );
+        const result = yield* tool("expired", caller(threadId, "turn-1"));
+        // Expired approval reads as denied, the prompt never even opened, and no
+        // input was dispatched.
+        expect(result.isError).toBe(true);
+        expect(yield* Queue.size(opened)).toBe(0);
+        expect(backend.callsFor("typeText")).toHaveLength(0);
+        // The gate is unpoisoned: a fresh prompt still works.
+        hooks.open = (prompt) =>
+          gate.respond(threadId, prompt.requestId, "accept").pipe(Effect.asVoid);
+        expect(
+          yield* gate.request({
+            threadId,
+            callKey: "computer_type_text:live",
+            toolName: "computer_type_text",
+          }),
+        ).toBe("approved");
+      }),
+    ),
+  );
+
+  it.effect("a turn that ended before dispatch approves nothing and dispatches nothing", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const backend = new FakeComputerBackend();
+        const manager = yield* ComputerManager.make({ backend, actionSettleMs: 0 });
+        const threadId = "approval-pause-thread";
+        const failingCaller = (active: boolean): Caller => ({
+          ...caller(threadId, "turn-1"),
+          assertCallerTurnActive: active
+            ? Effect.void
+            : Effect.fail(new CallerTurnEndedError({ message: "original turn ended" })),
+        });
+        const tool = typeTextTool(manager);
+        // A late accept after the turn ended dispatches nothing even though the
+        // approval itself would have been granted.
+        const denied = yield* tool("late", failingCaller(false));
+        expect(denied.isError).toBe(true);
+        expect(backend.callsFor("typeText")).toHaveLength(0);
+        // The same turn still live dispatches exactly once.
+        const accepted = yield* tool("live", failingCaller(true));
+        expect(accepted.isError).not.toBe(true);
+        expect(backend.callsFor("typeText")).toHaveLength(1);
+      }),
+    ),
+  );
+
+  it.effect("a desktop interruption revokes standing consent before the next mutating call", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        // The manager wires the backend's interruption report into the shared
+        // gate, so this runs through the real authorize path: the answer that
+        // carried the pre-lock turn does not authorize the post-lock call.
+        const { gate, opened } = yield* gateHarness();
+        const revoked = yield* Deferred.make<void>();
+        const backend = new FakeComputerBackend();
+        const manager = yield* ComputerManager.make({
+          backend,
+          actionSettleMs: 0,
+          approvals: {
+            cancelThread: gate.cancelThread,
+            appAllowed: gate.appAllowed,
+            revokeTaskGrants: gate.revokeTaskGrants.pipe(
+              Effect.andThen(Deferred.succeed(revoked, undefined)),
+            ),
           },
-        }),
-    });
-    const tool = tools.find((entry) => entry.definition.name === "computer_type_text")!;
-    try {
-      // Turn one opens its consent prompt and waits for the user.
-      const first = Effect.runPromise(
-        tool.handler({ text: "late", include_screenshot: false }, context(threadId, "turn-1")),
-      );
-      await opened.promise;
-      // The turn ends and a new one prompts: the boundary cancels the old
-      // prompt, so the user's late accept for turn one settles false.
-      const next = gate.requestTask({
-        threadId,
-        turnId: "turn-2",
-        signal: new AbortController().signal,
-        publish: async (id, decision) => {
-          if (decision === undefined) gate.respond(threadId, id, "accept");
-        },
-      });
-      expect(gate.respond(threadId, previousRequestId, "accept")).toBe(false);
-      expect(await next).toBe(true);
-      const result = await first;
-      expect(result.isError).toBe(true);
-      expect(backend.callsFor("typeText")).toHaveLength(0);
-    } finally {
-      await manager.dispose();
-    }
-  });
-
-  it("an approval that expired before the user answered dispatches nothing", async () => {
-    const gate = new ComputerApprovalGate();
-    const backend = new FakeComputerBackend();
-    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
-    const threadId = "approval-expiry-thread";
-    const expired = new AbortController();
-    expired.abort(new Error("approval window expired"));
-    let publishes = 0;
-    const tools = makeAgentGatewayComputerTools({
-      manager,
-      authorizeAction: (_name, _args, ctx) =>
-        gate
-          .request({
-            threadId: ctx.callerThreadId,
-            signal: expired.signal,
-            publish: async () => {
-              publishes += 1;
-            },
-          })
-          .catch(() => false),
-    });
-    const tool = tools.find((entry) => entry.definition.name === "computer_type_text")!;
-    try {
-      const result = await Effect.runPromise(
-        tool.handler({ text: "expired", include_screenshot: false }, context(threadId, "turn-1")),
-      );
-      // Expired approval reads as denied, the prompt never even opened, and no
-      // input was dispatched.
-      expect(result.isError).toBe(true);
-      expect(publishes).toBe(0);
-      expect(backend.callsFor("typeText")).toHaveLength(0);
-      // The gate is unpoisoned: a fresh prompt still works.
-      const live = gate.request({
-        threadId,
-        signal: new AbortController().signal,
-        publish: async (id, decision) => {
-          if (decision === undefined) gate.respond(threadId, id, "accept");
-        },
-      });
-      expect(await live).toBe(true);
-    } finally {
-      await manager.dispose();
-    }
-  });
-
-  it("a turn that ended before dispatch approves nothing and dispatches nothing", async () => {
-    const backend = new FakeComputerBackend();
-    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
-    const threadId = "approval-pause-thread";
-    const failingCaller = (active: boolean): ToolContext => ({
-      ...context(threadId, "turn-1"),
-      assertCallerTurnActive: () =>
-        active
-          ? Effect.void
-          : Effect.fail(new GatewayToolError("caller_turn_inactive", "original turn ended")),
-    });
-    const tools = makeAgentGatewayComputerTools({ manager });
-    const tool = tools.find((entry) => entry.definition.name === "computer_type_text")!;
-    try {
-      // A late accept after the turn ended dispatches nothing even though the
-      // approval itself would have been granted.
-      const denied = await Effect.runPromise(
-        tool.handler({ text: "late", include_screenshot: false }, failingCaller(false)),
-      );
-      expect(denied.isError).toBe(true);
-      expect(backend.callsFor("typeText")).toHaveLength(0);
-      // The same turn still live dispatches exactly once.
-      const accepted = await Effect.runPromise(
-        tool.handler({ text: "live", include_screenshot: false }, failingCaller(true)),
-      );
-      expect(accepted.isError).not.toBe(true);
-      expect(backend.callsFor("typeText")).toHaveLength(1);
-    } finally {
-      await manager.dispose();
-    }
-  });
-
-  it("a desktop interruption revokes standing consent before the next mutating call", async () => {
-    // The manager wires the backend's interruption report into the shared
-    // gate, so this runs through the real authorize path: the answer that
-    // carried the pre-lock turn does not authorize the post-lock call.
-    const backend = new FakeComputerBackend();
-    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
-    const threadId = "interruption-consent-thread";
-    const prompts: string[] = [];
-    const tools = makeAgentGatewayComputerTools({
-      manager,
-      authorizeAction: (_name, _args, ctx, signal) =>
-        computerApprovalGate.requestTask({
-          threadId: ctx.callerThreadId,
-          turnId: ctx.callerTurnId ?? "",
-          signal,
-          publish: async (id, decision) => {
-            if (decision === undefined) prompts.push(id);
-          },
-        }),
-    });
-    const tool = tools.find((entry) => entry.definition.name === "computer_type_text")!;
-    const ctx = context(threadId, "turn-1");
-    try {
-      const first = Effect.runPromise(
-        tool.handler({ text: "before", include_screenshot: false }, ctx),
-      );
-      await vi.waitFor(() => expect(prompts).toHaveLength(1));
-      computerApprovalGate.respond(threadId, prompts[0]!, "accept");
-      await first;
-      expect(backend.callsFor("typeText")).toHaveLength(1);
-      // The screen locked and unlocked between calls: the host's
-      // interruption count advanced, the backend announced it, and the
-      // standing grant is gone — the same tool republishes its prompt
-      // instead of riding the pre-interruption answer.
-      backend.emitDesktopInterrupted(["screen-lock"]);
-      const second = Effect.runPromise(
-        tool.handler({ text: "after", include_screenshot: false }, ctx),
-      );
-      await vi.waitFor(() => expect(prompts).toHaveLength(2));
-      computerApprovalGate.respond(threadId, prompts[1]!, "accept");
-      await second;
-      expect(backend.callsFor("typeText")).toHaveLength(2);
-    } finally {
-      computerApprovalGate.cancelThread(threadId);
-      await manager.dispose();
-    }
-  });
+        });
+        const threadId = "interruption-consent-thread";
+        const tool = typeTextTool(manager, (context) =>
+          gate.requestTask({
+            threadId: context.threadId,
+            turnId: context.turnId,
+            toolName: "computer_type_text",
+          }),
+        );
+        const ctx = caller(threadId, "turn-1");
+        const first = yield* tool("before", ctx).pipe(Effect.forkChild({ startImmediately: true }));
+        const firstPrompt = yield* Queue.take(opened);
+        yield* gate.respond(threadId, firstPrompt.requestId, "accept");
+        yield* Fiber.join(first);
+        expect(backend.callsFor("typeText")).toHaveLength(1);
+        // The screen locked and unlocked between calls: the host's
+        // interruption count advanced, the backend announced it, and the
+        // standing grant is gone — the same tool republishes its prompt
+        // instead of riding the pre-interruption answer.
+        backend.emitDesktopInterrupted(["screen-lock"]);
+        yield* Deferred.await(revoked);
+        const second = yield* tool("after", ctx).pipe(Effect.forkChild({ startImmediately: true }));
+        const secondPrompt = yield* Queue.take(opened);
+        yield* gate.respond(threadId, secondPrompt.requestId, "accept");
+        yield* Fiber.join(second);
+        expect(backend.callsFor("typeText")).toHaveLength(2);
+        yield* gate.cancelThread(threadId);
+      }),
+    ),
+  );
 });

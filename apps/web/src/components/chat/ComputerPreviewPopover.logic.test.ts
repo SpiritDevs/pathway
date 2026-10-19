@@ -1,6 +1,7 @@
-import type { ThreadComputerState, ThreadId } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import { ThreadId, type ThreadComputerState } from "@spiritdevs/contracts";
+import { describe, expect, it } from "vite-plus/test";
 
+import { threadComputerState } from "../computer/computerTestFixtures";
 import {
   changedThreadComputerStates,
   clampComputerPreviewFloat,
@@ -18,35 +19,11 @@ import {
   computerPreviewStatusLabel,
 } from "./ComputerPreviewPopover.logic";
 
-const THREAD_A = "thread-a" as ThreadId;
-const THREAD_B = "thread-b" as ThreadId;
+const THREAD_A = ThreadId.make("thread-a");
+const THREAD_B = ThreadId.make("thread-b");
 
 function threadState(overrides: Partial<ThreadComputerState> = {}): ThreadComputerState {
-  return {
-    threadId: THREAD_A,
-    version: 1,
-    computerId: "desktop",
-    capabilities: {
-      windows: true,
-      windowBounds: true,
-      stacking: true,
-      capture: true,
-      input: true,
-      clipboard: true,
-      focus: true,
-      raise: true,
-      ghostCursor: true,
-      visibleDesktop: true,
-    },
-    windows: [],
-    screenSize: { width: 5120, height: 2520 },
-    agentActive: false,
-    controlledByOtherThread: false,
-    availability: { kind: "available" },
-    health: { status: "connected", consecutiveFailures: 0, reconnects: 0, captureAvailable: true },
-    lastError: null,
-    ...overrides,
-  };
+  return threadComputerState({ threadId: THREAD_A, ...overrides });
 }
 
 describe("computerPreviewAgentActive", () => {

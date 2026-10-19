@@ -11,13 +11,17 @@ import {
   IsoDateTime,
   MessageId,
   NonNegativeInt,
-  OrchestrationCheckpointFile,
-  OrchestrationCheckpointStatus,
   ThreadId,
   TurnId,
-} from "@synara/contracts";
-import { Option, ServiceMap, Schema } from "effect";
-import type { Effect } from "effect";
+} from "@spiritdevs/contracts";
+import {
+  OrchestrationCheckpointFile,
+  OrchestrationCheckpointStatus,
+} from "@spiritdevs/contracts/legacy-orchestration";
+import * as Option from "effect/Option";
+import * as Context from "effect/Context";
+import * as Schema from "effect/Schema";
+import type * as Effect from "effect/Effect";
 
 import type { ProjectionRepositoryError } from "../Errors.ts";
 
@@ -44,10 +48,22 @@ export const GetByThreadAndTurnCountInput = Schema.Struct({
 });
 export type GetByThreadAndTurnCountInput = typeof GetByThreadAndTurnCountInput.Type;
 
+export const DeleteByThreadIdInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type DeleteByThreadIdInput = typeof DeleteByThreadIdInput.Type;
+
 /**
  * ProjectionCheckpointRepositoryShape - Service API for projected checkpoints.
  */
 export interface ProjectionCheckpointRepositoryShape {
+  /**
+   * Insert or replace a projected checkpoint row.
+   *
+   * Upserts by composite key `(threadId, checkpointTurnCount)`.
+   */
+  readonly upsert: (row: ProjectionCheckpoint) => Effect.Effect<void, ProjectionRepositoryError>;
+
   /**
    * List projected checkpoints for a thread.
    *
@@ -63,12 +79,21 @@ export interface ProjectionCheckpointRepositoryShape {
   readonly getByThreadAndTurnCount: (
     input: GetByThreadAndTurnCountInput,
   ) => Effect.Effect<Option.Option<ProjectionCheckpoint>, ProjectionRepositoryError>;
+
+  /**
+   * Delete projected checkpoint rows by thread.
+   */
+  readonly deleteByThreadId: (
+    input: DeleteByThreadIdInput,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
 }
 
 /**
  * ProjectionCheckpointRepository - Service tag for checkpoint projection persistence.
  */
-export class ProjectionCheckpointRepository extends ServiceMap.Service<
+export class ProjectionCheckpointRepository extends Context.Service<
   ProjectionCheckpointRepository,
   ProjectionCheckpointRepositoryShape
->()("synara/persistence/Services/ProjectionCheckpoints/ProjectionCheckpointRepository") {}
+>()(
+  "@spiritdevs/pathway/persistence/Services/ProjectionCheckpoints/ProjectionCheckpointRepository",
+) {}

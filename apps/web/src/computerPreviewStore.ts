@@ -1,15 +1,17 @@
 // FILE: computerPreviewStore.ts
 // Purpose: Per-thread session state behind the in-chat computer preview popover.
 // Layer: Web UI state store
-// Exports: useComputerPreviewStore, selectThreadComputerPreviewSession
+// Exports: useComputerPreviewStore, selectThreadComputerPreview* selectors
 // Depends on: ComputerPreviewPopover.logic phase transitions
 //
 // The session machine is the popover's memory: a surface request or a drive
 // turn arms the owning thread whether or not its chat is on screen, so
 // background agent work never steals the user's current chat: it only waits
-// for that thread to be viewed.
+// for that thread to be viewed. Every record is keyed by `scopedThreadKey`, so
+// two environments' threads never share a session.
 
-import type { ThreadComputerState, ThreadId } from "@synara/contracts";
+import { scopedThreadKey } from "@spiritdevs/client-runtime/environment";
+import type { EnvironmentId, ScopedThreadRef, ThreadComputerState } from "@spiritdevs/contracts";
 import { create } from "zustand";
 
 import {
@@ -22,45 +24,49 @@ import {
   type ComputerPreviewSession,
 } from "./components/chat/ComputerPreviewPopover.logic";
 
-interface ComputerPreviewStore {
-  sessionsByThreadId: Record<string, ComputerPreviewSession | undefined>;
+interface ComputerPreviewRecords {
+  sessionsByThreadKey: Record<string, ComputerPreviewSession | undefined>;
   /** Last observed drive state per thread; its edges arm and end sessions. */
-  agentActiveByThreadId: Record<string, boolean | undefined>;
+  agentActiveByThreadKey: Record<string, boolean | undefined>;
   /**
    * Live layout footprint per thread, published by the mounted card: whether
-   * a real frame or a first-frame error is visible, plus the fitted card width
-   * (so the content inset matches the card).
+   * a real frame or a first-frame error is visible, plus the fitted card width.
    */
-  previewLayoutByThreadId: Record<string, ComputerPreviewLayout | undefined>;
+  previewLayoutByThreadKey: Record<string, ComputerPreviewLayout | undefined>;
   /**
    * Detached card position per thread, in viewport CSS pixels. A thread with
    * an entry renders the preview as a draggable floating card instead of in
-   * the rail; the rail then reserves no gutter for it.
+   * the rail.
    */
-  floatingByThreadId: Record<string, ComputerPreviewFloatingPosition | undefined>;
+  floatingByThreadKey: Record<string, ComputerPreviewFloatingPosition | undefined>;
+}
+
+interface ComputerPreviewStore extends ComputerPreviewRecords {
   /** `computer.open-pane-requested` arrived for this thread's own lease. */
-  requestPreviewSurface: (threadId: ThreadId) => void;
+  requestPreviewSurface: (ref: ScopedThreadRef) => void;
   /** Any thread-state write (push or seed); edges are detected inside. */
-  noteThreadComputerState: (state: ThreadComputerState) => void;
+  noteThreadComputerState: (environmentId: EnvironmentId, state: ThreadComputerState) => void;
   /** Newest spoken action label; an action is itself evidence of driving. */
-  noteThreadActionLabel: (threadId: ThreadId, label: string) => void;
+  noteThreadActionLabel: (ref: ScopedThreadRef, label: string) => void;
   /** The owning thread's chat surface is rendering the popover. */
-  markPreviewLive: (threadId: ThreadId) => void;
+  markPreviewLive: (ref: ScopedThreadRef) => void;
   /** The user closed the preview; it stays hidden until the task ends. */
-  hidePreviewForTask: (threadId: ThreadId) => void;
+  hidePreviewForTask: (ref: ScopedThreadRef) => void;
   /** The mounted card's live footprint; identity-stable when unchanged. */
-  notePreviewLayout: (threadId: ThreadId, layout: ComputerPreviewLayout) => void;
+  notePreviewLayout: (ref: ScopedThreadRef, layout: ComputerPreviewLayout) => void;
   /**
    * Detach the card at `position` (viewport px), or re-dock it in the rail
    * when `position` is null. Clearing also happens on session removal.
    */
   setPreviewFloating: (
-    threadId: ThreadId,
+    ref: ScopedThreadRef,
     position: ComputerPreviewFloatingPosition | null,
   ) => void;
   /** Drag update for a detached card; a no-op while the thread is docked. */
-  movePreviewFloating: (threadId: ThreadId, position: ComputerPreviewFloatingPosition) => void;
-  removePreviewSession: (threadId: ThreadId) => void;
+  movePreviewFloating: (ref: ScopedThreadRef, position: ComputerPreviewFloatingPosition) => void;
+  removePreviewSession: (ref: ScopedThreadRef) => void;
+  /** Drop every session of one environment (disconnect or server restart). */
+  clearEnvironment: (environmentId: EnvironmentId) => void;
   clear: () => void;
 }
 
@@ -69,7 +75,7 @@ export interface ComputerPreviewLayout {
   /** A first-frame error is visible content too, without claiming a decoded frame. */
   readonly hasVisibleStatus?: boolean | undefined;
   readonly width: number;
-  /** True while the card floats detached; the rail reserves no inset for it. */
+  /** True while the card floats detached. */
   readonly floating?: boolean | undefined;
 }
 
@@ -79,62 +85,107 @@ export interface ComputerPreviewFloatingPosition {
   readonly y: number;
 }
 
+const EMPTY_RECORDS: ComputerPreviewRecords = {
+  sessionsByThreadKey: {},
+  agentActiveByThreadKey: {},
+  previewLayoutByThreadKey: {},
+  floatingByThreadKey: {},
+};
+
 function sessionWithPhase(
   session: ComputerPreviewSession | undefined,
-  threadId: ThreadId,
+  ref: ScopedThreadRef,
   phase: ComputerPreviewPhase,
 ): ComputerPreviewSession {
   if (!session) {
-    return { threadId, phase };
+    return { threadId: ref.threadId, phase };
   }
   return { ...session, phase };
 }
 
 function updateSessionPhase(
   current: ComputerPreviewStore,
-  threadId: ThreadId,
+  ref: ScopedThreadRef,
   nextPhase: (phase: ComputerPreviewPhase | undefined) => ComputerPreviewPhase | undefined,
 ): ComputerPreviewStore {
-  const session = current.sessionsByThreadId[threadId];
+  const key = scopedThreadKey(ref);
+  const session = current.sessionsByThreadKey[key];
   const phase = nextPhase(session?.phase);
   if (phase === undefined || phase === session?.phase) {
     return current;
   }
   return {
     ...current,
-    sessionsByThreadId: {
-      ...current.sessionsByThreadId,
-      [threadId]: sessionWithPhase(session, threadId, phase),
+    sessionsByThreadKey: {
+      ...current.sessionsByThreadKey,
+      [key]: sessionWithPhase(session, ref, phase),
     },
   };
 }
 
+function withoutKeys<T>(
+  record: Record<string, T>,
+  drop: (key: string) => boolean,
+): Record<string, T> {
+  let changed = false;
+  const next: Record<string, T> = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (drop(key)) changed = true;
+    else next[key] = value;
+  }
+  return changed ? next : record;
+}
+
+function removeRecords(
+  current: ComputerPreviewStore,
+  drop: (key: string) => boolean,
+): ComputerPreviewStore {
+  const sessionsByThreadKey = withoutKeys(current.sessionsByThreadKey, drop);
+  const agentActiveByThreadKey = withoutKeys(current.agentActiveByThreadKey, drop);
+  const previewLayoutByThreadKey = withoutKeys(current.previewLayoutByThreadKey, drop);
+  const floatingByThreadKey = withoutKeys(current.floatingByThreadKey, drop);
+  if (
+    sessionsByThreadKey === current.sessionsByThreadKey &&
+    agentActiveByThreadKey === current.agentActiveByThreadKey &&
+    previewLayoutByThreadKey === current.previewLayoutByThreadKey &&
+    floatingByThreadKey === current.floatingByThreadKey
+  ) {
+    return current;
+  }
+  return {
+    ...current,
+    sessionsByThreadKey,
+    agentActiveByThreadKey,
+    previewLayoutByThreadKey,
+    floatingByThreadKey,
+  };
+}
+
 export const useComputerPreviewStore = create<ComputerPreviewStore>()((set) => ({
-  sessionsByThreadId: {},
-  agentActiveByThreadId: {},
-  previewLayoutByThreadId: {},
-  floatingByThreadId: {},
-  requestPreviewSurface: (threadId) =>
-    set((current) => updateSessionPhase(current, threadId, computerPreviewPhaseOnSurfaceRequest)),
-  noteThreadComputerState: (state) =>
+  ...EMPTY_RECORDS,
+  requestPreviewSurface: (ref) =>
+    set((current) => updateSessionPhase(current, ref, computerPreviewPhaseOnSurfaceRequest)),
+  noteThreadComputerState: (environmentId, state) =>
     set((current) => {
-      const threadId = state.threadId;
+      const ref = { environmentId, threadId: state.threadId };
+      const key = scopedThreadKey(ref);
       const active = computerPreviewAgentActive(state);
-      const wasActive = current.agentActiveByThreadId[threadId] ?? false;
+      const wasActive = current.agentActiveByThreadKey[key] ?? false;
       if (active === wasActive) {
         return current;
       }
       const next: ComputerPreviewStore = {
         ...current,
-        agentActiveByThreadId: { ...current.agentActiveByThreadId, [threadId]: active },
+        agentActiveByThreadKey: { ...current.agentActiveByThreadKey, [key]: active },
       };
-      return updateSessionPhase(next, threadId, (phase) =>
+      return updateSessionPhase(next, ref, (phase) =>
         computerPreviewPhaseOnAgentEdge(phase, active ? "rose" : "fell"),
       );
     }),
-  noteThreadActionLabel: (threadId, label) =>
+  noteThreadActionLabel: (ref, label) =>
     set((current) => {
-      const session = current.sessionsByThreadId[threadId];
+      const key = scopedThreadKey(ref);
+      const session = current.sessionsByThreadKey[key];
       if (session?.lastActionLabel === label) {
         return current;
       }
@@ -142,19 +193,20 @@ export const useComputerPreviewStore = create<ComputerPreviewStore>()((set) => (
         ? { ...session, lastActionLabel: label }
         : // An attributed action is itself proof the thread is driving, so it
           // arms like a surface request when nothing has arrived yet.
-          { threadId, phase: "armed", lastActionLabel: label };
+          { threadId: ref.threadId, phase: "armed", lastActionLabel: label };
       return {
         ...current,
-        sessionsByThreadId: { ...current.sessionsByThreadId, [threadId]: nextSession },
+        sessionsByThreadKey: { ...current.sessionsByThreadKey, [key]: nextSession },
       };
     }),
-  markPreviewLive: (threadId) =>
-    set((current) => updateSessionPhase(current, threadId, computerPreviewPhaseOnViewed)),
-  hidePreviewForTask: (threadId) =>
-    set((current) => updateSessionPhase(current, threadId, computerPreviewPhaseOnHide)),
-  notePreviewLayout: (threadId, layout) =>
+  markPreviewLive: (ref) =>
+    set((current) => updateSessionPhase(current, ref, computerPreviewPhaseOnViewed)),
+  hidePreviewForTask: (ref) =>
+    set((current) => updateSessionPhase(current, ref, computerPreviewPhaseOnHide)),
+  notePreviewLayout: (ref, layout) =>
     set((current) => {
-      const previous = current.previewLayoutByThreadId[threadId];
+      const key = scopedThreadKey(ref);
+      const previous = current.previewLayoutByThreadKey[key];
       if (
         previous?.hasFrame === layout.hasFrame &&
         previous?.hasVisibleStatus === layout.hasVisibleStatus &&
@@ -165,87 +217,71 @@ export const useComputerPreviewStore = create<ComputerPreviewStore>()((set) => (
       }
       return {
         ...current,
-        previewLayoutByThreadId: { ...current.previewLayoutByThreadId, [threadId]: layout },
+        previewLayoutByThreadKey: { ...current.previewLayoutByThreadKey, [key]: layout },
       };
     }),
-  setPreviewFloating: (threadId, position) =>
+  setPreviewFloating: (ref, position) =>
     set((current) => {
+      const key = scopedThreadKey(ref);
       if (position === null) {
-        if (!Object.hasOwn(current.floatingByThreadId, threadId)) {
+        if (!Object.hasOwn(current.floatingByThreadKey, key)) {
           return current;
         }
-        const floatingByThreadId = { ...current.floatingByThreadId };
-        delete floatingByThreadId[threadId];
-        return { ...current, floatingByThreadId };
+        const floatingByThreadKey = { ...current.floatingByThreadKey };
+        delete floatingByThreadKey[key];
+        return { ...current, floatingByThreadKey };
       }
-      const previous = current.floatingByThreadId[threadId];
+      const previous = current.floatingByThreadKey[key];
       if (previous?.x === position.x && previous?.y === position.y) {
         return current;
       }
       return {
         ...current,
-        floatingByThreadId: { ...current.floatingByThreadId, [threadId]: position },
+        floatingByThreadKey: { ...current.floatingByThreadKey, [key]: position },
       };
     }),
-  movePreviewFloating: (threadId, position) =>
+  movePreviewFloating: (ref, position) =>
     set((current) => {
-      const previous = current.floatingByThreadId[threadId];
+      const key = scopedThreadKey(ref);
+      const previous = current.floatingByThreadKey[key];
       if (previous === undefined || (previous.x === position.x && previous.y === position.y)) {
         return current;
       }
       return {
         ...current,
-        floatingByThreadId: { ...current.floatingByThreadId, [threadId]: position },
+        floatingByThreadKey: { ...current.floatingByThreadKey, [key]: position },
       };
     }),
-  removePreviewSession: (threadId) =>
+  removePreviewSession: (ref) =>
     set((current) => {
-      const hasSession = Object.hasOwn(current.sessionsByThreadId, threadId);
-      const hasActive = Object.hasOwn(current.agentActiveByThreadId, threadId);
-      const hasLayout = Object.hasOwn(current.previewLayoutByThreadId, threadId);
-      const hasFloating = Object.hasOwn(current.floatingByThreadId, threadId);
-      if (!hasSession && !hasActive && !hasLayout && !hasFloating) {
-        return current;
-      }
-      const sessionsByThreadId = { ...current.sessionsByThreadId };
-      delete sessionsByThreadId[threadId];
-      const agentActiveByThreadId = { ...current.agentActiveByThreadId };
-      delete agentActiveByThreadId[threadId];
-      const previewLayoutByThreadId = { ...current.previewLayoutByThreadId };
-      delete previewLayoutByThreadId[threadId];
-      const floatingByThreadId = { ...current.floatingByThreadId };
-      delete floatingByThreadId[threadId];
-      return {
-        ...current,
-        sessionsByThreadId,
-        agentActiveByThreadId,
-        previewLayoutByThreadId,
-        floatingByThreadId,
-      };
+      const target = scopedThreadKey(ref);
+      return removeRecords(current, (key) => key === target);
     }),
-  clear: () =>
-    set({
-      sessionsByThreadId: {},
-      agentActiveByThreadId: {},
-      previewLayoutByThreadId: {},
-      floatingByThreadId: {},
+  clearEnvironment: (environmentId) =>
+    set((current) => {
+      const prefix = `${environmentId}:`;
+      return removeRecords(current, (key) => key.startsWith(prefix));
     }),
+  clear: () => set(EMPTY_RECORDS),
 }));
 
 export function selectThreadComputerPreviewSession(
-  threadId: ThreadId,
+  ref: ScopedThreadRef,
 ): (store: ComputerPreviewStore) => ComputerPreviewSession | undefined {
-  return (store) => store.sessionsByThreadId[threadId];
+  const key = scopedThreadKey(ref);
+  return (store) => store.sessionsByThreadKey[key];
 }
 
 export function selectThreadComputerPreviewLayout(
-  threadId: ThreadId,
+  ref: ScopedThreadRef,
 ): (store: ComputerPreviewStore) => ComputerPreviewLayout | undefined {
-  return (store) => store.previewLayoutByThreadId[threadId];
+  const key = scopedThreadKey(ref);
+  return (store) => store.previewLayoutByThreadKey[key];
 }
 
 export function selectThreadComputerPreviewFloating(
-  threadId: ThreadId,
+  ref: ScopedThreadRef,
 ): (store: ComputerPreviewStore) => ComputerPreviewFloatingPosition | undefined {
-  return (store) => store.floatingByThreadId[threadId];
+  const key = scopedThreadKey(ref);
+  return (store) => store.floatingByThreadKey[key];
 }

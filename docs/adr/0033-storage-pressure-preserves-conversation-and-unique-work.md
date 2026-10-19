@@ -1,0 +1,7 @@
+# Storage pressure preserves conversation and unique work
+
+The storage dashboard separates worktree reclamation from thread deletion. Scheduled reclamation and emergency cleanup preserve conversation history and can consider archived or settled threads, but exclude snoozed threads, running threads, worktrees marked Keep worktree, and worktrees containing protected Git changes. Ignored files do not block removal and are deleted with the entire eligible worktree. Uncommitted tracked changes, untracked non-ignored files, and unpublished commits remain protected. Blocked cleanup must alert the user and explain why.
+
+Each environment monitors storage and executes its enabled age-based schedule even when no client is open. Shared defaults support per-environment overrides; unreachable environments expose the age of their last measurement. Critical storage never triggers automatic emergency cleanup. Environment selection and load balancing must surface critical storage in the conversation view with an explicit one-click cleanup action.
+
+Reclamation removes the entire eligible worktree and retains the branch. The user can recreate the worktree before resuming the conversation, with notice that dependencies and generated files may need rebuilding and ignored files were removed. Keeping ignored files indefinitely would defeat whole-worktree reclamation; the policy must communicate that boundary clearly.

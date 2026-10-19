@@ -1,26 +1,167 @@
-import type { GitBranch } from "@synara/contracts";
-import {
-  deriveAssociatedWorktreeMetadata,
-  type AssociatedWorktreeMetadata,
-} from "@synara/shared/threadWorkspace";
-import { Schema } from "effect";
-import type { ThreadWorkspacePatch } from "../types";
+import type { EnvironmentId, VcsRef, ProjectId, ThreadId } from "@spiritdevs/contracts";
+import * as Schema from "effect/Schema";
+import { toSortableTimestamp } from "../lib/threadSort";
+export {
+  dedupeRemoteBranchesWithLocalMatches,
+  deriveLocalBranchNameFromRemoteRef,
+} from "@spiritdevs/shared/git";
+
+export interface EnvironmentOption {
+  environmentId: EnvironmentId;
+  projectId: ProjectId;
+  label: string;
+  isPrimary: boolean;
+}
 
 export const EnvMode = Schema.Literals(["local", "worktree"]);
 export type EnvMode = typeof EnvMode.Type;
+
+const GENERIC_LOCAL_ENVIRONMENT_LABELS = new Set(["local", "local environment"]);
+
+function normalizeDisplayLabel(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : null;
+}
+
+export function resolveEnvironmentOptionLabel(input: {
+  isPrimary: boolean;
+  environmentId: EnvironmentId;
+  runtimeLabel?: string | null;
+  savedLabel?: string | null;
+}): string {
+  const runtimeLabel = normalizeDisplayLabel(input.runtimeLabel);
+  const savedLabel = normalizeDisplayLabel(input.savedLabel);
+
+  if (input.isPrimary) {
+    const preferredLocalLabel = [runtimeLabel, savedLabel].find((label) => {
+      if (!label) return false;
+      return !GENERIC_LOCAL_ENVIRONMENT_LABELS.has(label.toLowerCase());
+    });
+    return preferredLocalLabel ?? "This device";
+  }
+
+  return runtimeLabel ?? savedLabel ?? input.environmentId;
+}
+
+// A remote (non-primary) environment is always surfaced, even when it is the
+// only environment available: with a single connected machine there is nothing
+// to pick, but the user still needs to see where the project runs.
+export function shouldShowEnvironmentIndicator(input: {
+  activeEnvironment: Pick<EnvironmentOption, "isPrimary"> | null;
+  canPickEnvironment: boolean;
+}): boolean {
+  if (input.canPickEnvironment) return true;
+  return input.activeEnvironment !== null && !input.activeEnvironment.isPrimary;
+}
+
+// Whether there is a second environment to switch between. This gates whether
+// the control shows up at all on a local-only project; the trailing "Link
+// environment" row is not on its own reason to put a picker in every composer.
+export function hasEnvironmentChoice(input: {
+  environmentCount: number;
+  canChangeEnvironment: boolean;
+}): boolean {
+  return input.environmentCount > 1 && input.canChangeEnvironment;
+}
+
+// Whether the control, once shown, opens. A single environment still opens: the
+// popup carries "Link environment", which is the way out of having only one.
+export function canOpenEnvironmentPicker(input: {
+  environmentCount: number;
+  canChangeEnvironment: boolean;
+  canLinkEnvironment: boolean;
+}): boolean {
+  if (input.environmentCount === 0) return false;
+  return input.canChangeEnvironment || input.canLinkEnvironment;
+}
+
+export function shouldShowComposerContextStrip(input: {
+  hasActiveProject: boolean;
+  isGitRepo: boolean;
+  showEnvironmentIndicator: boolean;
+}): boolean {
+  return input.hasActiveProject && (input.isGitRepo || input.showEnvironmentIndicator);
+}
+
+export function resolveEnvModeLabel(mode: EnvMode): string {
+  return mode === "worktree" ? "New worktree" : "Current checkout";
+}
+
+export function resolveCurrentWorkspaceLabel(activeWorktreePath: string | null): string {
+  return activeWorktreePath ? "Current worktree" : resolveEnvModeLabel("local");
+}
+
+export function resolveLockedWorkspaceLabel(activeWorktreePath: string | null): string {
+  return activeWorktreePath ? "Worktree" : "Local checkout";
+}
+
+export function resolveWorkspaceDisplayName(path: string | null): string | null {
+  if (!path) return null;
+  const normalizedPath = path.replace(/[\\/]+$/, "");
+  if (normalizedPath.length === 0) return path;
+  return normalizedPath.split(/[\\/]/).at(-1) ?? normalizedPath;
+}
+
+export interface PreviousWorktreeSeed {
+  branch: string | null;
+  worktreePath: string;
+}
+
+// The most recently touched worktree in the project that the composer isn't
+// already pointing at. Backs the "Previous worktree" entry in the workspace
+// selector so a follow-up thread can hop back into the worktree you just
+// worked in without hunting for its branch. Archived threads don't compete —
+// the rest of the UI hides them, so their worktrees shouldn't resurface here.
+export function resolvePreviousWorktreeSeed(input: {
+  threads: ReadonlyArray<{
+    branch: string | null;
+    worktreePath: string | null;
+    updatedAt: string;
+    archivedAt?: string | null;
+  }>;
+  currentWorktreePath: string | null;
+}): PreviousWorktreeSeed | null {
+  let latest: { branch: string | null; worktreePath: string; updatedAt: number } | null = null;
+  for (const thread of input.threads) {
+    if (
+      !thread.worktreePath ||
+      thread.worktreePath === input.currentWorktreePath ||
+      (thread.archivedAt ?? null) !== null
+    ) {
+      continue;
+    }
+    const updatedAt = toSortableTimestamp(thread.updatedAt);
+    if (updatedAt === null) {
+      continue;
+    }
+    if (latest === null || updatedAt > latest.updatedAt) {
+      latest = {
+        branch: thread.branch,
+        worktreePath: thread.worktreePath,
+        updatedAt,
+      };
+    }
+  }
+  return latest === null ? null : { branch: latest.branch, worktreePath: latest.worktreePath };
+}
+
+export function resolvePreviousWorktreeLabel(seed: PreviousWorktreeSeed): string {
+  return seed.branch ? `Previous worktree (${seed.branch})` : "Previous worktree";
+}
 
 export function resolveEffectiveEnvMode(input: {
   activeWorktreePath: string | null;
   hasServerThread: boolean;
   draftThreadEnvMode: EnvMode | undefined;
-  serverThreadEnvMode?: EnvMode | undefined;
 }): EnvMode {
-  const { activeWorktreePath, hasServerThread, draftThreadEnvMode, serverThreadEnvMode } = input;
-  return activeWorktreePath ||
-    serverThreadEnvMode === "worktree" ||
-    (!hasServerThread && draftThreadEnvMode === "worktree")
-    ? "worktree"
-    : "local";
+  const { activeWorktreePath, hasServerThread, draftThreadEnvMode } = input;
+  if (!hasServerThread) {
+    if (activeWorktreePath) {
+      return "local";
+    }
+    return draftThreadEnvMode === "worktree" ? "worktree" : "local";
+  }
+  return activeWorktreePath ? "worktree" : "local";
 }
 
 export function resolveDraftEnvModeAfterBranchChange(input: {
@@ -38,32 +179,6 @@ export function resolveDraftEnvModeAfterBranchChange(input: {
   return "local";
 }
 
-/**
- * Studio threads use a concrete working directory as their entire workspace.
- * Branch-selector patches still speak in project/worktree terms, so normalize
- * them at this boundary instead of leaking worktree metadata into the thread.
- */
-export function resolveFixedLocalWorkspacePatch(input: {
-  currentWorkingDirectory: string | null;
-  patch: ThreadWorkspacePatch;
-}): ThreadWorkspacePatch {
-  const workingDirectory =
-    input.patch.workingDirectory !== undefined
-      ? input.patch.workingDirectory
-      : (input.patch.worktreePath ?? input.currentWorkingDirectory);
-
-  return {
-    envMode: "local",
-    branch: null,
-    worktreePath: null,
-    workingDirectory,
-    associatedWorktreePath: null,
-    associatedWorktreeBranch: null,
-    associatedWorktreeRef: null,
-    createBranchFlowCompleted: false,
-  };
-}
-
 export function resolveBranchToolbarValue(input: {
   envMode: EnvMode;
   activeWorktreePath: string | null;
@@ -77,140 +192,167 @@ export function resolveBranchToolbarValue(input: {
   return currentGitBranch ?? activeThreadBranch;
 }
 
-// Local threads should mirror the concrete checkout; stale thread metadata makes
-// the current Git branch appear selectable while clicks only perform a no-op.
-export function shouldSyncLocalThreadBranch(input: {
-  envMode: EnvMode;
+export function resolvePendingBranchSelection(
+  pendingBranch: string | null,
+  canonicalBranch: string | null,
+): string | null {
+  return pendingBranch === canonicalBranch ? null : pendingBranch;
+}
+
+export interface ScopedBranchSelection {
+  environmentId: EnvironmentId;
+  threadId: ThreadId;
+  branch: string | null;
+}
+
+export function resolveScopedBranchSelection(
+  selection: ScopedBranchSelection | undefined,
+  scope: Pick<ScopedBranchSelection, "environmentId" | "threadId">,
+): string | null | undefined {
+  if (selection?.environmentId !== scope.environmentId || selection.threadId !== scope.threadId) {
+    return undefined;
+  }
+  return selection.branch;
+}
+
+export function resolveDisplayedBranch(input: {
+  pendingBranch: string | null;
+  canonicalBranch: string | null;
+}): string | null {
+  return input.pendingBranch ?? input.canonicalBranch;
+}
+
+export function resolveBranchTriggerLabel(input: {
+  activeWorktreePath: string | null;
+  effectiveEnvMode: EnvMode;
+  resolvedActiveBranch: string | null;
+  resolvedActiveBranchIsRemote: boolean | null;
+  startFromOrigin: boolean;
+}): string {
+  const {
+    activeWorktreePath,
+    effectiveEnvMode,
+    resolvedActiveBranch,
+    resolvedActiveBranchIsRemote,
+    startFromOrigin,
+  } = input;
+  if (!resolvedActiveBranch) {
+    return "Select ref";
+  }
+  if (effectiveEnvMode === "worktree" && !activeWorktreePath) {
+    const baseRef =
+      startFromOrigin && resolvedActiveBranchIsRemote === false
+        ? `origin/${resolvedActiveBranch}`
+        : resolvedActiveBranch;
+    return `From ${baseRef}`;
+  }
+  return resolvedActiveBranch;
+}
+
+export function resolveBranchToolbarPrBranch(input: {
+  activeThreadBranch: string | null;
+  resolvedActiveBranch: string | null;
+}): string | null {
+  return input.activeThreadBranch === input.resolvedActiveBranch ? input.activeThreadBranch : null;
+}
+
+export function resolveLocalCheckoutBranchMismatch(input: {
+  effectiveEnvMode: EnvMode;
   activeWorktreePath: string | null;
   activeThreadBranch: string | null;
   currentGitBranch: string | null;
-  hasServerThread: boolean;
-  isThreadSettled: boolean;
-  isBranchActionPending: boolean;
-}): boolean {
-  return (
-    input.envMode === "local" &&
-    input.activeWorktreePath === null &&
-    !input.isThreadSettled &&
-    !input.isBranchActionPending &&
-    input.currentGitBranch !== null &&
-    (input.hasServerThread || input.activeThreadBranch !== null) &&
-    input.activeThreadBranch !== input.currentGitBranch
-  );
-}
-
-// Branch-only local updates should keep the paired worktree metadata intact.
-export function resolveAssociatedWorktreeMetadataAfterWorkspacePatch(input: {
-  branch: string | null;
-  worktreePath: string | null;
-  existingAssociatedWorktreePath: string | null;
-  existingAssociatedWorktreeBranch: string | null;
-  existingAssociatedWorktreeRef: string | null;
-  patchAssociatedWorktreePath?: string | null;
-  patchAssociatedWorktreeBranch?: string | null;
-  patchAssociatedWorktreeRef?: string | null;
-}): AssociatedWorktreeMetadata {
-  const shouldPreserveExistingAssociation =
-    !input.worktreePath && input.patchAssociatedWorktreePath === undefined;
-
-  return deriveAssociatedWorktreeMetadata({
-    branch: input.branch,
-    worktreePath: input.worktreePath,
-    ...(input.patchAssociatedWorktreePath !== undefined
-      ? { associatedWorktreePath: input.patchAssociatedWorktreePath }
-      : shouldPreserveExistingAssociation
-        ? { associatedWorktreePath: input.existingAssociatedWorktreePath }
-        : {}),
-    ...(input.patchAssociatedWorktreeBranch !== undefined
-      ? { associatedWorktreeBranch: input.patchAssociatedWorktreeBranch }
-      : shouldPreserveExistingAssociation
-        ? { associatedWorktreeBranch: input.existingAssociatedWorktreeBranch }
-        : {}),
-    ...(input.patchAssociatedWorktreeRef !== undefined
-      ? { associatedWorktreeRef: input.patchAssociatedWorktreeRef }
-      : input.patchAssociatedWorktreeBranch === undefined && shouldPreserveExistingAssociation
-        ? { associatedWorktreeRef: input.existingAssociatedWorktreeRef }
-        : {}),
-  });
-}
-
-export function deriveLocalBranchNameFromRemoteRef(branchName: string): string {
-  const firstSeparatorIndex = branchName.indexOf("/");
-  if (firstSeparatorIndex <= 0 || firstSeparatorIndex === branchName.length - 1) {
-    return branchName;
+}): { threadBranch: string; currentBranch: string } | null {
+  const { effectiveEnvMode, activeWorktreePath, activeThreadBranch, currentGitBranch } = input;
+  if (effectiveEnvMode !== "local" || activeWorktreePath !== null) {
+    return null;
   }
-  return branchName.slice(firstSeparatorIndex + 1);
-}
-
-function deriveLocalBranchNameCandidatesFromRemoteRef(
-  branchName: string,
-  remoteName?: string,
-): ReadonlyArray<string> {
-  const candidates = new Set<string>();
-  const firstSlashCandidate = deriveLocalBranchNameFromRemoteRef(branchName);
-  if (firstSlashCandidate.length > 0) {
-    candidates.add(firstSlashCandidate);
+  if (!activeThreadBranch || !currentGitBranch || activeThreadBranch === currentGitBranch) {
+    return null;
   }
-
-  if (remoteName) {
-    const remotePrefix = `${remoteName}/`;
-    if (branchName.startsWith(remotePrefix) && branchName.length > remotePrefix.length) {
-      candidates.add(branchName.slice(remotePrefix.length));
-    }
-  }
-
-  return [...candidates];
-}
-
-export function dedupeRemoteBranchesWithLocalMatches(
-  branches: ReadonlyArray<GitBranch>,
-): ReadonlyArray<GitBranch> {
-  const localBranchNames = new Set(
-    branches.filter((branch) => !branch.isRemote).map((branch) => branch.name),
-  );
-
-  return branches.filter((branch) => {
-    if (!branch.isRemote) {
-      return true;
-    }
-
-    if (branch.remoteName !== "origin") {
-      return true;
-    }
-
-    const localBranchCandidates = deriveLocalBranchNameCandidatesFromRemoteRef(
-      branch.name,
-      branch.remoteName,
-    );
-    return !localBranchCandidates.some((candidate) => localBranchNames.has(candidate));
-  });
+  return { threadBranch: activeThreadBranch, currentBranch: currentGitBranch };
 }
 
 export function resolveBranchSelectionTarget(input: {
   activeProjectCwd: string;
   activeWorktreePath: string | null;
-  branch: Pick<GitBranch, "isDefault" | "worktreePath">;
+  refName: Pick<VcsRef, "isDefault" | "worktreePath">;
 }): {
   checkoutCwd: string;
   nextWorktreePath: string | null;
   reuseExistingWorktree: boolean;
 } {
-  const { activeProjectCwd, activeWorktreePath, branch } = input;
+  const { activeProjectCwd, activeWorktreePath, refName } = input;
 
-  if (branch.worktreePath) {
+  if (refName.worktreePath) {
     return {
-      checkoutCwd: branch.worktreePath,
-      nextWorktreePath: branch.worktreePath === activeProjectCwd ? null : branch.worktreePath,
+      checkoutCwd: refName.worktreePath,
+      nextWorktreePath: refName.worktreePath === activeProjectCwd ? null : refName.worktreePath,
       reuseExistingWorktree: true,
     };
   }
 
   const nextWorktreePath =
-    activeWorktreePath !== null && branch.isDefault ? null : activeWorktreePath;
+    activeWorktreePath !== null && refName.isDefault ? null : activeWorktreePath;
 
   return {
     checkoutCwd: nextWorktreePath ?? activeProjectCwd,
     nextWorktreePath,
     reuseExistingWorktree: false,
   };
+}
+
+// Git rejects ASCII space and the ASCII control characters (tab, newline and
+// friends) in ref names, so the picker's "Create new ref" entry can only fail
+// for a typed name like "new branch". Replacing runs of those with a dash makes
+// the name usable without reimplementing check-ref-format: names invalid for
+// other reasons still surface the git error. Only the whitespace git actually
+// rejects is replaced — git accepts U+00A0 and friends, and rewriting those
+// would silently create a ref the user never asked for. Case and existing
+// dashes are left alone, since ref names are case sensitive and consecutive
+// dashes are valid.
+export function sanitizeNewRefName(rawName: string): string {
+  return rawName.replace(/^[ \t\n\r\f\v]+|[ \t\n\r\f\v]+$/g, "").replace(/[ \t\n\r\f\v]+/g, "-");
+}
+
+export function shouldIncludeBranchPickerItem(input: {
+  itemValue: string;
+  normalizedQuery: string;
+  createBranchItemValue: string | null;
+  checkoutPullRequestItemValue: string | null;
+}): boolean {
+  const { itemValue, normalizedQuery, createBranchItemValue, checkoutPullRequestItemValue } = input;
+
+  if (normalizedQuery.length === 0) {
+    return true;
+  }
+
+  if (createBranchItemValue && itemValue === createBranchItemValue) {
+    return true;
+  }
+
+  if (checkoutPullRequestItemValue && itemValue === checkoutPullRequestItemValue) {
+    return true;
+  }
+
+  const lowerItemValue = itemValue.toLowerCase();
+  if (lowerItemValue.includes(normalizedQuery)) {
+    return true;
+  }
+
+  // A query containing whitespace can only ever match a ref under its sanitized
+  // name, because that is the name such a ref would have been created with.
+  // Without this, typing "new branch" hides an existing "new-branch".
+  const sanitizedQuery = sanitizeNewRefName(normalizedQuery);
+  return (
+    sanitizedQuery.length > 0 &&
+    sanitizedQuery !== normalizedQuery &&
+    lowerItemValue.includes(sanitizedQuery)
+  );
+}
+
+export interface AutoPlacementOption {
+  readonly active: boolean;
+  readonly disabled: boolean;
+  readonly label: string;
+  readonly onSelect: () => void;
 }

@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - zlib's threadpool inflate keeps a multi-megapixel capture's decompression off the event loop; Effect has no inflate.
 /**
  * Closed-loop scrolling: measure how far a window's content actually moved,
  * and learn what a pixel of scroll request is worth to it.
@@ -10,15 +11,13 @@
  *
  * Everything here is pure: PNG in, numbers out. The manager owns the captures
  * and the injection; this module owns the arithmetic.
+ *
+ * @module computer/scrollCalibration
  */
-import { setImmediate as yieldToIO } from "node:timers/promises";
-import { inflate } from "node:zlib";
-import { promisify } from "node:util";
+import * as NodeZlib from "node:zlib";
 
-// The async form dispatches to the libuv threadpool: a multi-megapixel
-// capture's inflate must not stall the event loop the frame publisher and
-// every RPC response share.
-const inflateAsync = promisify(inflate);
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 
 /** Row-major single-channel image, one byte per pixel, in capture pixels. */
 export interface LumaImage {
@@ -36,30 +35,63 @@ const CHANNELS_BY_COLOR_TYPE = new Map<number, number>([
   [6, 4],
 ]);
 
-// Capture bytes stay immutable. Sharing the promise also coalesces callers that
-// measure the same intermediate capture while its inflate is still in flight.
-const decodedCaptures = new WeakMap<Uint8Array, Promise<LumaImage | undefined>>();
+// Capture bytes stay immutable. Sharing the decode fiber also coalesces callers
+// that measure the same intermediate capture while its inflate is still in
+// flight. The fiber is detached so one caller's interruption cannot poison the
+// decode the others are waiting on.
+const decodedCaptures = new WeakMap<Uint8Array, Fiber.Fiber<LumaImage | undefined>>();
+
+/**
+ * One side of a travel measurement: a captured PNG, or luma a backend produced
+ * directly (`ComputerBackend.captureLuma`) for a capture nobody looks at.
+ */
+export type ScrollMeasurementFrame =
+  | { readonly kind: "png"; readonly bytes: Uint8Array }
+  | { readonly kind: "luma"; readonly image: LumaImage };
+
+/** The luma a measurement frame carries, decoding a PNG on the way; see `decodePngLuma`. */
+export const measurementFrameLuma = (
+  frame: ScrollMeasurementFrame,
+): Effect.Effect<LumaImage | undefined> =>
+  frame.kind === "png" ? decodePngLuma(frame.bytes) : Effect.succeed(frame.image);
 
 /**
  * Decodes a captured PNG down to luma.
  *
  * Deliberately minimal — 8-bit, non-interlaced, gray/RGB/RGBA, which is what
- * the backend image encoder emits — and deliberately total: it returns
+ * the backend image encoder emits — and deliberately total: it succeeds with
  * undefined for anything it does not understand or cannot parse, and never
- * throws. Measurement is optional perception taken after the scroll has
+ * fails. Measurement is optional perception taken after the scroll has
  * already been delivered, so a decode surprise must degrade to "distance
  * unknown" rather than turn a scroll that happened into a failed tool call.
  */
-export function decodePngLuma(bytes: Uint8Array): Promise<LumaImage | undefined> {
-  let decoded = decodedCaptures.get(bytes);
-  if (!decoded) {
-    decoded = decodePng(bytes).catch(() => undefined);
-    decodedCaptures.set(bytes, decoded);
-  }
-  return decoded;
-}
+export const decodePngLuma = (bytes: Uint8Array): Effect.Effect<LumaImage | undefined> =>
+  Effect.suspend(() => {
+    const inFlight = decodedCaptures.get(bytes);
+    if (inFlight) return Fiber.join(inFlight);
+    return Effect.flatMap(
+      Effect.forkDetach(
+        decodePng(bytes).pipe(
+          Effect.orElseSucceed(() => undefined),
+          Effect.catchDefect(() => Effect.sync(() => undefined)),
+        ),
+      ),
+      (fiber) => {
+        decodedCaptures.set(bytes, fiber);
+        return Fiber.join(fiber);
+      },
+    );
+  });
 
-async function decodePng(bytes: Uint8Array): Promise<LumaImage | undefined> {
+/** zlib's inflate on the libuv threadpool, so it does not stall the event loop. */
+const inflateAsync = (compressed: Uint8Array): Effect.Effect<Uint8Array, Error> =>
+  Effect.callback<Uint8Array, Error>((resume) => {
+    NodeZlib.inflate(compressed, (error, result) =>
+      resume(error ? Effect.fail(error) : Effect.succeed(result)),
+    );
+  });
+
+const decodePng = Effect.fnUntraced(function* (bytes: Uint8Array) {
   if (bytes.length < PNG_SIGNATURE.length) return undefined;
   for (const [index, byte] of PNG_SIGNATURE.entries()) {
     if (bytes[index] !== byte) return undefined;
@@ -104,9 +136,9 @@ async function decodePng(bytes: Uint8Array): Promise<LumaImage | undefined> {
 
   if (!header || idatBytes === 0) return undefined;
   const compressed = concat(idatParts, idatBytes);
-  const raw = await inflateAsync(compressed);
-  return unfilterToLuma(raw, header.width, header.height, header.channels);
-}
+  const raw = yield* inflateAsync(compressed);
+  return yield* unfilterToLuma(raw, header.width, header.height, header.channels);
+});
 
 function concat(parts: readonly Uint8Array[], totalBytes: number): Uint8Array {
   if (parts.length === 1) return parts[0]!;
@@ -122,14 +154,15 @@ function concat(parts: readonly Uint8Array[], totalBytes: number): Uint8Array {
 /**
  * Undoes the five PNG scanline filters in place over one row window at a time,
  * emitting luma as it goes. The previous row is kept unfiltered because every
- * filter but None and Sub refers back to it.
+ * filter but None and Sub refers back to it. `raw` is the inflated IDAT stream.
+ * Exported so tests can observe its yielding apart from the threadpool inflate.
  */
-async function unfilterToLuma(
+export const unfilterToLuma = Effect.fnUntraced(function* (
   raw: Uint8Array,
   width: number,
   height: number,
   channels: number,
-): Promise<LumaImage | undefined> {
+) {
   const stride = width * channels;
   if (raw.length < (stride + 1) * height) return undefined;
   const luma = new Uint8Array(width * height);
@@ -140,7 +173,8 @@ async function unfilterToLuma(
 
   for (let row = 0; row < height; row += 1) {
     // Bound reconstruction slices so RPC and stream work can run between them.
-    if (row > 0 && row % rowsPerSlice === 0) await yieldToIO();
+    // The default scheduler resumes a yielded fiber on a later event-loop turn.
+    if (row > 0 && row % rowsPerSlice === 0) yield* Effect.yieldNow;
     const filter = raw[at]!;
     at += 1;
     current.set(raw.subarray(at, at + stride));
@@ -182,8 +216,8 @@ async function unfilterToLuma(
     previous = current;
     current = swap;
   }
-  return { width, height, luma };
-}
+  return { width, height, luma } satisfies LumaImage;
+});
 
 /** The spec's predictor: whichever neighbour the linear estimate lands nearest. */
 function paeth(left: number, up: number, upLeft: number): number {

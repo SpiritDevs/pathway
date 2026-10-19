@@ -1,0 +1,214 @@
+import * as Schema from "effect/Schema";
+import { describe, expect, it } from "vite-plus/test";
+
+import {
+  ProjectReadFileError,
+  ProjectReadFileResult,
+  ProjectWriteFileInput,
+  ProjectWriteFileResult,
+  ProjectInspectDirectoryInput,
+  ProjectMutation,
+  ProjectSearchContentsError,
+  ProjectSearchContentsInput,
+  ProjectSearchEntriesError,
+  ProjectSearchEntriesInput,
+  ProjectWriteFileError,
+} from "./project.ts";
+
+const decodeSearchEntriesInput = Schema.decodeUnknownSync(ProjectSearchEntriesInput);
+const decodeSearchContentsInput = Schema.decodeUnknownSync(ProjectSearchContentsInput);
+const decodeInspectDirectoryInput = Schema.decodeUnknownSync(ProjectInspectDirectoryInput);
+const decodeFileWrite = Schema.decodeUnknownSync(ProjectWriteFileInput);
+const decodeFileRead = Schema.decodeUnknownSync(ProjectReadFileResult);
+const decodeFileWriteResult = Schema.decodeUnknownSync(ProjectWriteFileResult);
+const decodeFileWriteError = Schema.decodeUnknownSync(ProjectWriteFileError);
+
+describe("project search inputs", () => {
+  it("accepts a concrete directory for repository inspection", () => {
+    expect(decodeInspectDirectoryInput({ cwd: " /workspace/pathway " })).toEqual({
+      cwd: "/workspace/pathway",
+    });
+  });
+
+  it("allows an empty entries query for bounded frecency browsing", () => {
+    const decoded = decodeSearchEntriesInput({
+      cwd: "/workspace",
+      query: "   ",
+      limit: 10,
+      kind: "file",
+    });
+    expect(decoded.query).toBe("");
+  });
+
+  it("preserves whitespace in content search queries", () => {
+    const decoded = decodeSearchContentsInput({
+      cwd: "/workspace",
+      query: " foo ",
+      limit: 10,
+      caseSensitive: false,
+      wholeWord: false,
+      useRegex: false,
+    });
+    expect(decoded.query).toBe(" foo ");
+  });
+});
+
+describe("project mutations", () => {
+  const decodeMutation = Schema.decodeUnknownSync(ProjectMutation);
+
+  it.each(["branding/project icon.png", "branding/project icon.svg"])(
+    "accepts a supported workspace-relative favicon path: %s",
+    (faviconPath) => {
+      expect(
+        decodeMutation({
+          type: "project.update",
+          commandId: "command-project-icon",
+          projectId: "project-1",
+          faviconPath,
+        }),
+      ).toMatchObject({ faviconPath });
+    },
+  );
+
+  it("accepts clearing the explicit favicon and rejects unsupported files", () => {
+    expect(
+      decodeMutation({
+        type: "project.update",
+        commandId: "command-project-icon-reset",
+        projectId: "project-1",
+        faviconPath: null,
+      }),
+    ).toMatchObject({ faviconPath: null });
+    expect(() =>
+      decodeMutation({
+        type: "project.update",
+        commandId: "command-project-icon-invalid",
+        projectId: "project-1",
+        faviconPath: "branding/project icon.txt",
+      }),
+    ).toThrow();
+  });
+
+  it("accepts setting and clearing the new-thread workspace override", () => {
+    expect(
+      decodeMutation({
+        type: "project.update",
+        commandId: "command-project-workspace",
+        projectId: "project-1",
+        defaultThreadEnvMode: "worktree",
+      }),
+    ).toMatchObject({ defaultThreadEnvMode: "worktree" });
+    expect(
+      decodeMutation({
+        type: "project.update",
+        commandId: "command-project-workspace-reset",
+        projectId: "project-1",
+        defaultThreadEnvMode: null,
+      }),
+    ).toMatchObject({ defaultThreadEnvMode: null });
+  });
+});
+
+describe("project RPC errors", () => {
+  it("derives stable messages from structured request context while retaining causes", () => {
+    const cause = new Error("sensitive platform detail");
+    const searchError = new ProjectSearchEntriesError({
+      cwd: "/workspace",
+      queryLength: "authorization: Bearer secret-token".length,
+      limit: 20,
+      failure: "search_index_search_failed",
+      normalizedCwd: "/workspace",
+      detail: "index unavailable",
+      cause,
+    });
+    const readError = new ProjectReadFileError({
+      cwd: "/workspace",
+      relativePath: "src/index.ts",
+      failure: "operation_failed",
+      operation: "read",
+      operationPath: "/workspace/src/index.ts",
+      resolvedPath: "/workspace/src/index.ts",
+      cause,
+    });
+
+    expect(searchError.message).toBe("Failed to search workspace entries in '/workspace'.");
+    expect(searchError.message).not.toContain(cause.message);
+    expect(searchError.normalizedCwd).toBe("/workspace");
+    expect(searchError.queryLength).toBe("authorization: Bearer secret-token".length);
+    expect(searchError).not.toHaveProperty("query");
+    expect(searchError.message).not.toMatch(/Bearer|secret-token/);
+    expect(searchError.cause).toBe(cause);
+    expect(readError.message).toBe("Failed to read workspace file 'src/index.ts' in '/workspace'.");
+    expect(readError.message).not.toContain(cause.message);
+    expect(readError.cause).toBe(cause);
+
+    const contentSearchError = new ProjectSearchContentsError({
+      cwd: "/workspace",
+      queryLength: "authorization: Bearer secret-token".length,
+      limit: 100,
+      failure: "search_index_search_failed",
+      cause,
+    });
+    expect(contentSearchError.message).toBe("Failed to search workspace contents in '/workspace'.");
+    expect(contentSearchError.message).not.toContain(cause.message);
+    expect(contentSearchError).not.toHaveProperty("query");
+    expect(contentSearchError.cause).toBe(cause);
+  });
+
+  it("decodes legacy message-only errors during rolling upgrades", () => {
+    const decodeSearchError = Schema.decodeUnknownSync(ProjectSearchEntriesError);
+    const decodeWriteError = Schema.decodeUnknownSync(ProjectWriteFileError);
+
+    const searchError = decodeSearchError({
+      _tag: "ProjectSearchEntriesError",
+      message: "Legacy project search failure.",
+      query: "legacy sensitive query",
+    });
+    const writeError = decodeWriteError({
+      _tag: "ProjectWriteFileError",
+      message: "Legacy project write failure.",
+    });
+
+    expect(searchError.message).toBe("Legacy project search failure.");
+    expect(searchError.cwd).toBeUndefined();
+    expect(searchError.queryLength).toBeUndefined();
+    expect(searchError).not.toHaveProperty("query");
+    expect(searchError.failure).toBeUndefined();
+    expect(writeError.message).toBe("Legacy project write failure.");
+    expect(writeError.relativePath).toBeUndefined();
+    expect(writeError.failure).toBeUndefined();
+  });
+});
+
+describe("workspace file revisions", () => {
+  it("accepts legacy file requests and responses during rolling upgrades", () => {
+    const input = { cwd: "/workspace", relativePath: "a.txt", contents: "edit" };
+    expect(decodeFileWrite(input)).toEqual(input);
+    const read = { relativePath: "a.txt", contents: "original", byteLength: 8, truncated: false };
+    expect(decodeFileRead(read)).toEqual(read);
+    expect(decodeFileWriteResult({ relativePath: "a.txt" })).toEqual({
+      relativePath: "a.txt",
+    });
+  });
+
+  it("preserves an expected revision and exposes conflicts as actionable typed errors", () => {
+    expect(
+      decodeFileWrite({
+        cwd: "/workspace",
+        relativePath: "a.txt",
+        contents: "edit",
+        expectedRevision: "abc123",
+      }).expectedRevision,
+    ).toBe("abc123");
+    const error = new ProjectWriteFileError({
+      cwd: "/workspace",
+      relativePath: "a.txt",
+      failure: "revision_conflict",
+    });
+    const decoded = decodeFileWriteError(error);
+    expect(decoded.failure).toBe("revision_conflict");
+    expect(decoded.message).toBe(
+      "Workspace file 'a.txt' changed. Reload it before saving your edits.",
+    );
+  });
+});

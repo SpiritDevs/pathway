@@ -1,38 +1,103 @@
 {
-  "name": "@synara/contracts",
-  "version": "0.9.1",
+  "name": "@spiritdevs/contracts",
+  "version": "0.0.41",
   "private": true,
   "files": [
     "dist"
   ],
   "type": "module",
-  "main": "./dist/index.cjs",
-  "module": "./dist/index.mjs",
-  "types": "./src/index.ts",
   "exports": {
+    "./calendarAlerts": "./src/calendarAlerts.ts",
+    "./orchestratorInspection": {
+      "types": "./src/orchestratorInspection.ts",
+      "import": "./src/orchestratorInspection.ts"
+    },
+    "./orchestratorAvatar": {
+      "types": "./src/orchestratorAvatar.ts",
+      "import": "./src/orchestratorAvatar.ts"
+    },
+    "./providerAllowanceBudget": {
+      "types": "./src/providerAllowanceBudget.ts",
+      "import": "./src/providerAllowanceBudget.ts"
+    },
+    "./providerAllowance": {
+      "types": "./src/providerAllowance.ts",
+      "import": "./src/providerAllowance.ts"
+    },
+    "./aiOrchestrator": {
+      "types": "./src/aiOrchestrator.ts",
+      "import": "./src/aiOrchestrator.ts"
+    },
+    "./loginErrorReports": {
+      "types": "./src/loginErrorReports.ts",
+      "import": "./src/loginErrorReports.ts"
+    },
+    "./threadAlerts": {
+      "types": "./src/threadAlerts.ts",
+      "import": "./src/threadAlerts.ts"
+    },
     ".": {
       "types": "./src/index.ts",
-      "import": "./src/index.ts",
-      "require": "./dist/index.cjs"
+      "import": "./src/index.ts"
+    },
+    "./delegatedBusiness": {
+      "types": "./src/delegatedBusiness.ts",
+      "import": "./src/delegatedBusiness.ts"
+    },
+    "./businessTools": {
+      "types": "./src/businessTools.ts",
+      "import": "./src/businessTools.ts"
+    },
+    "./settings": {
+      "types": "./src/settings.ts",
+      "import": "./src/settings.ts"
+    },
+    "./relay": {
+      "types": "./src/relay.ts",
+      "import": "./src/relay.ts"
+    },
+    "./company": {
+      "types": "./src/company.ts",
+      "import": "./src/company.ts"
+    },
+    "./cloudProject": {
+      "types": "./src/cloudProject.ts",
+      "import": "./src/cloudProject.ts"
+    },
+    "./focus": {
+      "types": "./src/focus.ts",
+      "import": "./src/focus.ts"
+    },
+    "./cloudSync": {
+      "types": "./src/cloudSync.ts",
+      "import": "./src/cloudSync.ts"
+    },
+    "./legacy-orchestration": {
+      "types": "./src/orchestration.ts",
+      "import": "./src/orchestration.ts"
+    },
+    "./mail": {
+      "types": "./src/mail.ts",
+      "import": "./src/mail.ts"
+    },
+    "./threadQueue": {
+      "types": "./src/threadQueue.ts",
+      "import": "./src/threadQueue.ts"
+    },
+    "./dictation": {
+      "types": "./src/dictation.ts",
+      "import": "./src/dictation.ts"
     }
   },
   "scripts": {
-    "dev": "tsdown src/index.ts --format cjs --watch --clean",
-    "build": "tsdown src/index.ts --format esm,cjs --dts --clean",
-    "prepare": "effect-language-service patch",
-    "typecheck": "node ../../node_modules/@typescript/native/bin/tsc --noEmit",
-    "typecheck:native": "bun run typecheck",
-    "typecheck:legacy": "tsc --noEmit",
-    "test": "vitest run"
+    "typecheck": "tsgo --noEmit",
+    "test": "vp test run"
   },
   "dependencies": {
     "effect": "catalog:"
   },
   "devDependencies": {
-    "@effect/language-service": "catalog:",
     "@effect/vitest": "catalog:",
-    "tsdown": "catalog:",
-    "typescript": "catalog:",
-    "vitest": "catalog:"
+    "vite-plus": "catalog:"
   }
 }

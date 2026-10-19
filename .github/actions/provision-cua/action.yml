@@ -1,8 +1,8 @@
 name: Provision verified Cua
 description: Restore an exact trusted native build or build the pinned source on a cache miss
 inputs:
-  benchmark-baseline:
-    description: Full baseline commit for isolated cold A/B builds; bypasses all artifact caches
+  targets:
+    description: Extra Rust targets for the pinned toolchain (space separated)
     default: ""
   save-cache:
     description: Only the trusted default-branch producer may save
@@ -15,18 +15,23 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: Select pinned native toolchains
+    # The pinned toolchain is scoped to this action's steps so the rest of the
+    # job keeps its own Rust. Later steps only reuse the verified artifact.
+    - name: Install pinned Rust toolchain
+      id: toolchain
       shell: bash
+      env:
+        RUST_TARGETS: ${{ inputs.targets }}
       run: |
         set -euo pipefail
-        if [[ "$RUNNER_OS" == "macOS" ]]; then
-          test -d /Applications/Xcode_16.4.app/Contents/Developer
-          echo 'DEVELOPER_DIR=/Applications/Xcode_16.4.app/Contents/Developer' >> "$GITHUB_ENV"
-          echo 'CARGO_PROFILE_RELEASE_STRIP=none' >> "$GITHUB_ENV"
-        fi
         rust_version=$(node -p 'require("./packages/shared/src/cuaDriverRelease.json").rustVersion')
-        rustup toolchain install "$rust_version" --profile minimal
-        echo "RUSTUP_TOOLCHAIN=$rust_version" >> "$GITHUB_ENV"
+        target_args=()
+        for target in $RUST_TARGETS; do target_args+=(--target "$target"); done
+        rustup toolchain install "$rust_version" --profile minimal "${target_args[@]}"
+        echo "rust-version=$rust_version" >> "$GITHUB_OUTPUT"
+        if [[ "$RUNNER_OS" == "macOS" ]]; then
+          echo "strip=none" >> "$GITHUB_OUTPUT"
+        fi
 
     - name: Install Linux native build dependencies
       if: runner.os == 'Linux'
@@ -38,31 +43,46 @@ runs:
     - name: Fingerprint native build inputs
       id: key
       shell: bash
-      run: node apps/desktop/scripts/cua-cache-key.mjs
+      env:
+        RUSTUP_TOOLCHAIN: ${{ steps.toolchain.outputs.rust-version }}
+        CARGO_PROFILE_RELEASE_STRIP: ${{ steps.toolchain.outputs.strip }}
+        # Pinned over whatever a job's Rust setup exported (dtolnay/rust-toolchain
+        # sets both), so producer and consumer fingerprint the same flags.
+        CARGO_INCREMENTAL: "0"
+        CARGO_TERM_COLOR: always
+      run: |
+        set -euo pipefail
+        [[ -n "$CARGO_PROFILE_RELEASE_STRIP" ]] || unset CARGO_PROFILE_RELEASE_STRIP
+        node scripts/cua-cache-key.ts
 
     - name: Restore exact Cua artifact
       id: cache
-      if: inputs.benchmark-baseline == ''
       uses: actions/cache/restore@v4
       with:
         path: ${{ runner.temp }}/cua-artifact
         key: ${{ steps.key.outputs.key }}
 
     - name: Build on a valid cache miss
-      if: inputs.benchmark-baseline == '' && steps.cache.outputs.cache-hit != 'true'
+      if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
       env:
         CACHE_KEY: ${{ steps.key.outputs.key }}
+        RUSTUP_TOOLCHAIN: ${{ steps.toolchain.outputs.rust-version }}
+        CARGO_PROFILE_RELEASE_STRIP: ${{ steps.toolchain.outputs.strip }}
+        # Pinned over whatever a job's Rust setup exported (dtolnay/rust-toolchain
+        # sets both), so producer and consumer fingerprint the same flags.
+        CARGO_INCREMENTAL: "0"
+        CARGO_TERM_COLOR: always
       run: |
         set -euo pipefail
+        [[ -n "$CARGO_PROFILE_RELEASE_STRIP" ]] || unset CARGO_PROFILE_RELEASE_STRIP
         # Even primary cache keys can prefix-match. Never consume that result.
         rm -rf "$RUNNER_TEMP/cua-artifact"
-        unset SYNARA_CUA_ARTIFACT_DIR SYNARA_CUA_SIGN_IDENTITY
-        node apps/desktop/scripts/provision-cua-driver.mjs --destination "$RUNNER_TEMP/cua-artifact"
+        unset PATHWAY_CUA_ARTIFACT_DIR PATHWAY_CUA_SIGN_IDENTITY
+        node scripts/provision-cua-driver.ts --destination "$RUNNER_TEMP/cua-artifact"
         printf '%s\n' "$CACHE_KEY" > "$RUNNER_TEMP/cua-artifact/build-key.txt"
 
     - name: Validate and stage cached Cua
-      if: inputs.benchmark-baseline == ''
       shell: bash
       env:
         CACHE_KEY: ${{ steps.key.outputs.key }}
@@ -70,21 +90,14 @@ runs:
       run: |
         set -euo pipefail
         test "$(cat "$RUNNER_TEMP/cua-artifact/build-key.txt")" = "$CACHE_KEY"
-        unset SYNARA_CUA_SIGN_IDENTITY
-        node apps/desktop/scripts/provision-cua-driver.mjs --artifact-dir "$RUNNER_TEMP/cua-artifact" --destination "$RUNNER_TEMP/cua-verified"
-        echo "SYNARA_CUA_ARTIFACT_DIR=$RUNNER_TEMP/cua-verified" >> "$GITHUB_ENV"
+        unset PATHWAY_CUA_SIGN_IDENTITY
+        node scripts/provision-cua-driver.ts --artifact-dir "$RUNNER_TEMP/cua-artifact" --destination "$RUNNER_TEMP/cua-verified"
+        echo "PATHWAY_CUA_ARTIFACT_DIR=$RUNNER_TEMP/cua-verified" >> "$GITHUB_ENV"
         echo "Cua exact cache hit: $CACHE_HIT; key: $CACHE_KEY" >> "$GITHUB_STEP_SUMMARY"
 
     - name: Save trusted default-branch Cua artifact
-      if: inputs.benchmark-baseline == '' && inputs.save-cache == 'true' && steps.cache.outputs.cache-hit != 'true' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      if: inputs.save-cache == 'true' && steps.cache.outputs.cache-hit != 'true' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
       uses: actions/cache/save@v4
       with:
         path: ${{ runner.temp }}/cua-artifact
         key: ${{ steps.key.outputs.key }}
-
-    - name: Compare cold Cua builds and driver behavior
-      if: inputs.benchmark-baseline != ''
-      shell: bash
-      env:
-        BASELINE_COMMIT: ${{ inputs.benchmark-baseline }}
-      run: node scripts/benchmark-cua-build.ts "$BASELINE_COMMIT" "$RUNNER_TEMP/cua-benchmark"

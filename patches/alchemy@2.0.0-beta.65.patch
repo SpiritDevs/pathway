@@ -1,0 +1,407 @@
+diff --git a/lib/Diff.js b/lib/Diff.js
+index a63e1948e342e8be41160e84d7f3f4bede041d10..633641594061b9b7b60d8ad4609a9fea4d67dd7a 100644
+--- a/lib/Diff.js
++++ b/lib/Diff.js
+@@ -2,7 +2,7 @@ import * as Duration from "effect/Duration";
+ import * as Effect from "effect/Effect";
+ import * as Redacted from "effect/Redacted";
+ import * as Output from "./Output.js";
+-import { isPrimitive } from "./Util/data.js";
++import { isPlainData, isPrimitive, mapPlainData } from "./Util/data.js";
+ /**
+  * Returns true when `value` (or any nested leaf) is still an unresolved
+  * plan-time expression — i.e. an `Output`/`Expr` or an `Effect` that was
+@@ -17,15 +17,16 @@ import { isPrimitive } from "./Util/data.js";
+  */
+ export const hasUnresolvedInputs = (value) => _hasUnresolved(value);
+ export const isResolved = (value) => !_hasUnresolved(value);
+-const _hasUnresolved = (value) => {
++const _hasUnresolved = (value, seen = new WeakSet()) => {
+     if (value == null || isPrimitive(value))
+         return false;
+     if (Output.isExpr(value) || Effect.isEffect(value))
+         return true;
+-    if (Array.isArray(value))
+-        return value.some(_hasUnresolved);
+-    if (typeof value === "object") {
+-        return Object.values(value).some(_hasUnresolved);
++    if (isPlainData(value)) {
++        if (seen.has(value))
++            return false;
++        seen.add(value);
++        return Object.values(value).some((nested) => _hasUnresolved(nested, seen));
+     }
+     return false;
+ };
+@@ -45,21 +46,21 @@ const _hasUnresolved = (value) => {
+  * resolved `Props`.
+  */
+ export const stripUnresolved = (value) => _stripUnresolved(value);
+-const _stripUnresolved = (value) => {
++const _stripUnresolved = (value, ancestors = new WeakSet()) => {
+     if (value == null || isPrimitive(value))
+         return value;
+     if (Output.isExpr(value) || Effect.isEffect(value))
+         return undefined;
+     // Opaque resolved values — rebuilding them structurally would strip
+     // their prototype (see resolveInput in Plan.ts for the same rule).
+-    if (Redacted.isRedacted(value) || Duration.isDuration(value))
++    if (Redacted.isRedacted(value) ||
++        Duration.isDuration(value) ||
++        value instanceof Date)
+         return value;
+-    if (Array.isArray(value))
+-        return value.map(_stripUnresolved);
+-    if (typeof value === "object") {
+-        return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, _stripUnresolved(item)]));
++    if (isPlainData(value)) {
++        return mapPlainData(value, ancestors, (child) => _stripUnresolved(child, ancestors));
+     }
+-    return value;
++    return undefined;
+ };
+ /**
+  * Deeply replace Effect-valued entries with `undefined`, leaving resolved
+@@ -74,7 +75,7 @@ const _stripUnresolved = (value) => {
+  * identity is carried by the resolved binding data instead.
+  */
+ export const stripEffects = (value) => _stripEffects(value);
+-const _stripEffects = (value) => {
++const _stripEffects = (value, ancestors = new WeakSet()) => {
+     if (value == null || isPrimitive(value))
+         return value;
+     // Output proxies are left intact (so `isResolved` still sees them); they
+@@ -84,14 +85,14 @@ const _stripEffects = (value) => {
+         return value;
+     if (Effect.isEffect(value))
+         return undefined;
+-    if (Redacted.isRedacted(value) || Duration.isDuration(value))
++    if (Redacted.isRedacted(value) ||
++        Duration.isDuration(value) ||
++        value instanceof Date)
+         return value;
+-    if (Array.isArray(value))
+-        return value.map(_stripEffects);
+-    if (typeof value === "object") {
+-        return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, _stripEffects(item)]));
++    if (isPlainData(value)) {
++        return mapPlainData(value, ancestors, (child) => _stripEffects(child, ancestors));
+     }
+-    return value;
++    return undefined;
+ };
+ export const somePropsAreDifferent = (olds, news, props) => {
+     for (const prop of props) {
+@@ -135,7 +136,7 @@ export const havePropsChanged = (oldProps, newProps) => Output.hasOutputs(newPro
+  */
+ export const deepEqual = (a, b, options) => JSON.stringify(canonicalize(a, options?.stripNullish ?? false)) ===
+     JSON.stringify(canonicalize(b, options?.stripNullish ?? false));
+-const canonicalize = (value, stripNullish) => {
++const canonicalize = (value, stripNullish, ancestors = new WeakSet()) => {
+     if (stripNullish && value == null)
+         return undefined;
+     if (Redacted.isRedacted(value)) {
+@@ -144,14 +145,18 @@ const canonicalize = (value, stripNullish) => {
+             value: Redacted.value(value),
+         };
+     }
+-    if (Array.isArray(value)) {
+-        return value.map((v) => canonicalize(v, stripNullish));
++    if (Duration.isDuration(value) || value instanceof Date)
++        return value;
++    if (isPlainData(value)) {
++        const rebuilt = mapPlainData(value, ancestors, (child) => canonicalize(child, stripNullish, ancestors));
++        if (rebuilt === undefined || Array.isArray(rebuilt))
++            return rebuilt;
++        return Object.fromEntries(Object.entries(rebuilt)
++            .filter(([, nested]) => !stripNullish || nested != null)
++            .sort(([a], [b]) => a.localeCompare(b)));
+     }
+     if (value && typeof value === "object") {
+-        return Object.fromEntries(Object.entries(value)
+-            .filter(([, nested]) => !stripNullish || nested != null)
+-            .sort(([a], [b]) => a.localeCompare(b))
+-            .map(([key, nested]) => [key, canonicalize(nested, stripNullish)]));
++        return undefined;
+     }
+     return value;
+ };
+diff --git a/lib/Output.js b/lib/Output.js
+index eb9ef87b4f617832e940e1c1efb9e25963ad3f71..c3f2ba6984f687e27e8d2287463c0a3911ffab2b 100644
+--- a/lib/Output.js
++++ b/lib/Output.js
+@@ -1,9 +1,7 @@
+ import * as Config from "effect/Config";
+ import * as Data from "effect/Data";
+-import * as Duration from "effect/Duration";
+ import * as Effect from "effect/Effect";
+ import { pipe } from "effect/Function";
+-import * as Redacted from "effect/Redacted";
+ import { SingleShotGen } from "effect/Utils";
+ import { getRefMetadata, isRef } from "./Ref.js";
+ import { isResource } from "./Resource.js";
+@@ -11,7 +9,7 @@ import { RuntimeContext, sanitizeKey } from "./RuntimeContext.js";
+ import { Stack } from "./Stack.js";
+ import { Stage } from "./Stage.js";
+ import * as State from "./State/State.js";
+-import { isPrimitive } from "./Util/data.js";
++import { isPlainData, isPrimitive } from "./Util/data.js";
+ const inspect = Symbol.for("nodejs.util.inspect.custom");
+ export const of = (resource) => {
+     if (isRef(resource)) {
+@@ -349,7 +347,7 @@ export class MissingSourceError extends Data.TaggedError("MissingSourceError") {
+ }
+ export class InvalidReferenceError extends Data.TaggedError("InvalidReferenceError") {
+ }
+-export const evaluate = (expr, upstream) => Effect.gen(function* () {
++export const evaluate = (expr, upstream, ancestors = new Set()) => Effect.gen(function* () {
+     if (isResource(expr)) {
+         const srcId = expr.FQN;
+         const src = upstream[srcId];
+@@ -438,43 +436,51 @@ export const evaluate = (expr, upstream) => Effect.gen(function* () {
+             return output;
+         }
+     }
+-    if (Array.isArray(expr)) {
+-        return yield* Effect.all(expr.map((item) => evaluate(item, upstream)));
+-    }
+-    else if (Config.isConfig(expr)) {
++    if (Config.isConfig(expr)) {
+         // Resolve Config against the deploy environment — see resolveInput in
+         // Plan.ts for rationale. `Config.redacted` resolves to a `Redacted`,
+-        // which stays opaque via the branch below.
+-        return yield* evaluate(yield* expr, upstream);
+-    }
+-    else if (Duration.isDuration(expr) || Redacted.isRedacted(expr)) {
+-        // Opaque value — see resolveInput in Plan.ts for rationale.
+-        return expr;
++        // which stays opaque via the leaf fallthrough below.
++        return yield* evaluate(yield* expr, upstream, ancestors);
+     }
+-    else if (typeof expr === "object" && expr !== null) {
+-        return Object.fromEntries(yield* Effect.all(Object.entries(expr).map(([key, value]) => evaluate(value, upstream).pipe(Effect.map((value) => [key, value])))));
++    else if (isPlainData(expr)) {
++        if (ancestors.has(expr)) {
++            return undefined;
++        }
++        const nested = new Set(ancestors).add(expr);
++        if (Array.isArray(expr)) {
++            return yield* Effect.all(expr.map((item) => evaluate(item, upstream, nested)));
++        }
++        return Object.fromEntries(yield* Effect.all(Object.entries(expr).map(([key, value]) => evaluate(value, upstream, nested).pipe(Effect.map((value) => [key, value])))));
+     }
++    // Foreign class instances and functions are leaves. Rebuilding them
++    // entry-by-entry strips their prototypes, and some Effect values are cyclic.
+     return expr;
+ });
+ export const hasOutputs = (value) => Object.keys(upstreamAny(value)).length > 0;
+-export const upstreamAny = (value) => {
++const alreadySeen = (value, seen) => {
++    if (seen.has(value)) {
++        return true;
++    }
++    seen.add(value);
++    return false;
++};
++export const upstreamAny = (value, seen = new WeakSet()) => {
+     if (isResource(value)) {
+         return { [value.FQN]: value };
+     }
+     else if (isExpr(value)) {
+-        return upstream(value);
++        return upstream(value, seen);
+     }
+-    else if (Array.isArray(value)) {
+-        return Object.assign({}, ...value.map(resolveUpstream));
+-    }
+-    else if (value &&
+-        (typeof value === "object" || typeof value === "function")) {
+-        return Object.assign({}, ...Object.values(value).map((value) => resolveUpstream(value)));
++    else if (isPlainData(value)) {
++        if (alreadySeen(value, seen)) {
++            return {};
++        }
++        return Object.assign({}, ...Object.values(value).map((value) => resolveUpstream(value, seen)));
+     }
+     return {};
+ };
+ // TODO(sam): add a type
+-export const upstream = (expr) => {
++export const upstream = (expr, seen = new WeakSet()) => {
+     if (isResource(expr)) {
+         return {
+             [expr.FQN]: expr,
+@@ -486,29 +492,29 @@ export const upstream = (expr) => {
+         };
+     }
+     else if (isPropExpr(expr)) {
+-        return upstream(expr.expr);
++        return upstream(expr.expr, seen);
+     }
+     else if (isAllExpr(expr)) {
+-        return Object.assign({}, ...expr.outs.map((out) => upstream(out)));
++        return Object.assign({}, ...expr.outs.map((out) => upstream(out, seen)));
+     }
+     else if (isEffectExpr(expr) ||
+         isApplyExpr(expr) ||
+         isFlatMapExpr(expr) ||
+         isNamedExpr(expr)) {
+-        return upstream(expr.expr);
+-    }
+-    else if (Array.isArray(expr)) {
+-        return expr.map(upstream).reduce(toObject, {});
++        return upstream(expr.expr, seen);
+     }
+-    else if (typeof expr === "object" && expr !== null) {
++    else if (isPlainData(expr)) {
++        if (alreadySeen(expr, seen)) {
++            return {};
++        }
+         return Object.values(expr)
+-            .map((v) => upstream(v))
++            .map((v) => upstream(v, seen))
+             .reduce(toObject, {});
+     }
+     return {};
+ };
+ // TODO(sam): add a type
+-export const resolveUpstream = (value) => {
++export const resolveUpstream = (value, seen = new WeakSet()) => {
+     if (isPrimitive(value)) {
+         return {};
+     }
+@@ -516,14 +522,14 @@ export const resolveUpstream = (value) => {
+         return { [value.FQN]: value };
+     }
+     else if (isOutput(value)) {
+-        return upstream(value);
+-    }
+-    else if (Array.isArray(value)) {
+-        return Object.fromEntries(value.map((v) => resolveUpstream(v)).flatMap(Object.entries));
++        return upstream(value, seen);
+     }
+-    else if (typeof value === "object" || typeof value === "function") {
++    else if (isPlainData(value)) {
++        if (alreadySeen(value, seen)) {
++            return {};
++        }
+         return Object.fromEntries(Object.values(value)
+-            .map(resolveUpstream)
++            .map((v) => resolveUpstream(v, seen))
+             .flatMap(Object.entries));
+     }
+     return {};
+diff --git a/lib/Plan.js b/lib/Plan.js
+index 182c0a809208eb6977c23b711e56c58f0db0f4d9..292b0a63af2dce7b9bddac93e2f27eee7a087b51 100644
+--- a/lib/Plan.js
++++ b/lib/Plan.js
+@@ -2,10 +2,8 @@
+ /** @effect-diagnostics missingEffectError:off */
+ import * as Config from "effect/Config";
+ import * as Data from "effect/Data";
+-import * as Duration from "effect/Duration";
+ import * as Effect from "effect/Effect";
+ import * as Option from "effect/Option";
+-import * as Redacted from "effect/Redacted";
+ import { asEffect } from ".//Util/types.js";
+ import { isAction } from "./Action.js";
+ import { AdoptPolicy, OwnedBySomeoneElse, stripUnowned, Unowned, } from "./AdoptPolicy.js";
+@@ -19,6 +17,7 @@ import { findProviderByType, missingProviderError, Provider, tryFindProviderByTy
+ import { isResource, } from "./Resource.js";
+ import {} from "./Stack.js";
+ import { isActionState, State, } from "./State/index.js";
++import { isPlainData } from "./Util/data.js";
+ import { findCycleMembers } from "./Util/scc.js";
+ import { hashInput } from "./Util/sha256.js";
+ export const isCRUD = (node) => {
+@@ -152,7 +151,7 @@ Effect.gen(function* () {
+                 }
+             })));
+     });
+-    const resolveInput = (input) => Effect.gen(function* () {
++    const resolveInput = (input, ancestors = new Set()) => Effect.gen(function* () {
+         if (!input) {
+             return input;
+         }
+@@ -166,19 +165,7 @@ Effect.gen(function* () {
+             // providers receive a resolved value instead of a Config object.
+             // `Config.redacted` resolves to a `Redacted`, which stays opaque via
+             // the branch below.
+-            return yield* resolveInput(yield* input);
+-        }
+-        else if (Duration.isDuration(input) || Redacted.isRedacted(input)) {
+-            // Opaque values that are resolved downstream. We don't walk them
+-            // because it would strip their prototype, resulting in a plain object
+-            // that downstream consumers can't interpret. Redacted additionally
+-            // stays wrapped to preserve the secrecy boundary.
+-            return input;
+-        }
+-        else if (Array.isArray(input)) {
+-            return yield* Effect.all(input.map(resolveInput), {
+-                concurrency: "unbounded",
+-            });
++            return yield* resolveInput(yield* input, ancestors);
+         }
+         else if (isResource(input)) {
+             // Resource objects have dynamic properties (path, hash, etc.) that are
+@@ -197,13 +184,22 @@ Effect.gen(function* () {
+             // short-circuits, and a stable identifier that should have been
+             // available is missing — forcing consumers to hand-extract it.
+             if (Output.isResourceExpr(resolved) && resolved.stables) {
+-                return yield* resolveInput(resolved.stables);
++                return yield* resolveInput(resolved.stables, ancestors);
+             }
+-            return yield* resolveInput(resolved);
++            return yield* resolveInput(resolved, ancestors);
+         }
+-        else if (typeof input === "object") {
+-            return Object.fromEntries(yield* Effect.all(Object.entries(input).map(([key, value]) => resolveInput(value).pipe(Effect.map((value) => [key, value]))), { concurrency: "unbounded" }));
++        else if (isPlainData(input)) {
++            if (ancestors.has(input)) {
++                return undefined;
++            }
++            const nested = new Set(ancestors).add(input);
++            if (Array.isArray(input)) {
++                return yield* Effect.all(input.map((item) => resolveInput(item, nested)), { concurrency: "unbounded" });
++            }
++            return Object.fromEntries(yield* Effect.all(Object.entries(input).map(([key, value]) => resolveInput(value, nested).pipe(Effect.map((value) => [key, value]))), { concurrency: "unbounded" }));
+         }
++        // Foreign class instances and functions are opaque leaves. Walking
++        // them strips prototypes and may recurse through cyclic Effect state.
+         return input;
+     });
+     const resolveOutput = (expr) => Effect.gen(function* () {
+diff --git a/lib/Util/data.js b/lib/Util/data.js
+index 22f25865531e0e24ab88de8e6f74375234976b31..0cd4d7ecb13add614b03d3b83d09d5adaf871965 100644
+--- a/lib/Util/data.js
++++ b/lib/Util/data.js
+@@ -13,6 +13,29 @@ export const isPlainObject = (value) => {
+         return false;
+     return Object.getPrototypeOf(value) === Object.prototype;
+ };
++// Only arrays and record-like objects are safe for Alchemy's deep walkers.
++// Foreign class instances and functions must remain opaque leaves.
++export const isPlainData = (value) => {
++    if (Array.isArray(value))
++        return true;
++    if (typeof value !== "object" || value === null)
++        return false;
++    const proto = Object.getPrototypeOf(value);
++    return proto === Object.prototype || proto === null;
++};
++export const mapPlainData = (value, ancestors, walk) => {
++    if (ancestors.has(value))
++        return undefined;
++    ancestors.add(value);
++    try {
++        return Array.isArray(value)
++            ? value.map(walk)
++            : Object.fromEntries(Object.entries(value).map(([key, child]) => [key, walk(child)]));
++    }
++    finally {
++        ancestors.delete(value);
++    }
++};
+ export const stripFields = (value, empty) => {
+     if (Array.isArray(value)) {
+         return value.map((item) => stripFields(item, empty));

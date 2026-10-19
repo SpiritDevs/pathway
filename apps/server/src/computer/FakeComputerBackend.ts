@@ -1,3 +1,22 @@
+/**
+ * The desktop backend CI runs against, and the fixture the manager and tool
+ * suites drive.
+ *
+ * It keeps an in-memory desktop: a window list with bounds and focus, a
+ * process list, one accessibility tree, a clipboard, and a pointer. Every call
+ * is recorded in `calls` so a test can prove what reached the "display
+ * server", and `failNext` fails the next call of one method with a typed error.
+ *
+ * Members are prototype methods rather than arrow properties so a test can
+ * subclass the fake and override one call while still delegating to
+ * `super.method(...)`. Callers must invoke them on the backend
+ * (`backend.click(...)`), never detached. Events, frames included, go out on
+ * `events`; a consumer that must see an event published right after it starts
+ * should fork with `{ startImmediately: true }` so its subscription exists
+ * before the publish.
+ *
+ * @module computer/FakeComputerBackend
+ */
 import type {
   ComputerAccessibilityTreeApp,
   ComputerAccessibilityTreeWindow,
@@ -20,30 +39,37 @@ import type {
   ComputerVerifyStateResult,
   ComputerWindow,
   ComputerZoomResult,
-} from "@synara/contracts";
+} from "@spiritdevs/contracts";
+import * as Clock from "effect/Clock";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as PubSub from "effect/PubSub";
+import * as Stream from "effect/Stream";
 
 import {
-  ComputerBackendError,
   DEFAULT_COMPUTER_CAPTURE_MAX_DIMENSION,
+  DEFAULT_COMPUTER_ID,
   intersectComputerRects,
   type ComputerAgentDialect,
   type ComputerBackend,
   type ComputerBackendActionResult,
   type ComputerBackendEvent,
-  type ComputerBackendEventListener,
   type ComputerBrowserBackend,
   type ComputerBrowserCall,
   type ComputerBrowserCallResult,
   type ComputerCaptureRequest,
-  type ComputerFrameListener,
   type ComputerMenuBackendTarget,
   type ComputerResolvedTarget,
   type ComputerShieldTarget,
   type ComputerStreamFrame,
   type ComputerTextRange,
 } from "./ComputerBackend.ts";
+import {
+  ComputerBackendError,
+  ComputerTargetError,
+  type ComputerOperationError,
+} from "./computerErrors.ts";
 import { requireWindowBounds } from "./computerGeometry.ts";
-import { ComputerTargetError } from "./uiTreeTargeting.ts";
 
 const FAKE_SCREENSHOT_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
@@ -80,9 +106,23 @@ const DEFAULT_FAKE_CAPABILITIES: ComputerCapabilities = {
   visibleDesktop: false,
 };
 
+type FakeEffect<A> = Effect.Effect<A, ComputerOperationError>;
+
 export interface FakeComputerCall {
   readonly method: string;
   readonly args: readonly unknown[];
+}
+
+export interface FakeSettleOptions {
+  readonly windowId: string;
+  readonly timeoutMs: number;
+  readonly quietMs: number;
+}
+
+export interface FakeSettleResult {
+  readonly settled: boolean;
+  readonly waitedMs: number;
+  readonly eventsSeen?: number;
 }
 
 export interface FakeComputerBackendOptions {
@@ -104,48 +144,37 @@ export interface FakeComputerBackendOptions {
    */
   readonly apps?: readonly ComputerApp[];
   readonly root?: ComputerUiNode;
+  /** The ISO timestamp every capture reports. Defaults to the Effect clock. */
   readonly now?: () => string;
   /**
    * Opts the fake into the browser surface. `true` uses the built-in handler
    * (a minted `target_id` for `get_browser_state`, `status:"completed"` for
-   * everything else); a function answers calls itself. Absent or `false`
-   * means the fake speaks no browser tools — `browser` stays undefined, which
-   * is how a desktop-only backend truthfully reports that.
+   * everything else); a function answers calls itself, and an answer of
+   * nothing falls back to the built-in reply. Absent or `false` means the fake
+   * speaks no browser tools — `browser` stays undefined, which is how a
+   * desktop-only backend truthfully reports that.
    */
   readonly browser?:
     | boolean
-    | ((
-        call: ComputerBrowserCall,
-      ) => ComputerBrowserCallResult | void | Promise<ComputerBrowserCallResult | void>);
+    | ((call: ComputerBrowserCall) => FakeEffect<ComputerBrowserCallResult | void>);
   /**
    * Opts the fake into driver-observed settling. `true` answers every
    * `waitForSettle` call `{settled:true}` immediately; a function answers
-   * itself, so a test can return a busy surface or throw the
+   * itself, so a test can return a busy surface or fail with the
    * "Unknown tool:" refusal an older driver produces. Absent or `false`
    * means the backend truthfully has no observer — the method stays
    * undefined and callers must take the fixed-settle fallback.
    */
-  readonly waitForSettle?:
-    | boolean
-    | ((options: {
-        readonly windowId: string;
-        readonly timeoutMs: number;
-        readonly quietMs: number;
-      }) =>
-        | { readonly settled: boolean; readonly waitedMs: number; readonly eventsSeen?: number }
-        | Promise<{
-            readonly settled: boolean;
-            readonly waitedMs: number;
-            readonly eventsSeen?: number;
-          }>);
+  readonly waitForSettle?: boolean | ((options: FakeSettleOptions) => FakeEffect<FakeSettleResult>);
   /**
    * Opts the fake into the activation-shield surface. `true` answers every
-   * `engageShield` with the caller's id; a function answers engages itself,
-   * so a test can refuse or wedge the way a real host can. Absent or `false`
-   * means the backend has no shield surface — the methods stay undefined,
-   * which is what makes an armed masked-activation flag fail closed.
+   * `engageShield` with the caller's id; a function runs before the engage
+   * lands, so a test can refuse (fail) or wedge (never resolve) the way a
+   * real host can. Absent or `false` means the backend has no shield surface —
+   * the methods stay undefined, which is what makes an armed
+   * masked-activation flag fail closed.
    */
-  readonly shield?: boolean | ((target: ComputerShieldTarget) => void | Promise<void>);
+  readonly shield?: boolean | ((target: ComputerShieldTarget) => FakeEffect<void>);
   /**
    * What the fake reports as its input dialect. The real CUA backend reports
    * `"macos"`; the fake defaults to absent (the manager reads that as
@@ -155,10 +184,19 @@ export interface FakeComputerBackendOptions {
   readonly agentDialect?: ComputerAgentDialect;
 }
 
+const refuse = (message: string) => Effect.fail(new ComputerBackendError({ message }));
+
+const missingWindow = (windowId: string) => `No desktop window has id ${JSON.stringify(windowId)}.`;
+
+const noWindow = (windowId: string) => refuse(missingWindow(windowId));
+
 export class FakeComputerBackend implements ComputerBackend {
   readonly computerId: ComputerId;
   readonly calls: FakeComputerCall[] = [];
+  /** Every backend notification, frames included. Ends when the fake is disposed. */
+  readonly events: Stream.Stream<ComputerBackendEvent>;
 
+  private readonly pubsub: PubSub.PubSub<ComputerBackendEvent>;
   private currentAvailability: ComputerAvailability;
   private currentMissingPermissions: readonly ComputerPermission[] = [];
   private currentBuildSignature: ComputerBuildSignature | undefined;
@@ -168,13 +206,12 @@ export class FakeComputerBackend implements ComputerBackend {
   private currentWindows: ComputerWindow[];
   private currentApps: ComputerApp[];
   private currentRoot: ComputerUiNode;
-  private readonly now: () => string;
-  private readonly eventListeners = new Set<ComputerBackendEventListener>();
-  private frameListener: ComputerFrameListener | null = null;
+  private readonly timestamp: Effect.Effect<string>;
+  private streamAttached = false;
   private nextSequence = 1;
   private nextPid = 5_000;
   private clipboardText = "";
-  private failures = new Map<string, Error>();
+  private readonly failures = new Map<string, ComputerOperationError>();
   private readonly queuedScreenshots: string[] = [];
   /**
    * When false the frame call still succeeds but the window keeps its old
@@ -182,7 +219,7 @@ export class FakeComputerBackend implements ComputerBackend {
    * move landing produces.
    */
   private frameApplies = true;
-  private readonly refusedMenuPaths = new Map<string, Error>();
+  private readonly refusedMenuPaths = new Map<string, ComputerOperationError>();
   private verifySatisfied = true;
   private cursorPosition: ComputerPoint = { x: 0, y: 0 };
   private disposed = false;
@@ -205,11 +242,13 @@ export class FakeComputerBackend implements ComputerBackend {
   readonly engageShield?: NonNullable<ComputerBackend["engageShield"]>;
   readonly releaseShield?: NonNullable<ComputerBackend["releaseShield"]>;
   readonly releaseAllShields?: NonNullable<ComputerBackend["releaseAllShields"]>;
-  private liveShields = new Set<string>();
+  private readonly liveShields = new Set<string>();
   readonly agentDialect?: ComputerAgentDialect;
 
   constructor(options: FakeComputerBackendOptions = {}) {
-    this.computerId = (options.computerId ?? "desktop") as ComputerId;
+    this.computerId = (options.computerId ?? DEFAULT_COMPUTER_ID) as ComputerId;
+    this.pubsub = Effect.runSync(PubSub.unbounded<ComputerBackendEvent>());
+    this.events = Stream.fromPubSub(this.pubsub);
     this.currentAvailability = options.availability ?? {
       kind: "available",
       backend: "fake",
@@ -225,68 +264,78 @@ export class FakeComputerBackend implements ComputerBackend {
     this.currentWindows = [...(options.windows ?? defaultWindows())];
     this.currentApps = [...(options.apps ?? defaultApps(this.currentWindows))];
     this.currentRoot = options.root ?? defaultRoot(this.currentScreenSize, this.currentWindows);
-    this.now = options.now ?? (() => new Date().toISOString());
+    this.timestamp = options.now
+      ? Effect.sync(options.now)
+      : Effect.map(Clock.currentTimeMillis, (millis) =>
+          DateTime.formatIso(DateTime.makeUnsafe(millis)),
+        );
     if (options.agentDialect) this.agentDialect = options.agentDialect;
     if (options.browser) {
       const handler = typeof options.browser === "function" ? options.browser : undefined;
       this.browser = {
-        call: async (call) => {
-          this.throwIfFailed(`browser.${call.name}`);
-          const result = (await handler?.(call)) ?? {
-            content: [{ type: "text", text: `fake browser ${call.name}` }],
-            structuredContent:
-              call.name === "get_browser_state"
-                ? { target_id: `fake-browser-${call.task.threadId}`, tabs: [] }
-                : { status: "completed" },
-          };
-          this.record(`browser.${call.name}`, call.args);
-          return result;
-        },
-        endThread: async (threadId) => {
-          this.record("browser.endThread", threadId);
-        },
+        call: (call) =>
+          Effect.gen({ self: this }, function* () {
+            yield* this.takeFailure(`browser.${call.name}`);
+            const answered = handler ? yield* handler(call) : undefined;
+            const result = answered ?? {
+              content: [{ type: "text", text: `fake browser ${call.name}` }],
+              structuredContent:
+                call.name === "get_browser_state"
+                  ? { target_id: `fake-browser-${call.task.threadId}`, tabs: [] }
+                  : { status: "completed" },
+            };
+            this.record(`browser.${call.name}`, call.args);
+            return result;
+          }),
+        endThread: (threadId) => Effect.sync(() => this.record("browser.endThread", threadId)),
       };
     }
     if (options.waitForSettle) {
       const handler =
         typeof options.waitForSettle === "function" ? options.waitForSettle : undefined;
-      this.waitForSettle = async (settleOptions) => {
-        this.record("waitForSettle", settleOptions);
-        this.throwIfFailed("waitForSettle");
-        const window = this.currentWindows.find((entry) => entry.id === settleOptions.windowId);
-        if (!window)
-          throw new ComputerTargetError({
-            code: "computer_target_not_found",
-            message: `No desktop window has id ${JSON.stringify(settleOptions.windowId)}.`,
-          });
-        return (await handler?.(settleOptions)) ?? { settled: true, waitedMs: 0 };
-      };
+      this.waitForSettle = (settleOptions) =>
+        Effect.gen({ self: this }, function* () {
+          this.record("waitForSettle", settleOptions);
+          yield* this.takeFailure("waitForSettle");
+          if (!this.currentWindows.some((entry) => entry.id === settleOptions.windowId)) {
+            return yield* new ComputerTargetError({
+              code: "computer_target_not_found",
+              message: missingWindow(settleOptions.windowId),
+            });
+          }
+          return handler ? yield* handler(settleOptions) : { settled: true, waitedMs: 0 };
+        });
     }
     if (options.shield) {
       const handler = typeof options.shield === "function" ? options.shield : undefined;
-      this.engageShield = async (target) => {
-        this.record("engageShield", target);
-        this.throwIfFailed("engageShield");
-        await handler?.(target);
-        this.liveShields.add(target.shieldId);
-        return target.shieldId;
-      };
-      this.releaseShield = async (shieldId) => {
-        this.record("releaseShield", shieldId);
-        this.throwIfFailed("releaseShield");
-        this.liveShields.delete(shieldId);
-      };
-      this.releaseAllShields = async () => {
-        this.record("releaseAllShields");
-        this.liveShields.clear();
-      };
+      this.engageShield = (target) =>
+        Effect.gen({ self: this }, function* () {
+          this.record("engageShield", target);
+          yield* this.takeFailure("engageShield");
+          if (handler) yield* handler(target);
+          this.liveShields.add(target.shieldId);
+          return target.shieldId;
+        });
+      this.releaseShield = (shieldId) =>
+        Effect.gen({ self: this }, function* () {
+          this.record("releaseShield", shieldId);
+          yield* this.takeFailure("releaseShield");
+          this.liveShields.delete(shieldId);
+        });
+      this.releaseAllShields = () =>
+        Effect.sync(() => {
+          this.record("releaseAllShields");
+          this.liveShields.clear();
+        });
     }
   }
 
-  async availability(): Promise<ComputerAvailability> {
-    this.record("availability");
-    this.throwIfFailed("availability");
-    return this.currentAvailability;
+  availability(): FakeEffect<ComputerAvailability> {
+    return Effect.gen({ self: this }, function* () {
+      this.record("availability");
+      yield* this.takeFailure("availability");
+      return this.currentAvailability;
+    });
   }
 
   /**
@@ -294,10 +343,12 @@ export class FakeComputerBackend implements ComputerBackend {
    * used: the whole point of the passive probe is that the paths which must not
    * touch the display server can be shown not to.
    */
-  async probeAvailability(): Promise<ComputerAvailability> {
-    this.record("probeAvailability");
-    this.throwIfFailed("probeAvailability");
-    return this.currentAvailability;
+  probeAvailability(): FakeEffect<ComputerAvailability> {
+    return Effect.gen({ self: this }, function* () {
+      this.record("probeAvailability");
+      yield* this.takeFailure("probeAvailability");
+      return this.currentAvailability;
+    });
   }
 
   /** Not recorded as a call: reading health is a getter, not a backend operation. */
@@ -315,8 +366,8 @@ export class FakeComputerBackend implements ComputerBackend {
    * test can substitute a backend that *is* missing a grant without the type
    * complaining about a property the interface only optionally has.
    */
-  async missingPermissions(): Promise<readonly ComputerPermission[]> {
-    return this.currentMissingPermissions;
+  missingPermissions(): FakeEffect<readonly ComputerPermission[]> {
+    return Effect.sync(() => this.currentMissingPermissions);
   }
 
   setMissingPermissions(permissions: readonly ComputerPermission[]): void {
@@ -337,84 +388,94 @@ export class FakeComputerBackend implements ComputerBackend {
     this.currentBuildSignature = signature;
   }
 
-  async listWindows(): Promise<readonly ComputerWindow[]> {
-    this.record("listWindows");
-    this.throwIfFailed("listWindows");
-    return this.currentWindows.map((window) => ({
-      ...window,
-      ...(window.bounds ? { bounds: { ...window.bounds } } : {}),
-    }));
+  listWindows(): FakeEffect<readonly ComputerWindow[]> {
+    return Effect.gen({ self: this }, function* () {
+      this.record("listWindows");
+      yield* this.takeFailure("listWindows");
+      return this.currentWindows.map((window) => ({
+        ...window,
+        ...(window.bounds ? { bounds: { ...window.bounds } } : {}),
+      }));
+    });
   }
 
-  async getScreenSize(): Promise<ComputerScreenSize> {
-    this.record("getScreenSize");
-    this.throwIfFailed("getScreenSize");
-    return { ...this.currentScreenSize };
+  getScreenSize(): FakeEffect<ComputerScreenSize> {
+    return Effect.gen({ self: this }, function* () {
+      this.record("getScreenSize");
+      yield* this.takeFailure("getScreenSize");
+      return { ...this.currentScreenSize };
+    });
   }
 
-  async getState(options: {
-    readonly includeScreenshot?: boolean;
-    readonly includeTree?: boolean;
-  }): Promise<ComputerState> {
-    this.record("getState", options);
-    this.throwIfFailed("getState");
-    const screenshot = options.includeScreenshot
-      ? this.screenshotOfRegion(this.workspaceRect())
-      : undefined;
-    return {
-      computerId: this.computerId,
-      windows: await this.listWindows(),
-      screenSize: { ...this.currentScreenSize },
-      root: this.currentRoot,
-      ...(screenshot ? { screenshot } : {}),
-      capturedAt: this.now(),
-    } as ComputerState;
+  getState(options: Parameters<ComputerBackend["getState"]>[0]): FakeEffect<ComputerState> {
+    return Effect.gen({ self: this }, function* () {
+      this.record("getState", options);
+      yield* this.takeFailure("getState");
+      const screenshot = options.includeScreenshot
+        ? yield* this.screenshotOfRegion(this.workspaceRect())
+        : undefined;
+      const windows = yield* this.listWindows();
+      return {
+        computerId: this.computerId,
+        windows,
+        screenSize: { ...this.currentScreenSize },
+        root: this.currentRoot,
+        ...(screenshot ? { screenshot } : {}),
+        capturedAt: yield* this.timestamp,
+      } as ComputerState;
+    });
   }
 
-  async captureScreenshot(request: ComputerCaptureRequest): Promise<ComputerScreenshot> {
-    this.record("captureScreenshot", request);
-    this.throwIfFailed("captureScreenshot");
-    const region = intersectComputerRects(this.captureRect(request), this.workspaceRect());
-    if (!region) {
-      throw new ComputerBackendError("The capture request does not overlap the fake workspace.");
-    }
-    return this.screenshotOfRegion(region, request.maxDimension);
+  captureScreenshot(request: ComputerCaptureRequest): FakeEffect<ComputerScreenshot> {
+    return Effect.gen({ self: this }, function* () {
+      this.record("captureScreenshot", request);
+      yield* this.takeFailure("captureScreenshot");
+      const region = intersectComputerRects(yield* this.captureRect(request), this.workspaceRect());
+      if (!region) {
+        return yield* refuse("The capture request does not overlap the fake workspace.");
+      }
+      return yield* this.screenshotOfRegion(region, request.maxDimension);
+    });
   }
 
-  async launchApp(
+  launchApp(
     app: string,
     args: readonly string[],
     options?: { readonly hidden?: boolean },
-  ): Promise<ComputerLaunchAppResult> {
-    // Recorded only when present, so every existing assertion on a plain
-    // launch keeps matching its two-argument shape.
-    if (options !== undefined) this.record("launchApp", app, args, options);
-    else this.record("launchApp", app, args);
-    this.throwIfFailed("launchApp");
-    const hidden = options?.hidden === true;
-    const id = `fake-window-${this.currentWindows.length + 1}`;
-    const window: ComputerWindow = {
-      id,
-      title: app,
-      appName: app,
-      pid: this.nextPid++,
-      bounds: { x: 120, y: 80, width: 900, height: 700 },
-      // A hidden launch renders nothing and takes no focus: frontmost is
-      // unchanged, which the fake models by leaving every existing flag alone.
-      focused: false,
-      minimized: false,
-      visible: !hidden,
-    };
-    this.currentWindows = [...this.currentWindows, window];
-    this.currentRoot = defaultRoot(this.currentScreenSize, this.currentWindows);
-    this.emit({ type: "windows-changed", windows: this.currentWindows });
-    return { computerId: this.computerId, app, window } as ComputerLaunchAppResult;
+  ): FakeEffect<ComputerLaunchAppResult> {
+    return Effect.gen({ self: this }, function* () {
+      // Recorded only when present, so every existing assertion on a plain
+      // launch keeps matching its two-argument shape.
+      if (options !== undefined) this.record("launchApp", app, args, options);
+      else this.record("launchApp", app, args);
+      yield* this.takeFailure("launchApp");
+      const hidden = options?.hidden === true;
+      const id = `fake-window-${this.currentWindows.length + 1}`;
+      const window: ComputerWindow = {
+        id,
+        title: app,
+        appName: app,
+        pid: this.nextPid++,
+        bounds: { x: 120, y: 80, width: 900, height: 700 },
+        // A hidden launch renders nothing and takes no focus: frontmost is
+        // unchanged, which the fake models by leaving every existing flag alone.
+        focused: false,
+        minimized: false,
+        visible: !hidden,
+      };
+      this.currentWindows = [...this.currentWindows, window];
+      this.currentRoot = defaultRoot(this.currentScreenSize, this.currentWindows);
+      this.emit({ type: "windows-changed", windows: this.currentWindows });
+      return { computerId: this.computerId, app, window } as ComputerLaunchAppResult;
+    });
   }
 
-  async listApps(): Promise<readonly ComputerApp[]> {
-    this.record("listApps");
-    this.throwIfFailed("listApps");
-    return this.currentApps.map((app) => ({ ...app }));
+  listApps(): FakeEffect<readonly ComputerApp[]> {
+    return Effect.gen({ self: this }, function* () {
+      this.record("listApps");
+      yield* this.takeFailure("listApps");
+      return this.currentApps.map((app) => ({ ...app }));
+    });
   }
 
   /**
@@ -423,186 +484,187 @@ export class FakeComputerBackend implements ComputerBackend {
    * the dispatched-but-unverified result a real backend reports when the move
    * did not land.
    */
-  async setWindowFrame(
-    windowId: string,
-    frame: ComputerRect,
-  ): Promise<ComputerBackendActionResult> {
-    this.record("setWindowFrame", windowId, frame);
-    this.throwIfFailed("setWindowFrame");
-    if (!Object.values(frame).every(Number.isFinite) || frame.width <= 0 || frame.height <= 0) {
-      throw new ComputerBackendError("Window frame needs finite geometry and positive size.");
-    }
-    const index = this.currentWindows.findIndex((window) => window.id === windowId);
-    if (index === -1) {
-      throw new ComputerBackendError(`No desktop window has id ${JSON.stringify(windowId)}.`);
-    }
-    if (!this.frameApplies) {
+  setWindowFrame(windowId: string, frame: ComputerRect): FakeEffect<ComputerBackendActionResult> {
+    return Effect.gen({ self: this }, function* () {
+      this.record("setWindowFrame", windowId, frame);
+      yield* this.takeFailure("setWindowFrame");
+      if (!Object.values(frame).every(Number.isFinite) || frame.width <= 0 || frame.height <= 0) {
+        return yield* refuse("Window frame needs finite geometry and positive size.");
+      }
+      const index = this.currentWindows.findIndex((window) => window.id === windowId);
+      if (index === -1) return yield* noWindow(windowId);
+      if (!this.frameApplies) {
+        return {
+          windowId,
+          deliveryPath: "fake-frame",
+          verified: "unconfirmed",
+          effect: "dispatched-unknown",
+        };
+      }
+      this.currentWindows[index] = { ...this.currentWindows[index]!, bounds: { ...frame } };
+      this.currentRoot = defaultRoot(this.currentScreenSize, this.currentWindows);
+      this.emit({ type: "windows-changed", windows: this.currentWindows });
       return {
         windowId,
         deliveryPath: "fake-frame",
-        verified: "unconfirmed",
-        effect: "dispatched-unknown",
+        verified: "confirmed",
+        effect: "verified",
       };
-    }
-    this.currentWindows[index] = { ...this.currentWindows[index]!, bounds: { ...frame } };
-    this.currentRoot = defaultRoot(this.currentScreenSize, this.currentWindows);
-    this.emit({ type: "windows-changed", windows: this.currentWindows });
-    return {
-      windowId,
-      deliveryPath: "fake-frame",
-      verified: "confirmed",
-      effect: "verified",
-    };
+    });
   }
 
-  async invokeMenu(
+  invokeMenu(
     target: ComputerMenuBackendTarget,
     path: readonly string[],
-  ): Promise<ComputerBackendActionResult> {
-    this.record("invokeMenu", target, path);
-    this.throwIfFailed("invokeMenu");
-    if ("windowId" in target) {
-      if (!this.currentWindows.some((window) => window.id === target.windowId)) {
-        throw new ComputerBackendError(
-          `No desktop window has id ${JSON.stringify(target.windowId)}.`,
-        );
+  ): FakeEffect<ComputerBackendActionResult> {
+    return Effect.gen({ self: this }, function* () {
+      this.record("invokeMenu", target, path);
+      yield* this.takeFailure("invokeMenu");
+      if ("windowId" in target) {
+        if (!this.currentWindows.some((window) => window.id === target.windowId)) {
+          return yield* noWindow(target.windowId);
+        }
+      } else if (!this.currentApps.some((app) => app.pid === target.pid && app.running)) {
+        // The windowless form proves the process, not a window — the same
+        // refusal the real driver raises for a pid that is not running.
+        return yield* refuse(`No running application has pid ${target.pid}.`);
       }
-    } else if (!this.currentApps.some((app) => app.pid === target.pid && app.running)) {
-      // The windowless form proves the process, not a window — the same
-      // refusal the real driver raises for a pid that is not running.
-      throw new ComputerBackendError(`No running application has pid ${target.pid}.`);
-    }
-    if (path.length === 0 || path.some((segment) => segment.trim().length === 0)) {
-      throw new ComputerBackendError("A menu path needs at least one non-empty title.");
-    }
-    const refusal = this.refusedMenuPaths.get(path.join(""));
-    if (refusal) throw refusal;
-    return {
-      ...("windowId" in target ? { windowId: target.windowId } : {}),
-      deliveryPath: "fake-menu",
-      verified: "confirmed",
-      effect: "verified",
-    };
+      if (path.length === 0 || path.some((segment) => segment.trim().length === 0)) {
+        return yield* refuse("A menu path needs at least one non-empty title.");
+      }
+      const refusal = this.refusedMenuPaths.get(path.join("\u0000"));
+      if (refusal) return yield* refusal;
+      return {
+        ...("windowId" in target ? { windowId: target.windowId } : {}),
+        deliveryPath: "fake-menu",
+        verified: "confirmed",
+        effect: "verified",
+      };
+    });
   }
 
-  async setWindowMinimized(
+  setWindowMinimized(
     windowId: string,
     minimized: boolean,
-  ): Promise<ComputerBackendActionResult> {
-    this.record("setWindowMinimized", windowId, minimized);
-    this.throwIfFailed("setWindowMinimized");
-    const index = this.currentWindows.findIndex((window) => window.id === windowId);
-    if (index === -1) {
-      throw new ComputerBackendError(`No desktop window has id ${JSON.stringify(windowId)}.`);
-    }
-    // A minimized window renders nothing; a restored one shows again. The
-    // window stays in the list either way — like the real driver, the fake
-    // keeps it addressable for semantic reads while it is off screen.
-    const window = this.currentWindows[index]!;
-    this.currentWindows[index] = { ...window, minimized, visible: !minimized };
-    this.currentRoot = defaultRoot(this.currentScreenSize, this.currentWindows);
-    this.emit({ type: "windows-changed", windows: this.currentWindows });
-    return {
-      windowId,
-      deliveryPath: "fake-minimize",
-      verified: "confirmed",
-      effect: "verified",
-    };
+  ): FakeEffect<ComputerBackendActionResult> {
+    return Effect.gen({ self: this }, function* () {
+      this.record("setWindowMinimized", windowId, minimized);
+      yield* this.takeFailure("setWindowMinimized");
+      const index = this.currentWindows.findIndex((window) => window.id === windowId);
+      if (index === -1) return yield* noWindow(windowId);
+      // A minimized window renders nothing; a restored one shows again. The
+      // window stays in the list either way — like the real driver, the fake
+      // keeps it addressable for semantic reads while it is off screen.
+      const window = this.currentWindows[index]!;
+      this.currentWindows[index] = { ...window, minimized, visible: !minimized };
+      this.currentRoot = defaultRoot(this.currentScreenSize, this.currentWindows);
+      this.emit({ type: "windows-changed", windows: this.currentWindows });
+      return {
+        windowId,
+        deliveryPath: "fake-minimize",
+        verified: "confirmed",
+        effect: "verified",
+      };
+    });
   }
 
-  async setAppVisibility(pid: number, hidden: boolean): Promise<ComputerBackendActionResult> {
-    this.record("setAppVisibility", pid, hidden);
-    this.throwIfFailed("setAppVisibility");
-    const app = this.currentApps.find((candidate) => candidate.pid === pid && candidate.running);
-    if (!app) {
-      throw new ComputerBackendError(`No running application has pid ${pid}.`);
-    }
-    // A hidden app renders none of its windows; unhiding restores whatever
-    // is not still minimized.
-    this.currentWindows = this.currentWindows.map((window) =>
-      window.pid === pid ? { ...window, visible: !hidden && !window.minimized } : window,
-    );
-    this.currentRoot = defaultRoot(this.currentScreenSize, this.currentWindows);
-    this.emit({ type: "windows-changed", windows: this.currentWindows });
-    return {
-      deliveryPath: "fake-app-visibility",
-      verified: "confirmed",
-      effect: "verified",
-    };
+  setAppVisibility(pid: number, hidden: boolean): FakeEffect<ComputerBackendActionResult> {
+    return Effect.gen({ self: this }, function* () {
+      this.record("setAppVisibility", pid, hidden);
+      yield* this.takeFailure("setAppVisibility");
+      if (!this.currentApps.some((candidate) => candidate.pid === pid && candidate.running)) {
+        return yield* refuse(`No running application has pid ${pid}.`);
+      }
+      // A hidden app renders none of its windows; unhiding restores whatever
+      // is not still minimized.
+      this.currentWindows = this.currentWindows.map((window) =>
+        window.pid === pid ? { ...window, visible: !hidden && !window.minimized } : window,
+      );
+      this.currentRoot = defaultRoot(this.currentScreenSize, this.currentWindows);
+      this.emit({ type: "windows-changed", windows: this.currentWindows });
+      return {
+        deliveryPath: "fake-app-visibility",
+        verified: "confirmed",
+        effect: "verified",
+      };
+    });
   }
 
-  async verifyState(
+  verifyState(
     windowId: string,
     expect: readonly Record<string, unknown>[],
-  ): Promise<ComputerVerifyStateResult> {
-    this.record("verifyState", windowId, expect);
-    this.throwIfFailed("verifyState");
-    if (!this.currentWindows.some((window) => window.id === windowId)) {
-      throw new ComputerBackendError(`No desktop window has id ${JSON.stringify(windowId)}.`);
-    }
-    return {
-      status: this.verifySatisfied ? "satisfied" : "unsatisfied",
-      stable: true,
-      samples: 1,
-      elapsedMs: 0,
-      predicates: expect.map((_, index) => ({
-        index,
-        status: this.verifySatisfied ? "satisfied" : "unsatisfied",
-        unknown_reason: null,
-        observed_json: "{}",
-      })),
-    };
+  ): FakeEffect<ComputerVerifyStateResult> {
+    return Effect.gen({ self: this }, function* () {
+      this.record("verifyState", windowId, expect);
+      yield* this.takeFailure("verifyState");
+      if (!this.currentWindows.some((window) => window.id === windowId)) {
+        return yield* noWindow(windowId);
+      }
+      const status = this.verifySatisfied ? "satisfied" : "unsatisfied";
+      return {
+        status,
+        stable: true,
+        samples: 1,
+        elapsedMs: 0,
+        predicates: expect.map((_, index) => ({
+          index,
+          status,
+          unknown_reason: null,
+          observed_json: "{}",
+        })),
+      };
+    });
   }
 
-  async zoomWindow(windowId: string, region: ComputerRect): Promise<ComputerZoomResult> {
-    this.record("zoomWindow", windowId, region);
-    this.throwIfFailed("zoomWindow");
-    const window = this.currentWindows.find((candidate) => candidate.id === windowId);
-    if (!window) {
-      throw new ComputerBackendError(`No desktop window has id ${JSON.stringify(windowId)}.`);
-    }
-    const bounds = requireWindowBounds(window, "a zoom capture");
-    if (
-      !Object.values(region).every(Number.isFinite) ||
-      region.width <= 0 ||
-      region.height <= 0 ||
-      region.x < 0 ||
-      region.y < 0 ||
-      region.x + region.width > bounds.width ||
-      region.y + region.height > bounds.height
-    ) {
-      throw new ComputerBackendError("The zoom region lies outside the target window.");
-    }
-    return {
-      mimeType: "image/jpeg",
-      width: 1,
-      height: 1,
-      sizeBytes: Buffer.from(FAKE_ZOOM_BASE64, "base64").byteLength,
-      bytesBase64: FAKE_ZOOM_BASE64,
-      windowId,
-      capturedAt: this.now(),
-    };
+  zoomWindow(windowId: string, region: ComputerRect): FakeEffect<ComputerZoomResult> {
+    return Effect.gen({ self: this }, function* () {
+      this.record("zoomWindow", windowId, region);
+      yield* this.takeFailure("zoomWindow");
+      const window = this.currentWindows.find((candidate) => candidate.id === windowId);
+      if (!window) return yield* noWindow(windowId);
+      const bounds = yield* requireWindowBounds(window, "a zoom capture");
+      if (
+        !Object.values(region).every(Number.isFinite) ||
+        region.width <= 0 ||
+        region.height <= 0 ||
+        region.x < 0 ||
+        region.y < 0 ||
+        region.x + region.width > bounds.width ||
+        region.y + region.height > bounds.height
+      ) {
+        return yield* refuse("The zoom region lies outside the target window.");
+      }
+      return {
+        mimeType: "image/jpeg" as const,
+        width: 1,
+        height: 1,
+        sizeBytes: Buffer.from(FAKE_ZOOM_BASE64, "base64").byteLength,
+        bytesBase64: FAKE_ZOOM_BASE64,
+        windowId,
+        capturedAt: yield* this.timestamp,
+      };
+    });
   }
 
-  async killApp(pid: number): Promise<ComputerBackendActionResult> {
-    this.record("killApp", pid);
-    this.throwIfFailed("killApp");
-    const owned = this.currentWindows.filter((window) => window.pid === pid);
-    if (owned.length === 0) {
-      throw new ComputerBackendError(`No desktop window belongs to pid ${pid}.`);
-    }
-    this.currentWindows = this.currentWindows.filter((window) => window.pid !== pid);
-    this.currentApps = this.currentApps.map((app) =>
-      app.pid === pid ? { ...app, running: false, active: false, pid: 0 } : app,
-    );
-    this.currentRoot = defaultRoot(this.currentScreenSize, this.currentWindows);
-    this.emit({ type: "windows-changed", windows: this.currentWindows });
-    return {
-      windowId: owned[0]!.id,
-      deliveryPath: "fake-kill",
-      verified: "confirmed",
-      effect: "verified",
-    };
+  killApp(pid: number): FakeEffect<ComputerBackendActionResult> {
+    return Effect.gen({ self: this }, function* () {
+      this.record("killApp", pid);
+      yield* this.takeFailure("killApp");
+      const owned = this.currentWindows.filter((window) => window.pid === pid);
+      if (owned.length === 0) return yield* refuse(`No desktop window belongs to pid ${pid}.`);
+      this.currentWindows = this.currentWindows.filter((window) => window.pid !== pid);
+      this.currentApps = this.currentApps.map((app) =>
+        app.pid === pid ? { ...app, running: false, active: false, pid: 0 } : app,
+      );
+      this.currentRoot = defaultRoot(this.currentScreenSize, this.currentWindows);
+      this.emit({ type: "windows-changed", windows: this.currentWindows });
+      return {
+        windowId: owned[0]!.id,
+        deliveryPath: "fake-kill",
+        verified: "confirmed",
+        effect: "verified",
+      };
+    });
   }
 
   /**
@@ -610,56 +672,56 @@ export class FakeComputerBackend implements ComputerBackend {
    * on-screen window subset appear there, so minimized and hidden windows are
    * filtered out rather than reported as a different "not visible" flag.
    */
-  async getAccessibilityTree(windowId?: string): Promise<{
+  getAccessibilityTree(windowId?: string): FakeEffect<{
     readonly apps: readonly ComputerAccessibilityTreeApp[];
     readonly windows: readonly ComputerAccessibilityTreeWindow[];
     readonly truncated: boolean;
   }> {
-    if (windowId === undefined) this.record("getAccessibilityTree");
-    else this.record("getAccessibilityTree", windowId);
-    this.throwIfFailed("getAccessibilityTree");
-    let scopedPid: number | undefined;
-    if (windowId !== undefined) {
-      const window = this.currentWindows.find((candidate) => candidate.id === windowId);
-      if (!window) {
-        throw new ComputerBackendError(`No desktop window has id ${JSON.stringify(windowId)}.`);
+    return Effect.gen({ self: this }, function* () {
+      if (windowId === undefined) this.record("getAccessibilityTree");
+      else this.record("getAccessibilityTree", windowId);
+      yield* this.takeFailure("getAccessibilityTree");
+      let scopedPid: number | undefined;
+      if (windowId !== undefined) {
+        const window = this.currentWindows.find((candidate) => candidate.id === windowId);
+        if (!window) return yield* noWindow(windowId);
+        scopedPid = window.pid;
       }
-      scopedPid = window.pid;
-    }
-    const apps = this.currentApps
-      .filter(
-        (app) => app.running && app.pid > 0 && (scopedPid === undefined || app.pid === scopedPid),
-      )
-      .map(
-        (app): ComputerAccessibilityTreeApp => ({
-          pid: app.pid,
-          name: app.name,
-          ...(app.bundleId ? { bundleId: app.bundleId } : {}),
-        }),
-      )
-      .slice(0, 1_024);
-    const windows = this.currentWindows
-      .filter(
-        (window) =>
-          window.visible &&
-          !window.minimized &&
-          window.pid !== undefined &&
-          window.pid > 0 &&
-          (scopedPid === undefined || window.pid === scopedPid),
-      )
-      .map(
-        (window): ComputerAccessibilityTreeWindow => ({
-          id: window.id,
-          pid: window.pid!,
-          ...(window.appName ? { appName: window.appName } : {}),
-          title: window.title,
-          ...(window.bounds ? { bounds: { ...window.bounds } } : {}),
-          onScreen: true,
-          ...(window.stackingIndex !== undefined ? { zIndex: window.stackingIndex } : {}),
-        }),
-      )
-      .slice(0, 512);
-    return { apps, windows, truncated: false };
+      const apps = this.currentApps
+        .filter(
+          (app) => app.running && app.pid > 0 && (scopedPid === undefined || app.pid === scopedPid),
+        )
+        .map(
+          (app): ComputerAccessibilityTreeApp => ({
+            pid: app.pid,
+            name: app.name,
+            ...(app.bundleId ? { bundleId: app.bundleId } : {}),
+          }),
+        )
+        .slice(0, 1_024);
+      const windows = this.currentWindows
+        .filter(
+          (window) =>
+            window.visible &&
+            !window.minimized &&
+            window.pid !== undefined &&
+            window.pid > 0 &&
+            (scopedPid === undefined || window.pid === scopedPid),
+        )
+        .map(
+          (window): ComputerAccessibilityTreeWindow => ({
+            id: window.id,
+            pid: window.pid!,
+            ...(window.appName ? { appName: window.appName } : {}),
+            title: window.title,
+            ...(window.bounds ? { bounds: { ...window.bounds } } : {}),
+            onScreen: true,
+            ...(window.stackingIndex !== undefined ? { zIndex: window.stackingIndex } : {}),
+          }),
+        )
+        .slice(0, 512);
+      return { apps, windows, truncated: false };
+    });
   }
 
   /**
@@ -667,36 +729,36 @@ export class FakeComputerBackend implements ComputerBackend {
    * `moveCursor` followed by this read round-trips the way the real driver
    * does.
    */
-  async getCursorPosition(
+  getCursorPosition(
     windowId?: string,
-  ): Promise<Omit<ComputerCursorPosition, "computerId" | "availability">> {
-    if (windowId === undefined) this.record("getCursorPosition");
-    else this.record("getCursorPosition", windowId);
-    this.throwIfFailed("getCursorPosition");
-    const window =
-      windowId === undefined
-        ? undefined
-        : this.currentWindows.find((candidate) => candidate.id === windowId);
-    if (windowId !== undefined && !window) {
-      throw new ComputerBackendError(`No desktop window has id ${JSON.stringify(windowId)}.`);
-    }
-    const { x, y } = this.cursorPosition;
-    const bounds = window?.bounds;
-    return {
-      x,
-      y,
-      capturedAt: this.now(),
-      ...(window ? { windowId: window.id } : {}),
-      ...(bounds
-        ? {
-            insideWindow:
-              x >= bounds.x &&
-              x < bounds.x + bounds.width &&
-              y >= bounds.y &&
-              y < bounds.y + bounds.height,
-          }
-        : {}),
-    };
+  ): FakeEffect<Omit<ComputerCursorPosition, "computerId" | "availability">> {
+    return Effect.gen({ self: this }, function* () {
+      if (windowId === undefined) this.record("getCursorPosition");
+      else this.record("getCursorPosition", windowId);
+      yield* this.takeFailure("getCursorPosition");
+      const window =
+        windowId === undefined
+          ? undefined
+          : this.currentWindows.find((candidate) => candidate.id === windowId);
+      if (windowId !== undefined && !window) return yield* noWindow(windowId);
+      const { x, y } = this.cursorPosition;
+      const bounds = window?.bounds;
+      return {
+        x,
+        y,
+        capturedAt: yield* this.timestamp,
+        ...(window ? { windowId: window.id } : {}),
+        ...(bounds
+          ? {
+              insideWindow:
+                x >= bounds.x &&
+                x < bounds.x + bounds.width &&
+                y >= bounds.y &&
+                y < bounds.y + bounds.height,
+            }
+          : {}),
+      };
+    });
   }
 
   /** Places the fake cursor directly, for tests that need a known point. */
@@ -710,152 +772,174 @@ export class FakeComputerBackend implements ComputerBackend {
   }
 
   /** Configures a persistent refusal for one menu path, like a disabled item. */
-  refuseMenuPath(path: readonly string[], error: Error): void {
-    this.refusedMenuPaths.set(path.join(""), error);
+  refuseMenuPath(path: readonly string[], error: ComputerOperationError): void {
+    this.refusedMenuPaths.set(path.join("\u0000"), error);
   }
 
   setVerifySatisfied(satisfied: boolean): void {
     this.verifySatisfied = satisfied;
   }
 
-  async raiseWindow(windowId: string): Promise<void> {
-    this.record("raiseWindow", windowId);
-    this.throwIfFailed("raiseWindow");
+  raiseWindow(windowId: string): FakeEffect<void> {
+    return Effect.suspend(() => {
+      this.record("raiseWindow", windowId);
+      return this.takeFailure("raiseWindow");
+    });
   }
 
-  async focusWindow(windowId: string): Promise<void> {
-    this.record("focusWindow", windowId);
-    this.throwIfFailed("focusWindow");
-    // The pinned target is the only window that
-    // reports focused, so clearing and re-pinning behave like the real seat.
-    this.currentWindows = this.currentWindows.map((item) => ({
-      ...item,
-      focused: item.id === windowId,
-    }));
+  focusWindow(windowId: string): FakeEffect<void> {
+    return Effect.gen({ self: this }, function* () {
+      this.record("focusWindow", windowId);
+      yield* this.takeFailure("focusWindow");
+      // The pinned target is the only window that reports focused, so
+      // clearing and re-pinning behave like the real seat.
+      this.currentWindows = this.currentWindows.map((item) => ({
+        ...item,
+        focused: item.id === windowId,
+      }));
+    });
   }
 
-  async clearFocusWindow(): Promise<void> {
-    this.record("clearFocusWindow");
-    this.throwIfFailed("clearFocusWindow");
-    // No pinned target means no window reports
-    // focused — the blind spot behind the untargeted-scroll regression.
-    this.currentWindows = this.currentWindows.map((item) => ({ ...item, focused: false }));
+  clearFocusWindow(): FakeEffect<void> {
+    return Effect.gen({ self: this }, function* () {
+      this.record("clearFocusWindow");
+      yield* this.takeFailure("clearFocusWindow");
+      // No pinned target means no window reports focused — the blind spot
+      // behind the untargeted-scroll regression.
+      this.currentWindows = this.currentWindows.map((item) => ({ ...item, focused: false }));
+    });
   }
 
-  async click(
+  click(
     point: ComputerPoint,
     _windowId?: string,
     modifiers?: readonly ComputerInputModifier[],
-  ): Promise<ComputerBackendActionResult> {
-    return await this.pointerAction("click", point, modifiers);
+  ): FakeEffect<ComputerBackendActionResult> {
+    return this.pointerAction("click", point, modifiers);
   }
 
-  async doubleClick(
+  doubleClick(
     point: ComputerPoint,
     _windowId?: string,
     modifiers?: readonly ComputerInputModifier[],
-  ): Promise<ComputerBackendActionResult> {
-    return await this.pointerAction("doubleClick", point, modifiers);
+  ): FakeEffect<ComputerBackendActionResult> {
+    return this.pointerAction("doubleClick", point, modifiers);
   }
 
-  async tripleClick(
+  tripleClick(
     point: ComputerPoint,
     _windowId?: string,
     modifiers?: readonly ComputerInputModifier[],
-  ): Promise<ComputerBackendActionResult> {
-    return await this.pointerAction("tripleClick", point, modifiers);
+  ): FakeEffect<ComputerBackendActionResult> {
+    return this.pointerAction("tripleClick", point, modifiers);
   }
 
-  async rightClick(
+  rightClick(
     point: ComputerPoint,
     _windowId?: string,
     modifiers?: readonly ComputerInputModifier[],
-  ): Promise<ComputerBackendActionResult> {
-    return await this.pointerAction("rightClick", point, modifiers);
+  ): FakeEffect<ComputerBackendActionResult> {
+    return this.pointerAction("rightClick", point, modifiers);
   }
 
-  async moveCursor(point: ComputerPoint): Promise<ComputerBackendActionResult> {
-    return await this.pointerAction("moveCursor", point);
+  moveCursor(point: ComputerPoint): FakeEffect<ComputerBackendActionResult> {
+    return this.pointerAction("moveCursor", point);
   }
 
-  async drag(
+  drag(
     from: ComputerPoint,
     to: ComputerPoint,
     durationMs: number,
     _windowId?: string,
-  ): Promise<ComputerBackendActionResult> {
-    this.record("drag", from, to, durationMs);
-    this.throwIfFailed("drag");
-    this.validatePoint(from);
-    this.validatePoint(to);
-    this.cursorPosition = { ...to };
-    return { point: to };
+  ): FakeEffect<ComputerBackendActionResult> {
+    return Effect.gen({ self: this }, function* () {
+      this.record("drag", from, to, durationMs);
+      yield* this.takeFailure("drag");
+      yield* this.validatePoint(from);
+      yield* this.validatePoint(to);
+      this.cursorPosition = { ...to };
+      return { point: to };
+    });
   }
 
-  async scroll(
+  scroll(
     point: ComputerPoint | null,
     deltaX: number,
     deltaY: number,
     _windowId?: string,
     modifiers?: readonly ComputerInputModifier[],
-  ): Promise<ComputerBackendActionResult> {
-    // Recorded only when present, so every existing assertion on a plain
-    // scroll keeps matching its three-argument shape.
-    if (modifiers && modifiers.length > 0) this.record("scroll", point, deltaX, deltaY, modifiers);
-    else this.record("scroll", point, deltaX, deltaY);
-    this.throwIfFailed("scroll");
-    if (point) this.validatePoint(point);
-    return point ? { point } : {};
+  ): FakeEffect<ComputerBackendActionResult> {
+    return Effect.gen({ self: this }, function* () {
+      // Recorded only when present, so every existing assertion on a plain
+      // scroll keeps matching its three-argument shape.
+      if (modifiers && modifiers.length > 0)
+        this.record("scroll", point, deltaX, deltaY, modifiers);
+      else this.record("scroll", point, deltaX, deltaY);
+      yield* this.takeFailure("scroll");
+      if (point) yield* this.validatePoint(point);
+      return point ? { point } : {};
+    });
   }
 
-  async typeText(text: string): Promise<ComputerBackendActionResult> {
-    this.record("typeText", text);
-    this.throwIfFailed("typeText");
-    return { value: text };
+  typeText(text: string): FakeEffect<ComputerBackendActionResult> {
+    return Effect.gen({ self: this }, function* () {
+      this.record("typeText", text);
+      yield* this.takeFailure("typeText");
+      return { value: text };
+    });
   }
 
-  async pressKey(key: string): Promise<ComputerBackendActionResult> {
-    this.record("pressKey", key);
-    this.throwIfFailed("pressKey");
-    return {};
+  pressKey(key: string): FakeEffect<ComputerBackendActionResult> {
+    return Effect.gen({ self: this }, function* () {
+      this.record("pressKey", key);
+      yield* this.takeFailure("pressKey");
+      return {};
+    });
   }
 
-  async hotkey(keys: readonly string[]): Promise<ComputerBackendActionResult> {
-    this.record("hotkey", keys);
-    this.throwIfFailed("hotkey");
-    return {};
+  hotkey(keys: readonly string[]): FakeEffect<ComputerBackendActionResult> {
+    return Effect.gen({ self: this }, function* () {
+      this.record("hotkey", keys);
+      yield* this.takeFailure("hotkey");
+      return {};
+    });
   }
 
   /** One in-memory string stands in for the shared system clipboard. */
-  async readClipboard(): Promise<string> {
-    this.record("readClipboard");
-    this.throwIfFailed("readClipboard");
-    return this.clipboardText;
+  readClipboard(): FakeEffect<string> {
+    return Effect.gen({ self: this }, function* () {
+      this.record("readClipboard");
+      yield* this.takeFailure("readClipboard");
+      return this.clipboardText;
+    });
   }
 
-  async writeClipboard(text: string): Promise<void> {
-    this.record("writeClipboard", text);
-    this.throwIfFailed("writeClipboard");
-    this.clipboardText = text;
+  writeClipboard(text: string): FakeEffect<void> {
+    return Effect.gen({ self: this }, function* () {
+      this.record("writeClipboard", text);
+      yield* this.takeFailure("writeClipboard");
+      this.clipboardText = text;
+    });
   }
 
-  async setValue(
-    target: ComputerResolvedTarget,
-    value: string,
-  ): Promise<ComputerBackendActionResult> {
-    this.record("setValue", target, value);
-    this.throwIfFailed("setValue");
-    this.currentRoot = replaceNodeValue(this.currentRoot, target.node, value);
-    return { point: target.point, value };
+  setValue(target: ComputerResolvedTarget, value: string): FakeEffect<ComputerBackendActionResult> {
+    return Effect.gen({ self: this }, function* () {
+      this.record("setValue", target, value);
+      yield* this.takeFailure("setValue");
+      this.currentRoot = replaceNodeValue(this.currentRoot, target.node, value);
+      return { point: target.point, value };
+    });
   }
 
-  async performAction(
+  performAction(
     target: ComputerResolvedTarget,
     action: string,
-  ): Promise<ComputerBackendActionResult> {
-    this.record("performAction", target, action);
-    this.throwIfFailed("performAction");
-    return { point: target.point, value: action };
+  ): FakeEffect<ComputerBackendActionResult> {
+    return Effect.gen({ self: this }, function* () {
+      this.record("performAction", target, action);
+      yield* this.takeFailure("performAction");
+      return { point: target.point, value: action };
+    });
   }
 
   /**
@@ -863,63 +947,84 @@ export class FakeComputerBackend implements ComputerBackend {
    * "read-back" is exactly the substring the requested range covers, which
    * is the honest emulation of a driver that confirmed the write.
    */
-  async selectText(
+  selectText(
     target: ComputerResolvedTarget,
     range: ComputerTextRange,
-  ): Promise<ComputerBackendActionResult> {
-    this.record("selectText", target, range);
-    this.throwIfFailed("selectText");
-    return {
-      point: target.point,
-      value: (target.node.value ?? "").slice(range.start, range.start + range.length),
-    };
+  ): FakeEffect<ComputerBackendActionResult> {
+    return Effect.gen({ self: this }, function* () {
+      this.record("selectText", target, range);
+      yield* this.takeFailure("selectText");
+      return {
+        point: target.point,
+        value: (target.node.value ?? "").slice(range.start, range.start + range.length),
+      };
+    });
   }
 
-  onEvent(listener: ComputerBackendEventListener): () => void {
-    this.eventListeners.add(listener);
-    return () => this.eventListeners.delete(listener);
+  /** Starts publishing frames on `events`, opening with codec config and a keyframe. */
+  attachStream(): FakeEffect<void> {
+    return Effect.gen({ self: this }, function* () {
+      this.record("attachStream");
+      yield* this.takeFailure("attachStream");
+      this.streamAttached = true;
+      yield* this.emitFrame(true, true);
+      yield* this.emitFrame(true, false);
+    });
   }
 
-  async attachStream(listener: ComputerFrameListener): Promise<void> {
-    this.record("attachStream");
-    this.throwIfFailed("attachStream");
-    this.frameListener = listener;
-    this.emitFrame(true, true);
-    this.emitFrame(true, false);
+  detachStream(): FakeEffect<void> {
+    return Effect.gen({ self: this }, function* () {
+      this.record("detachStream");
+      yield* this.takeFailure("detachStream");
+      this.streamAttached = false;
+    });
   }
 
-  async detachStream(): Promise<void> {
-    this.record("detachStream");
-    this.throwIfFailed("detachStream");
-    this.frameListener = null;
+  requestKeyframe(): FakeEffect<void> {
+    return Effect.gen({ self: this }, function* () {
+      this.record("requestKeyframe");
+      yield* this.takeFailure("requestKeyframe");
+      if (!this.streamAttached) return;
+      yield* this.emitFrame(true, true);
+      yield* this.emitFrame(true, false);
+    });
   }
 
-  async requestKeyframe(): Promise<void> {
-    this.record("requestKeyframe");
-    this.throwIfFailed("requestKeyframe");
-    if (this.frameListener) {
-      this.emitFrame(true, true);
-      this.emitFrame(true, false);
-    }
+  /** Ends `events` for every subscriber; later emits go nowhere. */
+  dispose(): Effect.Effect<void> {
+    return Effect.suspend(() => {
+      this.record("dispose");
+      this.disposed = true;
+      this.streamAttached = false;
+      return PubSub.shutdown(this.pubsub);
+    });
   }
 
-  async dispose(): Promise<void> {
-    this.record("dispose");
-    this.disposed = true;
-    this.frameListener = null;
-    this.eventListeners.clear();
-  }
-
-  emitFrame(keyframe = false, codecConfig = false, data = Uint8Array.of(0x01)): void {
-    if (!this.frameListener || this.disposed) return;
-    const frame: ComputerStreamFrame = {
-      sequence: this.nextSequence++,
-      timestampMs: Date.now(),
-      keyframe,
-      codecConfig,
-      data,
-    };
-    this.frameListener(frame);
+  /**
+   * Publishes one frame while a stream is attached; a no-op otherwise. An
+   * Effect because the frame's timestamp is read from the Effect clock.
+   */
+  emitFrame(
+    keyframe = false,
+    codecConfig = false,
+    data = Uint8Array.of(0x01),
+    mimeType?: ComputerStreamFrame["mimeType"],
+  ): Effect.Effect<void> {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.streamAttached || this.disposed) return;
+      const timestampMs = yield* Clock.currentTimeMillis;
+      this.emit({
+        type: "frame",
+        frame: {
+          sequence: this.nextSequence++,
+          timestampMs,
+          keyframe,
+          codecConfig,
+          data,
+          ...(mimeType !== undefined ? { mimeType } : {}),
+        },
+      });
+    });
   }
 
   emitWindowsChanged(windows: readonly ComputerWindow[]): void {
@@ -943,6 +1048,16 @@ export class FakeComputerBackend implements ComputerBackend {
     this.emit({ type: "desktop-interrupted", pauses });
   }
 
+  /** Reports a changed capability set, as a reconnect or a slot swap does. */
+  emitCapabilitiesChanged(): void {
+    this.emit({ type: "capabilities-changed", capabilities: this.currentCapabilities });
+  }
+
+  /** Reports that the desktop this backend drove has ended for good. */
+  emitDesktopGone(message = "The fake desktop exited."): void {
+    this.emit({ type: "desktop-gone", message });
+  }
+
   setAvailability(availability: ComputerAvailability): void {
     this.currentAvailability = availability;
   }
@@ -951,7 +1066,11 @@ export class FakeComputerBackend implements ComputerBackend {
     this.currentScreenSize = screenSize;
   }
 
-  failNext(method: string, error: Error = new ComputerBackendError(`${method} failed`)): void {
+  /** Fails the next call of `method` (`"browser.<tool>"` for browser calls) with `error`. */
+  failNext(
+    method: string,
+    error: ComputerOperationError = new ComputerBackendError({ message: `${method} failed` }),
+  ): void {
     this.failures.set(method, error);
   }
 
@@ -978,14 +1097,10 @@ export class FakeComputerBackend implements ComputerBackend {
     return [...this.liveShields];
   }
 
-  private captureRect(request: ComputerCaptureRequest): ComputerRect {
-    if (request.kind !== "window") return request.region;
+  private captureRect(request: ComputerCaptureRequest): FakeEffect<ComputerRect> {
+    if (request.kind !== "window") return Effect.succeed(request.region);
     const window = this.currentWindows.find((candidate) => candidate.id === request.windowId);
-    if (!window) {
-      throw new ComputerBackendError(
-        `No desktop window has id ${JSON.stringify(request.windowId)}.`,
-      );
-    }
+    if (!window) return noWindow(request.windowId);
     return requireWindowBounds(window, "a window screenshot");
   }
 
@@ -1003,46 +1118,54 @@ export class FakeComputerBackend implements ComputerBackend {
    * was captured, and the scale is the screenshot's pixels per logical pixel
    * after `maxDimension` downscaling.
    */
-  private screenshotOfRegion(region: ComputerRect, maxDimension?: number): ComputerScreenshot {
-    const limit = maxDimension ?? DEFAULT_COMPUTER_CAPTURE_MAX_DIMENSION;
-    const scale = Math.min(1, limit / Math.max(region.width, region.height));
-    const bytesBase64 = this.queuedScreenshots.shift() ?? FAKE_SCREENSHOT_BASE64;
-    return {
-      mimeType: "image/png",
-      width: Math.max(1, Math.round(region.width * scale)),
-      height: Math.max(1, Math.round(region.height * scale)),
-      sizeBytes: Buffer.from(bytesBase64, "base64").byteLength,
-      bytesBase64,
-      region,
-      scale,
-      capturedAt: this.now(),
-    };
+  private screenshotOfRegion(
+    region: ComputerRect,
+    maxDimension?: number,
+  ): Effect.Effect<ComputerScreenshot> {
+    return Effect.gen({ self: this }, function* () {
+      const limit = maxDimension ?? DEFAULT_COMPUTER_CAPTURE_MAX_DIMENSION;
+      const scale = Math.min(1, limit / Math.max(region.width, region.height));
+      const bytesBase64 = this.queuedScreenshots.shift() ?? FAKE_SCREENSHOT_BASE64;
+      return {
+        mimeType: "image/png" as const,
+        width: Math.max(1, Math.round(region.width * scale)),
+        height: Math.max(1, Math.round(region.height * scale)),
+        sizeBytes: Buffer.from(bytesBase64, "base64").byteLength,
+        bytesBase64,
+        region,
+        scale,
+        capturedAt: yield* this.timestamp,
+      };
+    });
   }
 
-  private async pointerAction(
+  private pointerAction(
     method: "click" | "doubleClick" | "tripleClick" | "rightClick" | "moveCursor",
     point: ComputerPoint,
     modifiers?: readonly ComputerInputModifier[],
-  ): Promise<ComputerBackendActionResult> {
-    // Recorded only when present, so every existing assertion on a plain
-    // pointer call keeps matching its two-argument shape.
-    if (modifiers && modifiers.length > 0) this.record(method, point, modifiers);
-    else this.record(method, point);
-    this.throwIfFailed(method);
-    this.validatePoint(point);
-    this.cursorPosition = { ...point };
-    return { point };
+  ): FakeEffect<ComputerBackendActionResult> {
+    return Effect.gen({ self: this }, function* () {
+      // Recorded only when present, so every existing assertion on a plain
+      // pointer call keeps matching its two-argument shape.
+      if (modifiers && modifiers.length > 0) this.record(method, point, modifiers);
+      else this.record(method, point);
+      yield* this.takeFailure(method);
+      yield* this.validatePoint(point);
+      this.cursorPosition = { ...point };
+      return { point };
+    });
   }
 
-  private validatePoint(point: ComputerPoint): void {
+  private validatePoint(point: ComputerPoint): FakeEffect<void> {
     if (
       point.x < 0 ||
       point.y < 0 ||
       point.x >= this.currentScreenSize.width ||
       point.y >= this.currentScreenSize.height
     ) {
-      throw new ComputerBackendError(`Point (${point.x}, ${point.y}) is outside the fake screen`);
+      return refuse(`Point (${point.x}, ${point.y}) is outside the fake screen`);
     }
+    return Effect.void;
   }
 
   private record(method: string, ...args: readonly unknown[]): void {
@@ -1052,21 +1175,18 @@ export class FakeComputerBackend implements ComputerBackend {
     }
   }
 
-  private throwIfFailed(method: string): void {
-    const error = this.failures.get(method);
-    if (!error) return;
-    this.failures.delete(method);
-    throw error;
+  /** Consumes the failure `failNext` armed for `method`, if any. */
+  private takeFailure(method: string): FakeEffect<void> {
+    return Effect.suspend(() => {
+      const error = this.failures.get(method);
+      if (!error) return Effect.void;
+      this.failures.delete(method);
+      return Effect.fail(error);
+    });
   }
 
   private emit(event: ComputerBackendEvent): void {
-    for (const listener of this.eventListeners) {
-      try {
-        listener(event);
-      } catch {
-        // One observer cannot prevent the backend's remaining observers.
-      }
-    }
+    PubSub.publishUnsafe(this.pubsub, event);
   }
 }
 

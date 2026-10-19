@@ -1,19 +1,45 @@
-import { Schema, SchemaIssue } from "effect";
+import * as Schema from "effect/Schema";
+import * as SchemaIssue from "effect/SchemaIssue";
+
+function summarizeSchemaIssue(issue: SchemaIssue.Issue): string {
+  switch (issue._tag) {
+    case "Filter":
+    case "Encoding":
+    case "Pointer":
+      return `${issue._tag}(${summarizeSchemaIssue(issue.issue)})`;
+    case "Composite":
+    case "AnyOf":
+      return `${issue._tag}(${issue.issues.map(summarizeSchemaIssue).join(",")})`;
+    default:
+      return issue._tag;
+  }
+}
 
 // ===============================
 // Core Persistence Errors
 // ===============================
 
+export const PersistenceErrorCorrelation = Schema.Union([
+  Schema.Struct({ sessionId: Schema.String }),
+  Schema.Struct({ currentSessionId: Schema.String }),
+  Schema.Struct({ pairingLinkId: Schema.String }),
+  Schema.Struct({ threadId: Schema.String }),
+]);
+export type PersistenceErrorCorrelation = typeof PersistenceErrorCorrelation.Type;
+
 export class PersistenceSqlError extends Schema.TaggedErrorClass<PersistenceSqlError>()(
   "PersistenceSqlError",
   {
     operation: Schema.String,
-    detail: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    detail: Schema.optional(Schema.String),
+    correlation: Schema.optional(PersistenceErrorCorrelation),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
-    return `SQL error in ${this.operation}: ${this.detail}`;
+    return this.detail === undefined
+      ? `SQL error in ${this.operation}`
+      : `SQL error in ${this.operation}: ${this.detail}`;
   }
 }
 
@@ -22,125 +48,59 @@ export class PersistenceDecodeError extends Schema.TaggedErrorClass<PersistenceD
   {
     operation: Schema.String,
     issue: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    correlation: Schema.optional(PersistenceErrorCorrelation),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {
+  static fromSchemaError(
+    operation: string,
+    cause: Schema.SchemaError,
+    correlation?: PersistenceErrorCorrelation,
+  ): PersistenceDecodeError {
+    return new PersistenceDecodeError({
+      operation,
+      issue: summarizeSchemaIssue(cause.issue),
+      ...(correlation === undefined ? {} : { correlation }),
+      cause,
+    });
+  }
+
   override get message(): string {
     return `Decode error in ${this.operation}: ${this.issue}`;
   }
 }
+const isPersistenceSqlError = Schema.is(PersistenceSqlError);
+const isPersistenceDecodeError = Schema.is(PersistenceDecodeError);
 
+// Kept for orchestration/projection call sites, which are being revamped separately.
 export function toPersistenceSqlError(operation: string) {
-  return (cause: unknown): PersistenceSqlError => {
-    const messages: string[] = [];
-    const seen = new Set<unknown>();
-    let current: unknown = cause;
-    while (current && typeof current === "object" && !seen.has(current)) {
-      seen.add(current);
-      if (current instanceof Error && current.message && !messages.includes(current.message)) {
-        messages.push(current.message);
-      }
-      current = "cause" in current ? (current as { readonly cause?: unknown }).cause : undefined;
-    }
-    const causeDetail = messages.length > 0 ? ` (${messages.join(": ")})` : "";
-    return new PersistenceSqlError({
+  return (cause: unknown): PersistenceSqlError =>
+    new PersistenceSqlError({
       operation,
-      detail: `Failed to execute ${operation}${causeDetail}`,
+      detail: `Failed to execute ${operation}`,
       cause,
     });
-  };
 }
 
+// Kept for orchestration/projection call sites, which are being revamped separately.
 export function toPersistenceDecodeError(operation: string) {
-  return (error: Schema.SchemaError): PersistenceDecodeError =>
-    new PersistenceDecodeError({
-      operation,
-      issue: SchemaIssue.makeFormatterDefault()(error.issue),
-      cause: error,
-    });
-}
-
-export function toPersistenceSqlOrDecodeError(
-  sqlOperation: string,
-  decodeOperation: string,
-): (cause: unknown) => PersistenceSqlError | PersistenceDecodeError {
-  return (cause) =>
-    Schema.isSchemaError(cause)
-      ? toPersistenceDecodeError(decodeOperation)(cause)
-      : toPersistenceSqlError(sqlOperation)(cause);
-}
-
-export function toPersistenceDecodeCauseError(operation: string) {
-  return (cause: unknown): PersistenceDecodeError =>
-    new PersistenceDecodeError({
-      operation,
-      issue: `Failed to execute ${operation}`,
-      cause,
-    });
+  return (cause: Schema.SchemaError): PersistenceDecodeError =>
+    PersistenceDecodeError.fromSchemaError(operation, cause);
 }
 
 /**
- * The projection cursor table is non-empty but a projector the snapshot
- * sequence depends on has no cursor row. The snapshot fence is unknowable in
- * this state: reporting any number would either serve stale data as fresh or
- * demand an unsatisfiable resnapshot forever. Reachable only through an
- * interrupted projection rebuild (repair/restore), so it names the missing
- * cursors and points at the recovery path instead of guessing.
+ * One mapper for call sites that both encode a request and decode rows, where the failure could
+ * come from either side and the driver error and the schema error arrive on the same channel.
  */
-export class ProjectionStateIncompleteError extends Schema.TaggedErrorClass<ProjectionStateIncompleteError>()(
-  "ProjectionStateIncompleteError",
-  {
-    missingProjectors: Schema.Array(Schema.String),
-    knownProjectors: Schema.Array(Schema.String),
-  },
-) {
-  override get message(): string {
-    return (
-      `Projection state is incomplete: missing cursor rows for ${this.missingProjectors.join(", ")} ` +
-      `(present: ${this.knownProjectors.join(", ") || "none"}). ` +
-      "The snapshot sequence cannot be derived; restart the server so the projection " +
-      "bootstrap can rebuild the missing cursors, or run repair local state."
-    );
-  }
+export function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: string) {
+  return (cause: unknown): PersistenceSqlError | PersistenceDecodeError =>
+    Schema.isSchemaError(cause)
+      ? PersistenceDecodeError.fromSchemaError(decodeOperation, cause)
+      : toPersistenceSqlError(sqlOperation)(cause);
 }
 
 export const isPersistenceError = (u: unknown) =>
-  Schema.is(PersistenceSqlError)(u) ||
-  Schema.is(PersistenceDecodeError)(u) ||
-  Schema.is(ProjectionStateIncompleteError)(u);
-
-export class MigrationLineageError extends Schema.TaggedErrorClass<MigrationLineageError>()(
-  "MigrationLineageError",
-  {
-    firstDivergedId: Schema.Number,
-    expectedName: Schema.String,
-    recordedName: Schema.String,
-  },
-) {
-  override get message(): string {
-    return (
-      `Migration tracker does not match any known lineage: migration ${this.firstDivergedId} ` +
-      `is recorded as "${this.recordedName}" but Synara expects "${this.expectedName}". ` +
-      `Refusing to run migrations against an unrecognized database.`
-    );
-  }
-}
-
-export class MigrationSchemaTooNewError extends Schema.TaggedErrorClass<MigrationSchemaTooNewError>()(
-  "MigrationSchemaTooNewError",
-  {
-    databaseMigrationId: Schema.Number,
-    latestSupportedMigrationId: Schema.Number,
-  },
-) {
-  override get message(): string {
-    return (
-      `Database schema migration ${this.databaseMigrationId} is newer than this Synara build ` +
-      `(latest supported migration: ${this.latestSupportedMigrationId}). ` +
-      "Refusing writable startup; upgrade Synara or restore a compatible database backup."
-    );
-  }
-}
+  isPersistenceSqlError(u) || isPersistenceDecodeError(u);
 
 // ===============================
 // Provider Session Repository Errors
@@ -151,7 +111,7 @@ export class ProviderSessionRepositoryValidationError extends Schema.TaggedError
   {
     operation: Schema.String,
     issue: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
@@ -164,7 +124,7 @@ export class ProviderSessionRepositoryPersistenceError extends Schema.TaggedErro
   {
     operation: Schema.String,
     detail: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
@@ -183,14 +143,8 @@ export type OrchestrationCommandReceiptRepositoryError =
   | PersistenceDecodeError;
 
 export type ProviderSessionRuntimeRepositoryError = PersistenceSqlError | PersistenceDecodeError;
-
-export type ProjectionRepositoryError =
-  | PersistenceSqlError
-  | PersistenceDecodeError
-  | ProjectionStateIncompleteError;
-
 export type AuthPairingLinkRepositoryError = PersistenceSqlError | PersistenceDecodeError;
-
 export type AuthSessionRepositoryError = PersistenceSqlError | PersistenceDecodeError;
 
-export type AutomationRepositoryError = PersistenceSqlError | PersistenceDecodeError;
+export type ProjectionRepositoryError = PersistenceSqlError | PersistenceDecodeError;
+export type IssueTrackerRepositoryError = PersistenceSqlError | PersistenceDecodeError;

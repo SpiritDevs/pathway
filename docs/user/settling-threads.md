@@ -1,0 +1,24 @@
+# Settling threads
+
+Settle a thread when you are finished with it and want to move it out of your active list.
+
+On iOS, thread actions update the list immediately while the environment saves the change. This includes settling, reopening, snoozing, waking, pinning, archiving, restoring, deleting, and renaming. If an action fails, the list restores the server state and shows an error or any required confirmation.
+
+An idle thread with linked pull requests settles automatically when all of them are merged. An open or closed-without-merging PR, or a status that cannot be determined, prevents automatic settlement. Unlink a PR from the thread if it should no longer count toward settlement. The settled banner and sidebar use the same linked PR statuses. Once a PR is reported as merged, an older cached status does not keep it active or offer Merge again.
+
+When you return to Agent Threads from another section, recently loaded PR grouping is retained. Threads waiting for a PR status check appear after that check completes; already loaded rows stay visible. A loading message distinguishes this from an empty thread list.
+
+If the agent is still working, hold Control while hovering over **Settle** to reveal **Settle after completion**. Control-click the button to schedule the thread to settle only after the agent has returned its final response and no queued or background work remains. You can also choose **Settle after completion** from the thread action menu, including on touch devices.
+
+While this is scheduled, a blue timer appears beside the thread controls and beside the working status in the sidebar. Click the blue timer in the thread controls, or Control-click **Settle** again, to cancel it.
+
+If a thread is stuck showing work that has already finished, right-click it and choose **Force settle thread**. This cancels current and queued work, dismisses pending requests, stops its provider sessions and terminals, and moves it to Settled. When the agent has replied but the thread is still waiting on background work, open the action palette and find **Background work**. It shows a one-line task summary, including agent-started dev servers, with an inline stop button. Expand the chevron beside Stop to see the full task list and recovery details. **Stop work and settle** performs the same force settlement; it stops all thread work and cancels queued messages, rather than stopping just one listed task. Keep a temporary conversation before using this control. It requires an environment that supports force settlement.
+
+Choose **Un-settle thread** to return it to the active list. Cancelled work does not restart automatically.
+
+[Temporary threads](conversations-and-temporary-threads.md) are deleted when settled and cannot be
+un-settled. They skip inactivity settlement. Uncommitted changes or unpushed commits block automatic
+settlement; manual settlement offers Review changes, Cancel, and Discard and delete. Settle after
+completion keeps a temporary thread for review when a run fails or Git work remains unfinished.
+
+The sidebar PR link, thread hover card, and action palette use the same check-status colours: red for failing or cancelled checks, amber for pending checks, and green for an open PR with no reported check problems. The hover card and action palette list failing checks and their messages, or pending checks when none are failing.

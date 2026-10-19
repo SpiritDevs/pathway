@@ -1,14 +1,13 @@
-import { Effect } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
-import { parseCheckpointFilesFromUnifiedDiff } from "./Diffs.ts";
+import { parseTurnDiffFilesFromUnifiedDiff } from "./Diffs.ts";
 
-describe("parseCheckpointFilesFromUnifiedDiff", () => {
-  it("returns empty list for empty diff", async () => {
-    expect(await Effect.runPromise(parseCheckpointFilesFromUnifiedDiff(""))).toEqual([]);
+describe("parseTurnDiffFilesFromUnifiedDiff", () => {
+  it("returns empty list for empty diff", () => {
+    expect(parseTurnDiffFilesFromUnifiedDiff("")).toEqual([]);
   });
 
-  it("parses per-file additions and deletions", async () => {
+  it("parses per-file additions and deletions", () => {
     const diff = [
       "diff --git a/a.txt b/a.txt",
       "index 1111111..2222222 100644",
@@ -29,13 +28,13 @@ describe("parseCheckpointFilesFromUnifiedDiff", () => {
       "",
     ].join("\n");
 
-    expect(await Effect.runPromise(parseCheckpointFilesFromUnifiedDiff(diff))).toEqual([
-      { path: "a.txt", kind: "modified", additions: 2, deletions: 1 },
-      { path: "src/b.ts", kind: "modified", additions: 0, deletions: 2 },
+    expect(parseTurnDiffFilesFromUnifiedDiff(diff)).toEqual([
+      { path: "a.txt", additions: 2, deletions: 1 },
+      { path: "src/b.ts", additions: 0, deletions: 2 },
     ]);
   });
 
-  it("parses rename-only diffs with zero line changes", async () => {
+  it("parses rename-only diffs with zero line changes", () => {
     const diff = [
       "diff --git a/src/old.ts b/src/new.ts",
       "similarity index 100%",
@@ -44,12 +43,12 @@ describe("parseCheckpointFilesFromUnifiedDiff", () => {
       "",
     ].join("\n");
 
-    expect(await Effect.runPromise(parseCheckpointFilesFromUnifiedDiff(diff))).toEqual([
-      { path: "src/new.ts", kind: "renamed", additions: 0, deletions: 0 },
+    expect(parseTurnDiffFilesFromUnifiedDiff(diff)).toEqual([
+      { path: "src/new.ts", additions: 0, deletions: 0 },
     ]);
   });
 
-  it("normalizes CRLF input before parsing", async () => {
+  it("normalizes CRLF input before parsing", () => {
     const diff = [
       "diff --git a/a.txt b/a.txt",
       "index 1111111..2222222 100644",
@@ -62,50 +61,8 @@ describe("parseCheckpointFilesFromUnifiedDiff", () => {
       "",
     ].join("\r\n");
 
-    expect(await Effect.runPromise(parseCheckpointFilesFromUnifiedDiff(diff))).toEqual([
-      { path: "a.txt", kind: "modified", additions: 2, deletions: 1 },
-    ]);
-  });
-
-  it("merges duplicate entries for the same file path", async () => {
-    const diff = [
-      "diff --git a/CLAUDE.md b/CLAUDE.md",
-      "index 1111111..2222222 100644",
-      "--- a/CLAUDE.md",
-      "+++ b/CLAUDE.md",
-      "@@ -1 +1,2 @@",
-      "-one",
-      "+one updated",
-      "+two",
-      "diff --git a/CLAUDE.md b/CLAUDE.md",
-      "index 2222222..3333333 100644",
-      "--- a/CLAUDE.md",
-      "+++ b/CLAUDE.md",
-      "@@ -4,2 +5,0 @@",
-      "-three",
-      "-four",
-      "",
-    ].join("\n");
-
-    expect(await Effect.runPromise(parseCheckpointFilesFromUnifiedDiff(diff))).toEqual([
-      { path: "CLAUDE.md", kind: "modified", additions: 2, deletions: 3 },
-    ]);
-  });
-
-  it("preserves deleted-file status in checkpoint summaries", async () => {
-    const diff = [
-      "diff --git a/src/removed.ts b/src/removed.ts",
-      "deleted file mode 100644",
-      "index 1111111..0000000",
-      "--- a/src/removed.ts",
-      "+++ /dev/null",
-      "@@ -1 +0,0 @@",
-      "-removed",
-      "",
-    ].join("\n");
-
-    expect(await Effect.runPromise(parseCheckpointFilesFromUnifiedDiff(diff))).toEqual([
-      { path: "src/removed.ts", kind: "deleted", additions: 0, deletions: 1 },
+    expect(parseTurnDiffFilesFromUnifiedDiff(diff)).toEqual([
+      { path: "a.txt", additions: 2, deletions: 1 },
     ]);
   });
 });

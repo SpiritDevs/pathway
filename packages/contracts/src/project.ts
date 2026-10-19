@@ -1,105 +1,163 @@
-import { Schema } from "effect";
+import * as Schema from "effect/Schema";
+import { RepositoryIdentity, ThreadEnvMode } from "./environment.ts";
+import { ModelSelection } from "./modelSelection.ts";
 import {
+  CommandId,
+  IsoDateTime,
   NonNegativeInt,
   PositiveInt,
-  ProcessEnvRecord,
   ProjectId,
   TrimmedNonEmptyString,
-} from "./baseSchemas";
+  TrimmedString,
+} from "./baseSchemas.ts";
 
 const PROJECT_SEARCH_ENTRIES_MAX_LIMIT = 200;
-const PROJECT_SEARCH_LOCAL_ENTRIES_MAX_LIMIT = 100;
-const PROJECT_FILE_PATH_MAX_LENGTH = 512;
-const PROJECT_READ_FILE_PATH_MAX_LENGTH = 2048;
-const PROJECT_READ_FILE_MAX_BYTES = 1_000_000;
-const PROJECT_DIRECTORY_LIST_MAX_DEPTH = 32;
-const PROJECT_SCRIPT_DISCOVERY_MAX_DEPTH = 3;
-export const PROJECT_RESOLVE_WORKSPACE_FILE_REFERENCES_MAX_PATHS = 128;
-const ProjectEntryKind = Schema.Literals(["file", "directory"]);
+const PROJECT_SEARCH_CONTENTS_MAX_LIMIT = 500;
+const PROJECT_WRITE_FILE_PATH_MAX_LENGTH = 512;
+const PROJECT_READ_FILE_PATH_MAX_LENGTH = 512;
 
-export const ProjectFileEncoding = Schema.Literals(["utf8", "utf8-bom"]);
-export type ProjectFileEncoding = typeof ProjectFileEncoding.Type;
+export const ProjectFaviconPath = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(1024),
+  Schema.isPattern(/\.(?:avif|gif|ico|jpe?g|png|svg|webp)$/i),
+);
+export type ProjectFaviconPath = typeof ProjectFaviconPath.Type;
 
-export const ProjectFileLineEnding = Schema.Literals(["lf", "crlf", "cr", "mixed"]);
-export type ProjectFileLineEnding = typeof ProjectFileLineEnding.Type;
+export const ProjectScriptIcon = Schema.Literals([
+  "play",
+  "test",
+  "lint",
+  "configure",
+  "build",
+  "debug",
+]);
+export type ProjectScriptIcon = typeof ProjectScriptIcon.Type;
 
-export const ProjectKind = Schema.Literals(["project", "chat", "studio"]);
-export type ProjectKind = typeof ProjectKind.Type;
+export const ProjectScript = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  command: TrimmedNonEmptyString,
+  icon: ProjectScriptIcon,
+  runOnWorktreeCreate: Schema.Boolean,
+  previewUrl: Schema.optional(TrimmedNonEmptyString),
+  autoOpenPreview: Schema.optional(Schema.Boolean),
+});
+export type ProjectScript = typeof ProjectScript.Type;
+
+export const Project = Schema.Struct({
+  id: ProjectId,
+  title: TrimmedNonEmptyString,
+  // Optional on the wire so clients can still read snapshots from older servers.
+  titleIsCustom: Schema.optional(Schema.Boolean),
+  workspaceRoot: Schema.NullOr(TrimmedNonEmptyString),
+  internalWorkspaceRoot: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
+  faviconPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  defaultModelSelection: Schema.NullOr(ModelSelection),
+  // Optional on the wire so clients can still read snapshots from older servers.
+  defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
+  scripts: Schema.Array(ProjectScript),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+  deletedAt: Schema.NullOr(IsoDateTime),
+});
+export type Project = typeof Project.Type;
+
+export const ProjectSnapshot = Schema.Struct({
+  projects: Schema.Array(Project),
+  updatedAt: IsoDateTime,
+});
+export type ProjectSnapshot = typeof ProjectSnapshot.Type;
+
+/**
+ * A lightweight preflight for directory-based project creation. The repository identity is the
+ * same normalized value projected onto projects, but resolving it before the write lets clients
+ * ask whether another checkout should join an existing project or stand alone.
+ */
+export const ProjectInspectDirectoryInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+});
+export type ProjectInspectDirectoryInput = typeof ProjectInspectDirectoryInput.Type;
+
+export const ProjectInspectDirectoryResult = Schema.Struct({
+  repositoryIdentity: Schema.NullOr(RepositoryIdentity),
+  repositoryRoot: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+});
+export type ProjectInspectDirectoryResult = typeof ProjectInspectDirectoryResult.Type;
+
+export const ProjectChange = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("project.upserted"), project: Project }),
+  Schema.Struct({
+    type: Schema.Literal("project.deleted"),
+    projectId: ProjectId,
+    deletedAt: IsoDateTime,
+  }),
+]);
+export type ProjectChange = typeof ProjectChange.Type;
+
+export const ProjectMutation = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("project.create"),
+    commandId: CommandId,
+    projectId: ProjectId,
+    title: TrimmedNonEmptyString,
+    workspaceRoot: Schema.NullOr(TrimmedNonEmptyString),
+    createWorkspaceRootIfMissing: Schema.optional(Schema.Boolean),
+    defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
+    scripts: Schema.optional(Schema.Array(ProjectScript)),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("project.update"),
+    commandId: CommandId,
+    projectId: ProjectId,
+    title: Schema.optional(TrimmedNonEmptyString),
+    titleIsCustom: Schema.optional(Schema.Boolean),
+    workspaceRoot: Schema.optional(TrimmedNonEmptyString),
+    useInternalWorkspace: Schema.optional(Schema.Boolean),
+    copyInternalWorkspaceFiles: Schema.optional(Schema.Boolean),
+    disconnectInternalWorkspace: Schema.optional(Schema.Boolean),
+    createWorkspaceRootIfMissing: Schema.optional(Schema.Boolean),
+    defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
+    defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
+    faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
+    scripts: Schema.optional(Schema.Array(ProjectScript)),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("project.delete"),
+    commandId: CommandId,
+    projectId: ProjectId,
+    force: Schema.optional(Schema.Boolean),
+  }),
+]);
+export type ProjectMutation = typeof ProjectMutation.Type;
+
+export class ProjectMutationError extends Schema.TaggedErrorClass<ProjectMutationError>()(
+  "ProjectMutationError",
+  {
+    commandId: CommandId,
+    message: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
+export const ProjectEntryKind = Schema.Literals(["file", "directory"]);
+export type ProjectEntryKind = typeof ProjectEntryKind.Type;
 
 export const ProjectSearchEntriesInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
-  query: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+  // An empty query is a bounded browse: the index returns frecency-ordered
+  // entries, which the file picker uses for its initial results.
+  query: TrimmedString.check(Schema.isMaxLength(256)),
   limit: PositiveInt.check(Schema.isLessThanOrEqualTo(PROJECT_SEARCH_ENTRIES_MAX_LIMIT)),
   kind: Schema.optional(ProjectEntryKind),
+  imageOnly: Schema.optional(Schema.Boolean),
 });
 export type ProjectSearchEntriesInput = typeof ProjectSearchEntriesInput.Type;
 
 export const ProjectEntry = Schema.Struct({
   path: TrimmedNonEmptyString,
   kind: ProjectEntryKind,
-  parentPath: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProjectEntry = typeof ProjectEntry.Type;
-
-export const ProjectDirectoryEntry = Schema.Struct({
-  path: TrimmedNonEmptyString,
-  name: TrimmedNonEmptyString,
-  parentPath: Schema.optional(TrimmedNonEmptyString),
-  hasChildren: Schema.Boolean,
-});
-export type ProjectDirectoryEntry = typeof ProjectDirectoryEntry.Type;
-
-export const ProjectFileSystemEntry = Schema.Struct({
-  path: TrimmedNonEmptyString,
-  name: TrimmedNonEmptyString,
-  parentPath: Schema.optional(TrimmedNonEmptyString),
-  kind: ProjectEntryKind,
-  hasChildren: Schema.optional(Schema.Boolean),
-});
-export type ProjectFileSystemEntry = typeof ProjectFileSystemEntry.Type;
-
-export const ProjectListDirectoriesInput = Schema.Struct({
-  cwd: TrimmedNonEmptyString,
-  relativePath: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(1024))),
-  depth: Schema.optional(
-    PositiveInt.check(Schema.isLessThanOrEqualTo(PROJECT_DIRECTORY_LIST_MAX_DEPTH)),
-  ),
-  includeFiles: Schema.optional(Schema.Boolean),
-});
-export type ProjectListDirectoriesInput = typeof ProjectListDirectoriesInput.Type;
-
-export const ProjectListDirectoriesResult = Schema.Struct({
-  entries: Schema.Array(ProjectFileSystemEntry),
-});
-export type ProjectListDirectoriesResult = typeof ProjectListDirectoriesResult.Type;
-
-export const ProjectDiscoverScriptsInput = Schema.Struct({
-  cwd: TrimmedNonEmptyString,
-  depth: Schema.optional(
-    NonNegativeInt.check(Schema.isLessThanOrEqualTo(PROJECT_SCRIPT_DISCOVERY_MAX_DEPTH)),
-  ),
-});
-export type ProjectDiscoverScriptsInput = typeof ProjectDiscoverScriptsInput.Type;
-
-export const ProjectDiscoveredScript = Schema.Struct({
-  name: TrimmedNonEmptyString,
-  command: TrimmedNonEmptyString,
-});
-export type ProjectDiscoveredScript = typeof ProjectDiscoveredScript.Type;
-
-export const ProjectDiscoveredScriptTarget = Schema.Struct({
-  cwd: TrimmedNonEmptyString,
-  relativePath: Schema.String,
-  packageJsonPath: TrimmedNonEmptyString,
-  packageName: Schema.optional(TrimmedNonEmptyString),
-  scripts: Schema.Array(ProjectDiscoveredScript),
-});
-export type ProjectDiscoveredScriptTarget = typeof ProjectDiscoveredScriptTarget.Type;
-
-export const ProjectDiscoverScriptsResult = Schema.Struct({
-  targets: Schema.Array(ProjectDiscoveredScriptTarget),
-});
-export type ProjectDiscoverScriptsResult = typeof ProjectDiscoverScriptsResult.Type;
 
 export const ProjectSearchEntriesResult = Schema.Struct({
   entries: Schema.Array(ProjectEntry),
@@ -107,243 +165,271 @@ export const ProjectSearchEntriesResult = Schema.Struct({
 });
 export type ProjectSearchEntriesResult = typeof ProjectSearchEntriesResult.Type;
 
-// Exported so server and web enforce the same bounds the schema validates —
-// a drifted local copy turns into schema-decode failures instead of graceful UI.
-export const PROJECT_SEARCH_CONTENT_MAX_LIMIT = 100;
-export const PROJECT_SEARCH_CONTENT_MIN_QUERY_LENGTH = 2;
-export const PROJECT_SEARCH_CONTENT_MAX_LINE_LENGTH = 1024;
-
-export const ProjectSearchContentInput = Schema.Struct({
+export const ProjectSearchContentsInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
-  query: TrimmedNonEmptyString.check(Schema.isMaxLength(256)).check(
-    Schema.isMinLength(PROJECT_SEARCH_CONTENT_MIN_QUERY_LENGTH),
-  ),
-  limit: Schema.optional(
-    PositiveInt.check(Schema.isLessThanOrEqualTo(PROJECT_SEARCH_CONTENT_MAX_LIMIT)),
-  ),
+  // Whitespace is significant in content queries (" foo", regex trailing
+  // spaces), so the query is deliberately not trimmed on the wire.
+  query: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(256)),
+  limit: PositiveInt.check(Schema.isLessThanOrEqualTo(PROJECT_SEARCH_CONTENTS_MAX_LIMIT)),
+  caseSensitive: Schema.Boolean,
+  wholeWord: Schema.Boolean,
+  useRegex: Schema.Boolean,
 });
-export type ProjectSearchContentInput = typeof ProjectSearchContentInput.Type;
+export type ProjectSearchContentsInput = typeof ProjectSearchContentsInput.Type;
+
+export const ProjectContentMatchRange = Schema.Struct({
+  start: NonNegativeInt,
+  end: NonNegativeInt,
+});
+export type ProjectContentMatchRange = typeof ProjectContentMatchRange.Type;
 
 export const ProjectContentMatch = Schema.Struct({
   path: TrimmedNonEmptyString,
   lineNumber: PositiveInt,
-  lineText: Schema.String.check(Schema.isMaxLength(PROJECT_SEARCH_CONTENT_MAX_LINE_LENGTH)),
+  lineContent: Schema.String,
+  matchRanges: Schema.Array(ProjectContentMatchRange),
 });
 export type ProjectContentMatch = typeof ProjectContentMatch.Type;
 
-export const ProjectSearchContentResult = Schema.Struct({
+export const ProjectSearchContentsResult = Schema.Struct({
   matches: Schema.Array(ProjectContentMatch),
   truncated: Schema.Boolean,
+  regexFallbackError: Schema.optional(Schema.String),
 });
-export type ProjectSearchContentResult = typeof ProjectSearchContentResult.Type;
+export type ProjectSearchContentsResult = typeof ProjectSearchContentsResult.Type;
 
-// Fire-and-forget warm-up of the server's workspace search index. The search
-// palette calls this when it opens so the first keystroke's query doesn't pay
-// for the index build; the response returns before the build completes.
-export const ProjectPrewarmSearchIndexInput = Schema.Struct({
+export const ProjectListEntriesInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
 });
-export type ProjectPrewarmSearchIndexInput = typeof ProjectPrewarmSearchIndexInput.Type;
+export type ProjectListEntriesInput = typeof ProjectListEntriesInput.Type;
 
-export const ProjectPrewarmSearchIndexResult = Schema.Struct({
-  started: Schema.Boolean,
-});
-export type ProjectPrewarmSearchIndexResult = typeof ProjectPrewarmSearchIndexResult.Type;
-
-export const ProjectSearchLocalEntriesInput = Schema.Struct({
-  rootPath: TrimmedNonEmptyString,
-  query: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
-  limit: Schema.optional(
-    PositiveInt.check(Schema.isLessThanOrEqualTo(PROJECT_SEARCH_LOCAL_ENTRIES_MAX_LIMIT)),
-  ),
-  includeFiles: Schema.optional(Schema.Boolean),
-});
-export type ProjectSearchLocalEntriesInput = typeof ProjectSearchLocalEntriesInput.Type;
-
-export const ProjectLocalSearchEntry = Schema.Struct({
-  path: TrimmedNonEmptyString,
-  name: TrimmedNonEmptyString,
-  parentPath: Schema.optional(TrimmedNonEmptyString),
-  kind: ProjectEntryKind,
-});
-export type ProjectLocalSearchEntry = typeof ProjectLocalSearchEntry.Type;
-
-export const ProjectSearchLocalEntriesResult = Schema.Struct({
-  entries: Schema.Array(ProjectLocalSearchEntry),
+export const ProjectListEntriesResult = Schema.Struct({
+  entries: Schema.Array(ProjectEntry),
   truncated: Schema.Boolean,
 });
-export type ProjectSearchLocalEntriesResult = typeof ProjectSearchLocalEntriesResult.Type;
+export type ProjectListEntriesResult = typeof ProjectListEntriesResult.Type;
 
-export const ProjectWriteFileInput = Schema.Struct({
-  cwd: TrimmedNonEmptyString,
-  relativePath: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_FILE_PATH_MAX_LENGTH)),
-  contents: Schema.String.check(Schema.isMaxLength(PROJECT_READ_FILE_MAX_BYTES)),
-  expectedVersion: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(128))),
-  encoding: Schema.optional(ProjectFileEncoding),
-  lineEnding: Schema.optional(ProjectFileLineEnding),
-});
-export type ProjectWriteFileInput = typeof ProjectWriteFileInput.Type;
+export const ProjectEntriesFailure = Schema.Literals([
+  "workspace_root_not_found",
+  "workspace_root_create_failed",
+  "workspace_root_stat_failed",
+  "workspace_root_not_directory",
+  "search_index_create_failed",
+  "search_index_scan_timed_out",
+  "search_index_search_failed",
+]);
+export type ProjectEntriesFailure = typeof ProjectEntriesFailure.Type;
 
-export const ProjectWriteFileResult = Schema.Struct({
-  relativePath: TrimmedNonEmptyString,
-  version: TrimmedNonEmptyString,
-});
-export type ProjectWriteFileResult = typeof ProjectWriteFileResult.Type;
+type ProjectEntriesFailureContext = {
+  readonly failure: ProjectEntriesFailure;
+  readonly normalizedCwd?: string;
+  readonly timeout?: string;
+  readonly detail?: string;
+  readonly cause?: unknown;
+};
+
+function decodedProjectErrorMessage(props: object): string | undefined {
+  if (!("message" in props)) return undefined;
+  return typeof props.message === "string" ? props.message : undefined;
+}
+
+export class ProjectSearchEntriesError extends Schema.TaggedErrorClass<ProjectSearchEntriesError>()(
+  "ProjectSearchEntriesError",
+  {
+    cwd: Schema.optional(TrimmedNonEmptyString),
+    queryLength: Schema.optional(NonNegativeInt),
+    limit: Schema.optional(PositiveInt),
+    failure: Schema.optional(ProjectEntriesFailure),
+    normalizedCwd: Schema.optional(TrimmedNonEmptyString),
+    timeout: Schema.optional(TrimmedNonEmptyString),
+    detail: Schema.optional(TrimmedNonEmptyString),
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  // The structured fields are optional on the wire so newer peers can decode legacy message-only
+  // failures. New application code must provide them through this constructor.
+  // @effect-diagnostics-next-line overriddenSchemaConstructor:off
+  constructor(
+    props: ProjectEntriesFailureContext & {
+      readonly cwd: string;
+      readonly queryLength: number;
+      readonly limit: number;
+    },
+  ) {
+    super({
+      ...props,
+      message:
+        decodedProjectErrorMessage(props) ??
+        `Failed to search workspace entries in '${props.cwd}'.`,
+    } as any);
+  }
+}
+
+export class ProjectSearchContentsError extends Schema.TaggedErrorClass<ProjectSearchContentsError>()(
+  "ProjectSearchContentsError",
+  {
+    cwd: Schema.optional(TrimmedNonEmptyString),
+    queryLength: Schema.optional(NonNegativeInt),
+    limit: Schema.optional(PositiveInt),
+    failure: Schema.optional(ProjectEntriesFailure),
+    normalizedCwd: Schema.optional(TrimmedNonEmptyString),
+    timeout: Schema.optional(TrimmedNonEmptyString),
+    detail: Schema.optional(TrimmedNonEmptyString),
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  // @effect-diagnostics-next-line overriddenSchemaConstructor:off
+  constructor(
+    props: ProjectEntriesFailureContext & {
+      readonly cwd: string;
+      readonly queryLength: number;
+      readonly limit: number;
+    },
+  ) {
+    super({
+      ...props,
+      message:
+        decodedProjectErrorMessage(props) ??
+        `Failed to search workspace contents in '${props.cwd}'.`,
+    } as any);
+  }
+}
+
+export class ProjectListEntriesError extends Schema.TaggedErrorClass<ProjectListEntriesError>()(
+  "ProjectListEntriesError",
+  {
+    cwd: Schema.optional(TrimmedNonEmptyString),
+    failure: Schema.optional(ProjectEntriesFailure),
+    normalizedCwd: Schema.optional(TrimmedNonEmptyString),
+    timeout: Schema.optional(TrimmedNonEmptyString),
+    detail: Schema.optional(TrimmedNonEmptyString),
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  // @effect-diagnostics-next-line overriddenSchemaConstructor:off
+  constructor(props: ProjectEntriesFailureContext & { readonly cwd: string }) {
+    super({
+      ...props,
+      message:
+        decodedProjectErrorMessage(props) ?? `Failed to list workspace entries in '${props.cwd}'.`,
+    } as any);
+  }
+}
 
 export const ProjectReadFileInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   relativePath: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
-  previewGrant: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
-  maxBytes: Schema.optional(
-    PositiveInt.check(Schema.isLessThanOrEqualTo(PROJECT_READ_FILE_MAX_BYTES)),
-  ),
 });
 export type ProjectReadFileInput = typeof ProjectReadFileInput.Type;
 
 export const ProjectReadFileResult = Schema.Struct({
   relativePath: TrimmedNonEmptyString,
   contents: Schema.String,
+  byteLength: NonNegativeInt,
   truncated: Schema.Boolean,
-  version: Schema.NullOr(TrimmedNonEmptyString),
-  encoding: Schema.NullOr(ProjectFileEncoding),
-  lineEnding: Schema.NullOr(ProjectFileLineEnding),
-  /** True when the requested path itself is a symbolic link; reads follow it, writes must not edit through it. */
-  symlink: Schema.optional(Schema.Boolean),
+  // Present for complete text reads; send back as expectedRevision to protect edits.
+  revision: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProjectReadFileResult = typeof ProjectReadFileResult.Type;
 
-export const ProjectWatchFileInput = Schema.Struct({
-  cwd: TrimmedNonEmptyString,
-  relativePath: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
-});
-export type ProjectWatchFileInput = typeof ProjectWatchFileInput.Type;
-
-export const ProjectFileChangeEvent = Schema.Union([
-  Schema.Struct({
-    type: Schema.Literal("changed"),
-    relativePath: TrimmedNonEmptyString,
-    mtimeMs: Schema.Number,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("deleted"),
-    relativePath: TrimmedNonEmptyString,
-  }),
+export const ProjectFileFailure = Schema.Literals([
+  "workspace_path_outside_root",
+  "resolved_path_outside_root",
+  "path_not_file",
+  "binary_file",
+  "revision_conflict",
+  "operation_failed",
 ]);
-export type ProjectFileChangeEvent = typeof ProjectFileChangeEvent.Type;
+export type ProjectFileFailure = typeof ProjectFileFailure.Type;
 
-export const ProjectResolveWorkspaceFileReferencesInput = Schema.Struct({
-  cwd: TrimmedNonEmptyString,
-  relativePaths: Schema.Array(
-    TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
-  ).check(
-    Schema.isMinLength(1),
-    Schema.isMaxLength(PROJECT_RESOLVE_WORKSPACE_FILE_REFERENCES_MAX_PATHS),
-  ),
-});
-export type ProjectResolveWorkspaceFileReferencesInput =
-  typeof ProjectResolveWorkspaceFileReferencesInput.Type;
-
-export const ProjectResolveWorkspaceFileReferencesResult = Schema.Struct({
-  relativePaths: Schema.Array(Schema.NullOr(TrimmedNonEmptyString)),
-});
-export type ProjectResolveWorkspaceFileReferencesResult =
-  typeof ProjectResolveWorkspaceFileReferencesResult.Type;
-
-// Locates a chat file reference that failed to read inside the workspace root:
-// the server retries the workspace-relative path against ancestor directories
-// of the root (bounded to the user's home directory) and returns the absolute
-// path of the real file, or null when no candidate exists. Reading the located
-// file still goes through the preview-grant flow — this method never returns
-// file contents.
-export const ProjectResolveOutOfRootFileReferenceInput = Schema.Struct({
-  cwd: TrimmedNonEmptyString,
-  relativePath: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
-});
-export type ProjectResolveOutOfRootFileReferenceInput =
-  typeof ProjectResolveOutOfRootFileReferenceInput.Type;
-
-export const ProjectResolveOutOfRootFileReferenceResult = Schema.Struct({
-  fullPath: Schema.NullOr(TrimmedNonEmptyString),
-});
-export type ProjectResolveOutOfRootFileReferenceResult =
-  typeof ProjectResolveOutOfRootFileReferenceResult.Type;
-
-export const ProjectCreateLocalFilePreviewGrantInput = Schema.Struct({
-  path: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
-});
-export type ProjectCreateLocalFilePreviewGrantInput =
-  typeof ProjectCreateLocalFilePreviewGrantInput.Type;
-
-export const ProjectCreateLocalFilePreviewGrantResult = Schema.Struct({
-  grant: TrimmedNonEmptyString,
-  expiresAt: TrimmedNonEmptyString,
-});
-export type ProjectCreateLocalFilePreviewGrantResult =
-  typeof ProjectCreateLocalFilePreviewGrantResult.Type;
-// ── Dev Server Process Manager ───────────────────────────────────────
-//
-// Dev servers are first-class background processes owned by the server and
-// keyed by project id, fully decoupled from chat threads. The server tracks
-// their lifecycle and broadcasts changes over the `project.devServerEvent`
-// push channel so every client stays in sync across reconnects.
-
-export const ProjectDevServerStatus = Schema.Literals(["starting", "running"]);
-export type ProjectDevServerStatus = typeof ProjectDevServerStatus.Type;
-
-export const ProjectDevServer = Schema.Struct({
-  projectId: ProjectId,
-  command: TrimmedNonEmptyString,
-  cwd: TrimmedNonEmptyString,
-  pid: Schema.NullOr(PositiveInt),
-  startedAt: TrimmedNonEmptyString,
-  status: ProjectDevServerStatus,
-});
-export type ProjectDevServer = typeof ProjectDevServer.Type;
-
-export const ProjectRunDevServerInput = Schema.Struct({
-  projectId: ProjectId,
-  command: TrimmedNonEmptyString,
-  cwd: TrimmedNonEmptyString,
-  env: Schema.optional(ProcessEnvRecord),
-});
-export type ProjectRunDevServerInput = typeof ProjectRunDevServerInput.Type;
-
-export const ProjectRunDevServerResult = Schema.Struct({
-  server: ProjectDevServer,
-});
-export type ProjectRunDevServerResult = typeof ProjectRunDevServerResult.Type;
-
-export const ProjectStopDevServerInput = Schema.Struct({
-  projectId: ProjectId,
-});
-export type ProjectStopDevServerInput = typeof ProjectStopDevServerInput.Type;
-
-export const ProjectStopDevServerResult = Schema.Struct({
-  stopped: Schema.Boolean,
-});
-export type ProjectStopDevServerResult = typeof ProjectStopDevServerResult.Type;
-
-export const ProjectListDevServersResult = Schema.Struct({
-  servers: Schema.Array(ProjectDevServer),
-});
-export type ProjectListDevServersResult = typeof ProjectListDevServersResult.Type;
-
-export const ProjectDevServerRemovedReason = Schema.Literals(["stopped", "exited"]);
-export type ProjectDevServerRemovedReason = typeof ProjectDevServerRemovedReason.Type;
-
-export const ProjectDevServerEvent = Schema.Union([
-  Schema.Struct({
-    type: Schema.Literal("snapshot"),
-    servers: Schema.Array(ProjectDevServer),
-  }),
-  Schema.Struct({
-    type: Schema.Literal("upserted"),
-    server: ProjectDevServer,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("removed"),
-    projectId: ProjectId,
-    reason: ProjectDevServerRemovedReason,
-  }),
+export const ProjectFileOperation = Schema.Literals([
+  "realpath-workspace-root",
+  "realpath-target",
+  "open",
+  "stat",
+  "read",
+  "close",
+  "make-directory",
+  "write-file",
 ]);
-export type ProjectDevServerEvent = typeof ProjectDevServerEvent.Type;
+export type ProjectFileOperation = typeof ProjectFileOperation.Type;
+
+type ProjectFileFailureContext = {
+  readonly cwd: string;
+  readonly relativePath: string;
+  readonly failure: ProjectFileFailure;
+  readonly resolvedPath?: string;
+  readonly resolvedWorkspaceRoot?: string;
+  readonly operation?: ProjectFileOperation;
+  readonly operationPath?: string;
+  readonly cause?: unknown;
+};
+
+export class ProjectReadFileError extends Schema.TaggedErrorClass<ProjectReadFileError>()(
+  "ProjectReadFileError",
+  {
+    cwd: Schema.optional(TrimmedNonEmptyString),
+    relativePath: Schema.optional(TrimmedNonEmptyString),
+    failure: Schema.optional(ProjectFileFailure),
+    resolvedPath: Schema.optional(TrimmedNonEmptyString),
+    resolvedWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
+    operation: Schema.optional(ProjectFileOperation),
+    operationPath: Schema.optional(TrimmedNonEmptyString),
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  // @effect-diagnostics-next-line overriddenSchemaConstructor:off
+  constructor(props: ProjectFileFailureContext) {
+    super({
+      ...props,
+      message:
+        decodedProjectErrorMessage(props) ??
+        `Failed to read workspace file '${props.relativePath}' in '${props.cwd}'.`,
+    } as any);
+  }
+}
+
+export const ProjectWriteFileInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  relativePath: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_WRITE_FILE_PATH_MAX_LENGTH)),
+  contents: Schema.String,
+  expectedRevision: Schema.optional(TrimmedNonEmptyString),
+});
+export type ProjectWriteFileInput = typeof ProjectWriteFileInput.Type;
+
+export const ProjectWriteFileResult = Schema.Struct({
+  relativePath: TrimmedNonEmptyString,
+  revision: Schema.optional(TrimmedNonEmptyString),
+});
+export type ProjectWriteFileResult = typeof ProjectWriteFileResult.Type;
+
+export class ProjectWriteFileError extends Schema.TaggedErrorClass<ProjectWriteFileError>()(
+  "ProjectWriteFileError",
+  {
+    cwd: Schema.optional(TrimmedNonEmptyString),
+    relativePath: Schema.optional(TrimmedNonEmptyString),
+    failure: Schema.optional(ProjectFileFailure),
+    resolvedPath: Schema.optional(TrimmedNonEmptyString),
+    resolvedWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
+    operation: Schema.optional(ProjectFileOperation),
+    operationPath: Schema.optional(TrimmedNonEmptyString),
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  // @effect-diagnostics-next-line overriddenSchemaConstructor:off
+  constructor(props: ProjectFileFailureContext) {
+    super({
+      ...props,
+      message:
+        decodedProjectErrorMessage(props) ??
+        (props.failure === "revision_conflict"
+          ? `Workspace file '${props.relativePath}' changed. Reload it before saving your edits.`
+          : `Failed to write workspace file '${props.relativePath}' in '${props.cwd}'.`),
+    } as any);
+  }
+}

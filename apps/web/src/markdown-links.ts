@@ -1,21 +1,23 @@
+import { formatWorkspaceRelativePath } from "./filePathDisplay";
 import {
-  isLocalAbsolutePath,
-  isWorkspaceRelativePathSafe,
-  localPathsEqual,
-  workspaceRelativePathOf,
-} from "@synara/shared/path";
-
-import { resolvePathLinkTarget } from "./terminal-links";
+  isTerminalLinkActivation,
+  resolvePathLinkTarget,
+  splitPathAndPosition,
+} from "./terminal-links";
 
 const WINDOWS_DRIVE_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\/;
 const EXTERNAL_SCHEME_PATTERN = /^([A-Za-z][A-Za-z0-9+.-]*):(.*)$/;
 const RELATIVE_PATH_PREFIX_PATTERN = /^(~\/|\.{1,2}\/)/;
-const RELATIVE_FILE_PATH_PATTERN = /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+(?::\d+){0,2}$/;
-const RELATIVE_FILE_NAME_PATTERN = /^[A-Za-z0-9._-]+\.[A-Za-z0-9_-]+(?::\d+){0,2}$/;
+const RELATIVE_FILE_PATH_PATTERN =
+  /^(?:[A-Za-z0-9._-]+(?: +[A-Za-z0-9._-]+)*\/)+[A-Za-z0-9._-]+(?: +[A-Za-z0-9._-]+)*(?::\d+){0,2}$/;
+const RELATIVE_FILE_NAME_PATTERN =
+  /^[A-Za-z0-9._-]+(?: +[A-Za-z0-9._-]+)*\.[A-Za-z0-9_-]+(?::\d+){0,2}$/;
 const POSITION_SUFFIX_PATTERN = /:\d+(?::\d+)?$/;
 const POSITION_ONLY_PATTERN = /^\d+(?::\d+)?$/;
-const POSIX_FILE_ROOT_PREFIXES = [
+// Standard OS and dev-container roots; deliberately excludes app-route-ish
+// prefixes like /app/ or /chat/ so SPA routes never read as files.
+export const POSIX_FILE_ROOT_PREFIXES = [
   "/Users/",
   "/home/",
   "/tmp/",
@@ -26,7 +28,53 @@ const POSIX_FILE_ROOT_PREFIXES = [
   "/Volumes/",
   "/private/",
   "/root/",
+  "/usr/",
+  "/bin/",
+  "/sbin/",
+  "/lib/",
+  "/lib64/",
+  "/srv/",
+  "/dev/",
+  "/proc/",
+  "/sys/",
+  "/run/",
+  "/boot/",
+  "/media/",
+  "/workspace/",
+  "/workspaces/",
 ] as const;
+const MARKDOWN_LINK_HREF_PATTERN =
+  /\[[^\]]*]\(\s*(?:<([^>\n]+)>|([^\s)]+))(?:\s+["'][^"']*["'])?\s*\)/g;
+
+export interface MarkdownFileLinkMeta {
+  filePath: string;
+  targetPath: string;
+  displayPath: string;
+  workspaceRelativePath: string | null;
+  basename: string;
+  line?: number;
+  column?: number;
+}
+
+export function extractMarkdownLinkHrefs(markdown: string): string[] {
+  const hrefs: string[] = [];
+  for (const match of markdown.matchAll(MARKDOWN_LINK_HREF_PATTERN)) {
+    const href = (match[1] ?? match[2])?.trim();
+    if (href) hrefs.push(href);
+  }
+  return hrefs;
+}
+
+export function shouldOpenMarkdownFileLinkInEditor(
+  event: Pick<MouseEvent, "metaKey" | "ctrlKey">,
+  platform?: string,
+): boolean {
+  return isTerminalLinkActivation(event, platform);
+}
+
+export function shouldOpenMarkdownFileLinkInBrowserByDefault(path: string): boolean {
+  return /\.pdf$/i.test(path.split(/[?#]/, 1)[0] ?? "");
+}
 
 function safeDecode(value: string): string {
   try {
@@ -34,6 +82,14 @@ function safeDecode(value: string): string {
   } catch {
     return value;
   }
+}
+
+function unwrapMarkdownLinkDestination(value: string): string {
+  return value.startsWith("<") && value.endsWith(">") ? value.slice(1, -1) : value;
+}
+
+export function normalizeMarkdownLinkDestination(value: string): string {
+  return unwrapMarkdownLinkDestination(value.trim());
 }
 
 function stripSearchAndHash(value: string): { path: string; hash: string } {
@@ -45,6 +101,10 @@ function stripSearchAndHash(value: string): { path: string; hash: string } {
   return { path, hash: rawHash };
 }
 
+function normalizeWindowsDrivePath(path: string): string {
+  return /^\/[A-Za-z]:[\\/]/.test(path) ? path.slice(1) : path;
+}
+
 function parseFileUrlHref(
   href: string,
   options?: { readonly decodePath?: boolean },
@@ -53,11 +113,11 @@ function parseFileUrlHref(
     const parsed = new URL(href);
     if (parsed.protocol.toLowerCase() !== "file:") return null;
 
-    const rawPath = parsed.hostname ? `//${parsed.hostname}${parsed.pathname}` : parsed.pathname;
+    const rawPath = parsed.pathname;
     if (rawPath.length === 0) return null;
 
     // Browser URL parser encodes "C:/foo" as "/C:/foo" for file URLs.
-    const normalizedPath = /^\/[A-Za-z]:[\\/]/.test(rawPath) ? rawPath.slice(1) : rawPath;
+    const normalizedPath = normalizeWindowsDrivePath(rawPath);
 
     return {
       path: options?.decodePath === false ? normalizedPath : safeDecode(normalizedPath),
@@ -68,25 +128,10 @@ function parseFileUrlHref(
   }
 }
 
-// Encode literal filesystem names before Markdown treats percent/hash/query
-// characters as URL syntax. File URIs also preserve Windows drive paths through
-// the renderer's existing URL sanitization boundary.
-export function markdownFilePathHref(path: string): string {
-  const normalized = path.replaceAll("\\", "/");
-  const encoded = normalized
-    .split("/")
-    .map((segment, index) =>
-      index === 0 && /^[a-z]:$/i.test(segment) ? segment : encodeURIComponent(segment),
-    )
-    .join("/");
-  return encoded.startsWith("//")
-    ? `file:${encoded}`
-    : `file://${encoded.startsWith("/") ? "" : "/"}${encoded}`;
-}
-
 export function rewriteMarkdownFileUriHref(href: string | undefined): string | null {
   if (!href) return null;
-  const target = parseFileUrlHref(href.trim(), { decodePath: false });
+  const normalizedHref = normalizeMarkdownLinkDestination(href);
+  const target = parseFileUrlHref(normalizedHref, { decodePath: false });
   if (!target) return null;
   return `${target.path}${target.hash}`;
 }
@@ -132,154 +177,21 @@ function hasExternalScheme(path: string): boolean {
   return !POSITION_ONLY_PATTERN.test(rest);
 }
 
-function pathWithoutPositionSuffix(value: string): string {
-  return value.trim().replace(POSITION_SUFFIX_PATTERN, "");
-}
-
-const LEADING_COLLAPSED_SEGMENT_PATTERN = /^(?:\.{3}|…)\/+/;
-
-function stripCollapsedRelativePrefix(path: string): string {
-  let next = path;
-  while (LEADING_COLLAPSED_SEGMENT_PATTERN.test(next)) {
-    next = next.replace(LEADING_COLLAPSED_SEGMENT_PATTERN, "");
-  }
-  return next;
-}
-
-function pathBasename(path: string): string {
-  const separatorIndex = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-  return separatorIndex >= 0 ? path.slice(separatorIndex + 1) : path;
-}
-
-function uniqueAbsolutePathEndingWith(
-  suffix: string,
-  knownAbsolutePaths: ReadonlyArray<string>,
-): string | null {
-  let match: string | null = null;
-  for (const rawPath of knownAbsolutePaths) {
-    const candidate = pathWithoutPositionSuffix(rawPath).replaceAll("\\", "/");
-    if (!isLocalAbsolutePath(candidate)) continue;
-    if (candidate !== suffix && !candidate.endsWith(`/${suffix}`)) continue;
-    if (match !== null && match !== candidate) return null;
-    match = candidate;
-  }
-  return match;
-}
-
-function looksLikeAbsoluteFilePath(path: string): boolean {
-  const basename = pathBasename(path);
-  return basename.includes(".") && RELATIVE_FILE_NAME_PATTERN.test(basename);
-}
-
-function joinAbsoluteDirectory(directory: string, relative: string): string {
-  const dir = directory.replaceAll("\\", "/").replace(/\/+$/, "");
-  const suffix = relative.replaceAll("\\", "/").replace(/^\/+/, "");
-  return `${dir}/${suffix}`;
-}
-
-const BACKTICK_SPAN_PATTERN = /`([^`]+)`/g;
-const BARE_POSIX_ABSOLUTE_PATH_PATTERN =
-  /(?:^|[\s(])(\/(?:Users|home|tmp|var|etc|opt|mnt|Volumes|private|root)\/[^\s`'")]*)/g;
-
-/**
- * Absolute local files and directories already written in the markdown.
- * Used to join later relative chips (`scripts/foo.py`) onto `Dir: /abs`.
- */
-export function extractAbsoluteFilesystemPaths(text: string): string[] {
-  const found = new Set<string>();
-  const consider = (raw: string) => {
-    const trimmed = raw.trim().replace(/[,.;]+$/, "");
-    if (trimmed.length === 0) return;
-    const candidate = pathWithoutPositionSuffix(trimmed).replace(/\/+$/, "");
-    if (candidate.length === 0 || hasExternalScheme(candidate)) return;
-    if (!isLocalAbsolutePath(candidate) && !looksLikePosixFilesystemPath(candidate)) return;
-    found.add(candidate);
-  };
-
-  for (const match of text.matchAll(BACKTICK_SPAN_PATTERN)) {
-    consider(match[1] ?? "");
-  }
-  for (const match of text.matchAll(BARE_POSIX_ABSOLUTE_PATH_PATTERN)) {
-    consider(match[1] ?? "");
-  }
-  return [...found];
-}
-
-function uniqueJoinAgainstKnownDirectories(
-  suffix: string,
-  knownAbsolutePaths: ReadonlyArray<string>,
-): string | null {
-  const matches = new Set<string>();
-  for (const rawPath of knownAbsolutePaths) {
-    const candidate = pathWithoutPositionSuffix(rawPath).replaceAll("\\", "/");
-    if (!isLocalAbsolutePath(candidate) || looksLikeAbsoluteFilePath(candidate)) continue;
-    matches.add(joinAbsoluteDirectory(candidate, suffix));
-  }
-  return matches.size === 1 ? ([...matches][0] ?? null) : null;
-}
-
-/**
- * If exactly one known absolute path already ends with this relative
- * reference, return that path. Zero or several matches return null so the
- * caller can keep the workspace cwd join.
- */
-export function resolveUniqueAbsoluteSuffixTarget(
-  reference: string,
-  knownAbsolutePaths: ReadonlyArray<string>,
-): string | null {
-  const trimmed = reference.trim();
-  if (trimmed.length === 0) return null;
-
-  const suffix = stripCollapsedRelativePrefix(
-    pathWithoutPositionSuffix(trimmed).replaceAll("\\", "/"),
-  );
-  if (
-    suffix.length === 0 ||
-    suffix.includes("\0") ||
-    !isRelativePath(suffix) ||
-    !isWorkspaceRelativePathSafe(suffix)
-  ) {
-    return null;
-  }
-
-  const match =
-    uniqueAbsolutePathEndingWith(suffix, knownAbsolutePaths) ??
-    uniqueJoinAgainstKnownDirectories(suffix, knownAbsolutePaths) ??
-    (pathBasename(suffix) === suffix
-      ? null
-      : uniqueAbsolutePathEndingWith(pathBasename(suffix), knownAbsolutePaths));
-  if (match === null) return null;
-
-  const position = POSITION_SUFFIX_PATTERN.exec(trimmed)?.[0] ?? "";
-  return `${match}${position}`;
-}
-
-export function resolveChatFileChipTarget(
-  reference: string | undefined,
-  cwd: string | undefined,
-  knownAbsolutePaths?: ReadonlyArray<string>,
-): string | null {
-  if (!reference) return null;
-  const knownTarget =
-    knownAbsolutePaths && knownAbsolutePaths.length > 0
-      ? resolveUniqueAbsoluteSuffixTarget(reference, knownAbsolutePaths)
-      : null;
-  return knownTarget ?? resolveMarkdownFileLinkTarget(reference, cwd);
-}
-
 export function resolveMarkdownFileLinkTarget(
   href: string | undefined,
   cwd?: string,
 ): string | null {
   if (!href) return null;
-  const rawHref = href.trim();
+  const rawHref = normalizeMarkdownLinkDestination(href);
   if (rawHref.length === 0 || rawHref.startsWith("#")) return null;
 
   const fileUrlTarget = rawHref.toLowerCase().startsWith("file:")
     ? parseFileUrlHref(rawHref)
     : null;
   const source = fileUrlTarget ?? stripSearchAndHash(rawHref);
-  const decodedPath = fileUrlTarget ? source.path.trim() : safeDecode(source.path.trim());
+  const decodedPath = normalizeWindowsDrivePath(
+    fileUrlTarget ? source.path.trim() : safeDecode(source.path.trim()),
+  );
   const decodedHash = safeDecode(source.hash.trim());
 
   if (decodedPath.length === 0) return null;
@@ -291,24 +203,7 @@ export function resolveMarkdownFileLinkTarget(
     return null;
   }
 
-  const pathWithoutPosition = decodedPath.replace(POSITION_SUFFIX_PATTERN, "");
-  const isExplicitRelativeDirectory =
-    /[\\/]$/.test(pathWithoutPosition) &&
-    isWorkspaceRelativePathSafe(pathWithoutPosition.replace(/[\\/]+$/, ""));
-  // Rewritten file URIs can contain forward-slash UNC paths. Use workspace
-  // containment to distinguish these from protocol-relative web links.
-  const isWorkspacePath =
-    cwd !== undefined &&
-    (localPathsEqual(pathWithoutPosition, cwd) ||
-      workspaceRelativePathOf(pathWithoutPosition, cwd) !== null);
-  if (
-    !fileUrlTarget &&
-    !isLikelyPathCandidate(decodedPath) &&
-    !isExplicitRelativeDirectory &&
-    !isWorkspacePath
-  ) {
-    return null;
-  }
+  if (!isLikelyPathCandidate(decodedPath)) return null;
 
   const pathWithPosition = appendLineColumnFromHash(decodedPath, decodedHash);
   if (!isRelativePath(pathWithPosition)) {
@@ -317,4 +212,225 @@ export function resolveMarkdownFileLinkTarget(
 
   if (!cwd) return null;
   return resolvePathLinkTarget(pathWithPosition, cwd);
+}
+
+const INLINE_CODE_DISQUALIFIER_PATTERN = /[\s`]/;
+const PATH_SEPARATOR_PATTERN = /[\\/]/;
+const FILE_EXTENSION_PATTERN = /\.[A-Za-z0-9_-]+$/;
+const NUMERIC_DOTTED_PATTERN = /^\d+(?:\.\d+)+$/;
+const BARE_EXTENSIONLESS_POSITION_PATTERN = /^[A-Za-z0-9_-]+(?::\d+){1,2}$/;
+// Any `Name:digits` shape also matches `error:1`, `port:3000`, `TODO:12`, so
+// extensionless linking is limited to conventional filenames.
+const EXTENSIONLESS_FILE_NAMES = new Set([
+  "Makefile",
+  "makefile",
+  "GNUmakefile",
+  "Dockerfile",
+  "Containerfile",
+  "Justfile",
+  "justfile",
+  "Rakefile",
+  "Gemfile",
+  "Procfile",
+  "Brewfile",
+  "Caddyfile",
+  "Vagrantfile",
+  "Jenkinsfile",
+  "Podfile",
+  "Fastfile",
+  "BUILD",
+  "WORKSPACE",
+  "LICENSE",
+  "LICENCE",
+  "COPYING",
+  "NOTICE",
+  "AUTHORS",
+  "CONTRIBUTORS",
+  "CHANGELOG",
+  "README",
+  "CODEOWNERS",
+]);
+const SINGLE_LABEL_HOSTNAMES = new Set(["localhost"]);
+// Allowlists, not full public-suffix detection: treating every dotted first
+// segment as a host would swallow real paths like `conf.d/x.conf` or
+// `Makefile.in:12`. Extensions that double as filename suffixes (`sh`, `md`,
+// `ts`, `rs`, `in`, ...) are deliberately absent from both sets.
+const GENERIC_HOSTNAME_TLDS = new Set([
+  "com",
+  "net",
+  "org",
+  "io",
+  "dev",
+  "app",
+  "ai",
+  "co",
+  "edu",
+  "gov",
+  "mil",
+  "info",
+  "biz",
+  "xyz",
+  "me",
+  "tv",
+  "cc",
+  "gg",
+  "chat",
+  "cloud",
+  "site",
+  "online",
+  "tech",
+  "store",
+  "link",
+]);
+// Country codes collide with file extensions (`.pl` Perl, `.pt` PyTorch,
+// `.es` ES modules), so they only count as host evidence when the candidate
+// lacks a :line suffix — an explicit line reference marks a file and wins.
+const COUNTRY_HOSTNAME_TLDS = new Set([
+  "uk",
+  "de",
+  "fr",
+  "nl",
+  "se",
+  "no",
+  "fi",
+  "dk",
+  "pl",
+  "ch",
+  "at",
+  "be",
+  "es",
+  "it",
+  "pt",
+  "eu",
+  "us",
+  "ca",
+  "au",
+  "nz",
+  "jp",
+  "kr",
+  "cn",
+  "br",
+  "ru",
+  "mx",
+  "ie",
+  "cz",
+  "tr",
+  "sg",
+  "hk",
+]);
+
+/** `127.0.0.1`, `localhost`, `example.com`, `1.2.3` — hosts and versions, not files. */
+function looksLikeHostname(segment: string, hasPosition: boolean): boolean {
+  if (segment.startsWith(".")) return false;
+  const lowered = segment.toLowerCase();
+  if (SINGLE_LABEL_HOSTNAMES.has(lowered)) return true;
+  if (NUMERIC_DOTTED_PATTERN.test(segment)) return true;
+  const labels = lowered.split(".");
+  const lastLabel = labels[labels.length - 1];
+  if (labels.length < 2 || lastLabel === undefined) return false;
+  if (GENERIC_HOSTNAME_TLDS.has(lastLabel)) return true;
+  return !hasPosition && COUNTRY_HOSTNAME_TLDS.has(lastLabel);
+}
+
+/**
+ * Inline code spans mostly hold identifiers, commands, and refs (`node.meta`,
+ * `origin/main`) rather than deliberate link destinations, so auto-linking
+ * them demands stronger path evidence than an explicit markdown link does:
+ * an unambiguous path prefix, a file extension, or a :line suffix.
+ */
+export function resolveInlineCodeFileLinkMeta(
+  codeText: string,
+  cwd?: string,
+): MarkdownFileLinkMeta | null {
+  const trimmed = codeText.trim();
+  if (trimmed.length === 0 || INLINE_CODE_DISQUALIFIER_PATTERN.test(trimmed)) return null;
+
+  // Windows drive/UNC paths keep their backslashes; any other backslashes are
+  // relative Windows-style paths, which neither the shape checks nor the
+  // downstream resolver understand — normalize them to forward slashes.
+  const candidate =
+    WINDOWS_DRIVE_PATH_PATTERN.test(trimmed) || WINDOWS_UNC_PATH_PATTERN.test(trimmed)
+      ? trimmed
+      : trimmed.replaceAll("\\", "/");
+
+  const hasPosition = POSITION_SUFFIX_PATTERN.test(candidate);
+  if (!hasPosition && !PATH_SEPARATOR_PATTERN.test(candidate)) return null;
+
+  const hasExplicitPathShape =
+    RELATIVE_PATH_PREFIX_PATTERN.test(candidate) ||
+    candidate.startsWith("/") ||
+    WINDOWS_DRIVE_PATH_PATTERN.test(candidate) ||
+    WINDOWS_UNC_PATH_PATTERN.test(candidate);
+  if (!hasExplicitPathShape) {
+    const withoutPosition = candidate.replace(POSITION_SUFFIX_PATTERN, "");
+    const firstSegment = withoutPosition.split("/")[0] ?? withoutPosition;
+    if (looksLikeHostname(firstSegment, hasPosition)) return null;
+    if (!hasPosition && !FILE_EXTENSION_PATTERN.test(basenameOfPath(withoutPosition))) {
+      return null;
+    }
+  }
+
+  const resolved = resolveMarkdownFileLinkMeta(candidate, cwd);
+  if (resolved) return resolved;
+
+  // `Makefile:12` — conventional extensionless names fail the generic
+  // markdown-link candidate patterns, but here the :line suffix already
+  // marked the span as a file reference.
+  if (
+    cwd &&
+    BARE_EXTENSIONLESS_POSITION_PATTERN.test(candidate) &&
+    EXTENSIONLESS_FILE_NAMES.has(candidate.replace(POSITION_SUFFIX_PATTERN, ""))
+  ) {
+    return buildFileLinkMetaFromTarget(resolvePathLinkTarget(candidate, cwd), cwd);
+  }
+  return null;
+}
+
+function basenameOfPath(path: string): string {
+  // A trailing separator is a valid way to write a directory, so trim it before
+  // taking the final segment. Without this the segment reads as empty and the
+  // chip renders with no label at all.
+  const trimmed = path.replace(/[/\\]+$/, "") || path;
+  const separatorIndex = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  return separatorIndex >= 0 ? trimmed.slice(separatorIndex + 1) : trimmed;
+}
+
+function workspaceRelativePath(path: string, workspaceRoot: string | undefined): string | null {
+  if (!workspaceRoot) return null;
+  const normalizedPath = normalizeWindowsDrivePath(path.replaceAll("\\", "/"));
+  const normalizedRoot = normalizeWindowsDrivePath(workspaceRoot.replaceAll("\\", "/")).replace(
+    /\/+$/,
+    "",
+  );
+  const pathForCompare = normalizedPath.toLowerCase();
+  const rootForCompare = normalizedRoot.toLowerCase();
+  if (!pathForCompare.startsWith(`${rootForCompare}/`)) return null;
+  return normalizedPath.slice(normalizedRoot.length + 1);
+}
+
+export function resolveMarkdownFileLinkMeta(
+  href: string | undefined,
+  cwd?: string,
+): MarkdownFileLinkMeta | null {
+  const targetPath = resolveMarkdownFileLinkTarget(href, cwd);
+  if (!targetPath) return null;
+  return buildFileLinkMetaFromTarget(targetPath, cwd);
+}
+
+function buildFileLinkMetaFromTarget(targetPath: string, cwd?: string): MarkdownFileLinkMeta {
+  const { path, line, column } = splitPathAndPosition(targetPath);
+  const parsedLine = line ? Number.parseInt(line, 10) : Number.NaN;
+  const parsedColumn = column ? Number.parseInt(column, 10) : Number.NaN;
+  const lineNumber = Number.isFinite(parsedLine) ? parsedLine : undefined;
+  const columnNumber = Number.isFinite(parsedColumn) ? parsedColumn : undefined;
+
+  return {
+    filePath: path,
+    targetPath,
+    displayPath: formatWorkspaceRelativePath(targetPath, cwd),
+    workspaceRelativePath: workspaceRelativePath(path, cwd),
+    basename: basenameOfPath(path),
+    ...(lineNumber !== undefined ? { line: lineNumber } : {}),
+    ...(columnNumber !== undefined ? { column: columnNumber } : {}),
+  };
 }

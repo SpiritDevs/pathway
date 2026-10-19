@@ -1,137 +1,455 @@
-// FILE: ComputerSettingsPanel.tsx
-// Purpose: Own the Computer use settings panel: one surface for the control toggle,
-//          the honest attention-only status line, cursor colors, and the preview.
-// Layer: Settings UI components
-// Exports: ComputerSettingsPanel
+// Settings → Computer: the control toggle, the one attention row, cursor colors
+// and the preview for the selected environment, followed by the getting-started
+// guide, the action history, the access and oversight policy, and the Advanced
+// details (macOS grants and what the backend can do).
 
+import { connectionStatusText } from "@spiritdevs/client-runtime/connection";
 import {
-  COMPUTER_HYPRLAND_BACKEND,
-  COMPUTER_KWIN_BACKEND,
-  COMPUTER_MAC_BACKEND,
-  COMPUTER_NESTED_KWIN_BACKEND,
-  COMPUTER_RELEASE_CONTROL_HOTKEY,
-  COMPUTER_RELEASE_HOTKEY_BACKENDS,
-  type ComputerCapabilities,
-  type ComputerPermission,
-} from "@synara/contracts";
+  AuthAccessReadScope,
+  AuthAccessWriteScope,
+  DEFAULT_AGENT_CURSOR_COLOR_MODE,
+  DEFAULT_CLIENT_SETTINGS,
+  normalizeCursorHexColor,
+  type ClientSettings,
+  type ClientSettingsPatch,
+  type ComputerStatusResult,
+  type DesktopComputerHelperState,
+  type DesktopComputerSettingsPane,
+  type EnvironmentId,
+} from "@spiritdevs/contracts";
+import { ChevronDownIcon, CloudIcon, LaptopIcon, MonitorIcon, TerminalIcon } from "lucide-react";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+
+import { isDesktopLocalConnectionTarget } from "../../connection/desktopLocal";
+import { useComputerStateStore, useCachedComputerStatus } from "../../computerStateStore";
+import { isElectron } from "../../env";
+import { usePrimarySessionState } from "../../environments/primary";
+import { useProvisionComputer } from "../../hooks/useProvisionComputer";
+import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";
 import {
   COMPUTER_PERMISSION_KINDS,
-  computerPermissionSetupMessage,
-  missingComputerAppSnapPermissions,
-} from "@synara/shared/computerGrants";
-import {
-  computerPermissionSetupSupported,
   readLocalComputerPermissionBridge,
-} from "~/lib/computerProvisioning";
-import { useQuery } from "@tanstack/react-query";
-import { useCallback, useEffect, useState } from "react";
-
+} from "../../lib/computerProvisioning";
+import { cn } from "../../lib/utils";
+import { computerEnvironment } from "../../state/computer";
 import {
-  DEFAULT_AGENT_CURSOR_COLOR_MODE,
-  normalizeCursorHexColor,
-  type AgentCursorColorMode,
-  type AppSettingsBinding,
-  type ComputerPreviewSize,
-} from "~/appSettings";
-import type { DesktopAppSnapSettingsPane, DesktopAppSnapState } from "@synara/contracts";
+  useEnvironments,
+  usePrimaryEnvironmentId,
+  type EnvironmentPresentation,
+} from "../../state/environments";
+import { useEnvironmentQuery } from "../../state/query";
+import { useEnvironmentSessionState } from "../../state/session";
 import {
-  computerReconnectsNote,
-  computerStatusNeedsSetup,
-  resolveComputerAvailabilityView,
-} from "~/components/ComputerPanel.logic";
-import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
-import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
-import { Button } from "~/components/ui/button";
-import { Input } from "~/components/ui/input";
-import { Switch } from "~/components/ui/switch";
-import { useProvisionComputer } from "~/hooks/useProvisionComputer";
-import { useRefreshOnWindowReturn } from "~/hooks/useRefreshOnWindowReturn";
-import {
-  AppSnapPermissionSection,
-  COMPUTER_PERMISSION_PANES,
-  useAppSnapPermissionGuideBridge,
-} from "./AppSnapPermissionSection";
-import {
-  COMPUTER_STATUS_VISIBLE_REFETCH_INTERVAL_MS,
-  computerStatusQueryOptions,
-} from "~/lib/serverReactQuery";
-import { cn } from "~/lib/utils";
-import { settingRowAnchorId } from "~/settingsNavigation";
-import { useAgentCursorDesktopSync } from "./agentCursorDesktopSync";
-import { SettingResetButton, SettingsSegmentedControl } from "./SettingControls";
-import { SettingsCard, SettingsRow, SettingsSectionShell } from "./SettingsPanelPrimitives";
-import { ComputerGettingStarted } from "./ComputerGettingStarted";
+  ConnectionStatusDot,
+  connectionPhaseDotClassName,
+  connectionPhasePingClassName,
+} from "../ConnectionStatusDot";
+import { Button } from "../ui/button";
+import { Input } from "../ui/input";
+import { Switch } from "../ui/switch";
+import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { ComputerAuditHistorySection } from "./ComputerAuditHistorySection";
+import { ComputerEnvironmentPolicySection } from "./ComputerEnvironmentPolicySection";
+import { ComputerGettingStarted } from "./ComputerGettingStarted";
+import {
+  ComputerHostPermissionNote,
+  ComputerHostUnavailableNote,
+  ComputerPermissionSection,
+  useComputerPermissionGuideBridge,
+} from "./ComputerPermissionSection";
+import {
+  BACKEND_DISPLAY_NAMES,
+  computerCapabilitiesDescription,
+  computerCapabilitySummary,
+  environmentSupportsComputer,
+  resolveComputerPermissionsView,
+  resolveComputerScopeAccess,
+  resolveComputerSettingsAttention,
+  type ComputerScopeAccess,
+  type ComputerSettingsAttention,
+} from "./ComputerSettingsPanel.logic";
+import {
+  buildProviderEnvironmentOptions,
+  resolveSelectedProviderEnvironmentId,
+} from "./ProviderSettingsPanel.logic";
+import {
+  SettingResetButton,
+  SettingsPageContainer,
+  SettingsRow,
+  SettingsSection,
+} from "./settingsLayout";
+import { searchableSetting } from "./settingsSearch";
+import { useComputerStatusRefresh } from "~/hooks/useComputerStatusRefresh";
 
-/** Stable identity, so the provision hook's toast copy is not rebuilt every render. */
-const EMPTY_PERMISSIONS: readonly ComputerPermission[] = [];
+const selectStatusByEnvironment = (state: {
+  readonly statusByEnvironment: Readonly<Record<string, ComputerStatusResult>>;
+}) => state.statusByEnvironment;
 
-const BACKEND_DISPLAY_NAMES: Record<string, string> = {
-  [COMPUTER_KWIN_BACKEND]: "KWin plugin (KDE)",
-  [COMPUTER_HYPRLAND_BACKEND]: "Hyprland plugin",
-  [COMPUTER_NESTED_KWIN_BACKEND]: "Isolated agent desktop (nested KWin)",
-  [COMPUTER_MAC_BACKEND]: "macOS desktop",
-  cua: "Cua 0.28.2",
-  fake: "Test backend",
-};
+// ── Environment picker ──────────────────────────────────────────────────
 
-/** Ordered to read as a sentence of abilities, most consequential first. */
-const CAPABILITY_LABELS: ReadonlyArray<{
-  readonly key: keyof ComputerCapabilities;
-  readonly label: string;
-}> = [
-  { key: "capture", label: "screen capture" },
-  { key: "input", label: "input" },
-  { key: "windows", label: "window listing" },
-  { key: "windowBounds", label: "window geometry" },
-  { key: "stacking", label: "stacking order" },
-  { key: "focus", label: "keyboard focus" },
-  { key: "raise", label: "window raising" },
-  { key: "clipboard", label: "clipboard" },
-  { key: "ghostCursor", label: "ghost cursor" },
-];
-
-/**
- * The abilities to read out. `captureAvailable` is live health, not a static
- * capability: a backend can advertise capture and still be unable to take a
- * frame because the OS has not granted it, and listing "screen capture" in that
- * state is the panel telling the user something the desktop cannot do.
- */
-function capabilitySummary(capabilities: ComputerCapabilities, captureAvailable: boolean): string {
-  const enabled = CAPABILITY_LABELS.filter(
-    (entry) => capabilities[entry.key] && (entry.key !== "capture" || captureAvailable),
-  ).map((entry) => entry.label);
-  return enabled.length > 0 ? enabled.join(", ") : "none";
+function computerEnvironmentIcon(environment: EnvironmentPresentation) {
+  if (environment.entry.target._tag === "PrimaryConnectionTarget") return MonitorIcon;
+  if (environment.entry.target._tag === "RelayConnectionTarget") return CloudIcon;
+  if (environment.entry.target._tag === "SshConnectionTarget") return TerminalIcon;
+  if (isDesktopLocalConnectionTarget(environment.entry.target)) return LaptopIcon;
+  return CloudIcon;
 }
+
+function computerEnvironmentDetail(environment: EnvironmentPresentation): string {
+  if (environment.entry.target._tag === "PrimaryConnectionTarget") return "Primary device";
+  if (environment.relayManaged) return "Pathway Connect";
+  if (environment.entry.target._tag === "SshConnectionTarget") return "SSH";
+  if (isDesktopLocalConnectionTarget(environment.entry.target)) return "Local device";
+  return environment.displayUrl ?? "Remote device";
+}
+
+export function ComputerSettingsPanel() {
+  const { environments, isReady } = useEnvironments();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const statusByEnvironment = useComputerStateStore(selectStatusByEnvironment);
+  const options = useMemo(
+    () =>
+      buildProviderEnvironmentOptions(
+        environments.filter((environment) =>
+          environmentSupportsComputer(
+            environment.descriptor?.platform.os,
+            statusByEnvironment[environment.environmentId],
+          ),
+        ),
+        primaryEnvironmentId,
+      ),
+    [environments, primaryEnvironmentId, statusByEnvironment],
+  );
+  const [selectedEnvironmentId, setSelectedEnvironmentId] = useState<EnvironmentId | null>(
+    primaryEnvironmentId,
+  );
+  const effectiveEnvironmentId = resolveSelectedProviderEnvironmentId(
+    options,
+    selectedEnvironmentId,
+    primaryEnvironmentId,
+  );
+  const selectedEnvironment =
+    options.find((environment) => environment.environmentId === effectiveEnvironmentId) ?? null;
+  const onlyPrimaryDevice =
+    options.length === 1 && options[0]?.entry.target._tag === "PrimaryConnectionTarget";
+
+  return (
+    <SettingsPageContainer>
+      {!onlyPrimaryDevice ? (
+        <SettingsSection title="Devices">
+          {options.length === 0 ? (
+            <SettingsRow
+              title={isReady ? "No Computer-capable devices" : "Loading devices"}
+              description={
+                isReady
+                  ? "Computer control needs an environment running on macOS, or a Wayland desktop on Linux."
+                  : "Reading connected execution environments."
+              }
+            />
+          ) : (
+            <div className="grid gap-1 sm:grid-cols-2">
+              {options.map((environment) => {
+                const Icon = computerEnvironmentIcon(environment);
+                const selected = environment.environmentId === effectiveEnvironmentId;
+                const statusText = connectionStatusText(environment.connection);
+                return (
+                  <button
+                    key={environment.environmentId}
+                    type="button"
+                    aria-pressed={selected}
+                    className={cn(
+                      "flex min-w-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors sm:px-4",
+                      selected
+                        ? "bg-primary/8 ring-1 ring-primary/25 dark:bg-primary/12"
+                        : "hover:bg-muted/40",
+                    )}
+                    onClick={() => setSelectedEnvironmentId(environment.environmentId)}
+                  >
+                    <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-background text-muted-foreground">
+                      <Icon className="size-4" aria-hidden />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-1.5">
+                        <ConnectionStatusDot
+                          tooltipText={statusText}
+                          dotClassName={connectionPhaseDotClassName(environment.connection.phase)}
+                          pingClassName={connectionPhasePingClassName(environment.connection.phase)}
+                        />
+                        <span className="truncate text-sm font-medium text-foreground">
+                          {environment.label}
+                        </span>
+                      </span>
+                      <span className="block truncate pl-[18px] text-xs text-muted-foreground">
+                        {computerEnvironmentDetail(environment)} · {statusText}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </SettingsSection>
+      ) : null}
+
+      {selectedEnvironment ? (
+        <SelectedComputerEnvironment
+          key={selectedEnvironment.environmentId}
+          environment={selectedEnvironment}
+        />
+      ) : null}
+    </SettingsPageContainer>
+  );
+}
+
+// ── Session gating ──────────────────────────────────────────────────────
+
+interface ComputerEnvironmentAccess {
+  readonly readAccess: ComputerScopeAccess;
+  readonly writeAccess: ComputerScopeAccess;
+}
+
+function SelectedComputerEnvironment({
+  environment,
+}: {
+  readonly environment: EnvironmentPresentation;
+}) {
+  const isPrimary = environment.entry.target._tag === "PrimaryConnectionTarget";
+  if (isPrimary && isElectron) {
+    // The desktop app owns its primary server outright.
+    return (
+      <ComputerEnvironmentSettings
+        environment={environment}
+        isPrimary
+        access={{ readAccess: "granted", writeAccess: "granted" }}
+      />
+    );
+  }
+  return isPrimary ? (
+    <PrimarySessionGatedComputerSettings environment={environment} />
+  ) : (
+    <RemoteSessionGatedComputerSettings environment={environment} />
+  );
+}
+
+function scopeAccess(input: {
+  readonly isPrimary: boolean;
+  readonly session: Parameters<typeof resolveComputerScopeAccess>[0]["session"];
+  readonly isPending: boolean;
+  readonly hasError: boolean;
+}): ComputerEnvironmentAccess {
+  const base = { ...input, isElectron };
+  return {
+    readAccess: resolveComputerScopeAccess({ ...base, scope: AuthAccessReadScope }),
+    writeAccess: resolveComputerScopeAccess({ ...base, scope: AuthAccessWriteScope }),
+  };
+}
+
+function PrimarySessionGatedComputerSettings({
+  environment,
+}: {
+  readonly environment: EnvironmentPresentation;
+}) {
+  const session = usePrimarySessionState();
+  return (
+    <ComputerEnvironmentSettings
+      environment={environment}
+      isPrimary
+      access={scopeAccess({
+        isPrimary: true,
+        session: session.data,
+        isPending: session.isPending,
+        hasError: session.error !== null,
+      })}
+    />
+  );
+}
+
+function RemoteSessionGatedComputerSettings({
+  environment,
+}: {
+  readonly environment: EnvironmentPresentation;
+}) {
+  const session = useEnvironmentSessionState(environment.environmentId);
+  return (
+    <ComputerEnvironmentSettings
+      environment={environment}
+      isPrimary={false}
+      access={scopeAccess({
+        isPrimary: false,
+        session: session.data,
+        isPending: session.isPending,
+        hasError: session.hasError,
+      })}
+    />
+  );
+}
+
+// ── One environment ─────────────────────────────────────────────────────
+
+function ComputerEnvironmentSettings({
+  environment,
+  isPrimary,
+  access,
+}: {
+  readonly environment: EnvironmentPresentation;
+  readonly isPrimary: boolean;
+  readonly access: ComputerEnvironmentAccess;
+}) {
+  const environmentId = environment.environmentId;
+  const settings = useClientSettings();
+  const updateSettings = useUpdateClientSettings();
+  const statusQuery = useEnvironmentQuery(computerEnvironment.status({ environmentId, input: {} }));
+  const cachedStatus = useCachedComputerStatus(environmentId);
+  const status = cachedStatus ?? statusQuery.data ?? undefined;
+
+  // Every fetched status lands in the shared store, so surfaces that only
+  // describe the desktop never have to ask it themselves.
+  useEffect(() => {
+    if (statusQuery.data) {
+      useComputerStateStore.getState().setStatus(environmentId, statusQuery.data);
+    }
+  }, [environmentId, statusQuery.data]);
+
+  // Grants belong to the host, so only the desktop app's own primary has a
+  // native permission surface to consult.
+  const bridge = useMemo(
+    () =>
+      readLocalComputerPermissionBridge({ environmentIsDesktopPrimary: isElectron && isPrimary }),
+    [isPrimary],
+  );
+  const [nativeState, setNativeState] = useState<DesktopComputerHelperState | null>(null);
+  const [guidePane, setGuidePane] = useState<DesktopComputerSettingsPane | null>(null);
+  const refreshNativeState = useCallback(() => {
+    if (!bridge) return;
+    void bridge
+      .getState(COMPUTER_PERMISSION_KINDS)
+      .then(setNativeState)
+      .catch(() => undefined);
+  }, [bridge]);
+
+  useEffect(() => {
+    if (!bridge) return;
+    let disposed = false;
+    const unsubscribe = bridge.onState((state) => {
+      if (!disposed) setNativeState(state);
+    });
+    void bridge
+      .getState(COMPUTER_PERMISSION_KINDS)
+      .then((next) => {
+        if (!disposed) setNativeState(next);
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, [bridge]);
+
+  useComputerPermissionGuideBridge({
+    bridge,
+    permissionKinds: COMPUTER_PERMISSION_KINDS,
+    onStateChange: setNativeState,
+    onGuidePaneChange: setGuidePane,
+  });
+
+  // Returning from System Settings must re-read both the server status and the
+  // native grant snapshot; the toggle the user just flipped lives in the second.
+  const refreshStatus = statusQuery.refresh;
+  useComputerStatusRefresh({
+    refreshStatus,
+    refreshNativeState,
+    paused: statusQuery.error !== null,
+  });
+
+  const attention = resolveComputerSettingsAttention({
+    status,
+    statusError: statusQuery.error,
+    nativeState,
+    hasNativeBridge: bridge !== null,
+  });
+  const hasNativePermissionSetup = bridge !== null && nativeState?.supported === true;
+  // The same provision the chat's setup card runs: one call in flight per
+  // environment, reported inline here instead of as toasts.
+  const setup = useProvisionComputer(environmentId, {
+    missing: attention.missingPermissions,
+  });
+
+  const permissionsView = resolveComputerPermissionsView({
+    hasNativeBridge: bridge !== null,
+    nativeState,
+    platform: environment.descriptor?.platform.os,
+  });
+  const permissions =
+    bridge !== null && permissionsView?.kind === "grants" ? (
+      <ComputerPermissionSection
+        bridge={bridge}
+        permissionKinds={COMPUTER_PERMISSION_KINDS}
+        state={permissionsView.state}
+        onStateChange={setNativeState}
+        guidePane={guidePane}
+        onGuidePaneChange={setGuidePane}
+      />
+    ) : permissionsView?.kind === "unavailable" ? (
+      <ComputerHostUnavailableNote message={permissionsView.message} />
+    ) : permissionsView?.kind === "host-note" ? (
+      <ComputerHostPermissionNote />
+    ) : null;
+
+  return (
+    <ComputerSettingsView
+      settings={settings}
+      updateSettings={updateSettings}
+      status={status}
+      attention={attention}
+      setup={setup}
+      retry={{
+        isChecking: statusQuery.isPending,
+        onRetry: () => {
+          refreshStatus();
+          refreshNativeState();
+        },
+      }}
+      permissions={permissions}
+    >
+      <ComputerGettingStarted snapShotAvailable={hasNativePermissionSetup} />
+      <ComputerAuditHistorySection environmentId={environmentId} readAccess={access.readAccess} />
+      <ComputerEnvironmentPolicySection
+        environmentId={environmentId}
+        writeAccess={access.writeAccess}
+      />
+    </ComputerSettingsView>
+  );
+}
+
+// ── The surface ─────────────────────────────────────────────────────────
 
 /**
  * One agent-cursor color field: a validated hex input and the swatch it
- * resolves to. Only a complete `#rrggbb` (or an intentional clear) commits to
- * settings, so a half-typed value never reaches the stored preference.
+ * resolves to. Only a complete `#rrggbb` (or an intentional clear) commits, so
+ * a half-typed value never reaches the stored preference.
  */
 function CursorColorField({
   label,
   value,
   onChange,
 }: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
+  readonly label: string;
+  readonly value: string;
+  readonly onChange: (value: string) => void;
 }) {
   const [draft, setDraft] = useState(value);
-  // Follow a committed value that landed from elsewhere (Reset, another
-  // window) instead of stranding the field on the old draft.
+  // Follow a committed value that landed from elsewhere (Reset, another window).
   useEffect(() => setDraft(value), [value]);
   const resolved = normalizeCursorHexColor(value);
   const draftIsValid = draft.trim() === "" || normalizeCursorHexColor(draft) !== "";
   return (
     <label className="flex items-center gap-2">
-      <span className="w-7 shrink-0 text-ui text-muted-foreground">{label}</span>
+      <span className="w-7 shrink-0 text-xs text-muted-foreground">{label}</span>
       <span
         aria-hidden
         data-swatch={resolved || "stock"}
         className={cn(
-          "size-4 shrink-0 rounded-full border border-[color:var(--color-border)]",
+          "size-4 shrink-0 rounded-full border border-border",
           !resolved && "bg-transparent",
         )}
         style={resolved ? { backgroundColor: resolved } : undefined}
@@ -162,253 +480,113 @@ function CursorColorField({
   );
 }
 
-export function ComputerSettingsPanel({
+function SegmentedChoice<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  readonly label: string;
+  readonly value: T;
+  readonly options: ReadonlyArray<{ readonly value: T; readonly label: string }>;
+  readonly onChange: (value: T) => void;
+}) {
+  return (
+    <ToggleGroup
+      aria-label={label}
+      className="shrink-0"
+      size="sm"
+      variant="outline"
+      value={[value]}
+      onValueChange={(next) => {
+        const option = options.find((candidate) => candidate.value === next[0]);
+        if (option) onChange(option.value);
+      }}
+    >
+      {options.map((option) => (
+        <Toggle key={option.value} value={option.value}>
+          {option.label}
+        </Toggle>
+      ))}
+    </ToggleGroup>
+  );
+}
+
+const ATTENTION_TONE_CLASS: Record<ComputerSettingsAttention["tone"], string> = {
+  ready: "bg-emerald-500",
+  // Static on purpose: a checking state can last indefinitely.
+  checking: "bg-amber-500",
+  warning: "bg-amber-500",
+  error: "bg-red-500",
+};
+
+export type ComputerSettingsViewSettings = Pick<
+  ClientSettings,
+  | "computerControlEnabled"
+  | "autoOpenComputerPane"
+  | "computerPreviewSize"
+  | "agentCursorColorMode"
+  | "agentCursorFillColor"
+  | "agentCursorRimColor"
+>;
+
+export interface ComputerSettingsViewProps {
+  readonly settings: ComputerSettingsViewSettings;
+  readonly updateSettings: (patch: ClientSettingsPatch) => void;
+  readonly status: ComputerStatusResult | undefined;
+  readonly attention: ComputerSettingsAttention;
+  readonly setup: {
+    readonly provision: () => void;
+    readonly isPending: boolean;
+    readonly note: string | undefined;
+  };
+  readonly retry: { readonly isChecking: boolean; readonly onRetry: () => void };
+  /** The macOS permission checklist, or where grants are set up instead. */
+  readonly permissions: ReactNode;
+  /** Sections between the control surface and Advanced. */
+  readonly children?: ReactNode;
+}
+
+/** Everything the panel decides at render time, with no data fetching of its own. */
+export function ComputerSettingsView({
   settings,
-  defaults,
   updateSettings,
-  active,
-}: AppSettingsBinding & { readonly active: boolean }) {
-  const statusQuery = useQuery({
-    ...computerStatusQueryOptions(),
-    enabled: active,
-    // Health can flip (reconnecting, recovered) while the panel is open.
-    refetchInterval: active ? COMPUTER_STATUS_VISIBLE_REFETCH_INTERVAL_MS : false,
-  });
-
-  const status = statusQuery.data;
-  const [appSnapState, setAppSnapState] = useState<DesktopAppSnapState | null>(null);
-  const [guidePane, setGuidePane] = useState<DesktopAppSnapSettingsPane | null>(null);
-  // Advanced is details, not a default: the surface opens calm and stays that
-  // way until the user asks for permissions, grants, and abilities.
+  status,
+  attention,
+  setup,
+  retry,
+  permissions,
+  children,
+}: ComputerSettingsViewProps) {
+  const defaults = DEFAULT_CLIENT_SETTINGS;
+  // Details stay out of the way until asked for.
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  // The native permission surface is the AppSnap helper: the same coach that
-  // AppSnap's own settings drive, asked about the computer-use grant set.
-  const localPermissionBridge = readLocalComputerPermissionBridge();
-  const hasNativePermissionSetup =
-    localPermissionBridge !== null && computerPermissionSetupSupported(appSnapState);
-  const nativePermissionSetupError =
-    hasNativePermissionSetup && appSnapState?.permissionSetupErrorCode
-      ? appSnapState.message
-      : null;
-  // Returning from System Settings must re-pull both the server status and the
-  // native grant snapshot — the toggle the user just flipped lives in the
-  // second one.
-  const refreshPermissionState = useCallback(() => {
-    const bridge = readLocalComputerPermissionBridge();
-    if (!bridge) return;
-    void bridge
-      .getState(COMPUTER_PERMISSION_KINDS)
-      .then((next) => setAppSnapState(next))
-      .catch(() => undefined);
-  }, []);
-  useRefreshOnWindowReturn(() => {
-    void statusQuery.refetch({ cancelRefetch: false });
-    refreshPermissionState();
-  }, active);
 
-  // Mirror the cursor colors to the desktop app on mount and on every change,
-  // including while this panel is not the active section (the hooks above the
-  // `!active` return stay mounted). A plain browser has no bridge: no-op.
-  useAgentCursorDesktopSync(settings);
-
-  // Panel-level on purpose: hooks above the `!active` return stay mounted while
-  // the surface is hidden, so a dismissed coach still clears the remembered
-  // pane instead of resurrecting the guide on return.
-  useAppSnapPermissionGuideBridge({
-    permissionKinds: COMPUTER_PERMISSION_KINDS,
-    onStateChange: setAppSnapState,
-    onGuidePaneChange: setGuidePane,
-  });
-
-  useEffect(() => {
-    const bridge = readLocalComputerPermissionBridge();
-    if (!bridge || !active) return;
-    let disposed = false;
-    const unsubscribe = bridge.onState((state) => {
-      if (!disposed) setAppSnapState(state);
-    });
-    void bridge
-      .getState(COMPUTER_PERMISSION_KINDS)
-      .then((next) => {
-        if (!disposed) setAppSnapState(next);
-      })
-      .catch(() => undefined);
-    return () => {
-      disposed = true;
-      unsubscribe();
-    };
-  }, [active]);
-  /**
-   * The grants the OS is withholding, named. The availability message already
-   * explains what to do; the attention row below names them, and the native
-   * checklist in Advanced is the per-grant walkthrough.
-   */
-  const nativeMissingPermissions =
-    hasNativePermissionSetup && appSnapState
-      ? missingComputerAppSnapPermissions(appSnapState)
-      : EMPTY_PERMISSIONS;
-  const missingPermissions =
-    nativeMissingPermissions.length > 0
-      ? nativeMissingPermissions
-      : status?.availability.kind === "permission-required"
-        ? status.availability.missing
-        : EMPTY_PERMISSIONS;
-  // macOS itself says every grant is in place. This is what lets an idle
-  // backend, which has checked nothing since launch, still show as ready.
-  const grantsConfirmed =
-    hasNativePermissionSetup &&
-    appSnapState !== null &&
-    nativePermissionSetupError === null &&
-    nativeMissingPermissions.length === 0;
-  // Idle status is intentionally side-effect-free. Fresh local grant evidence
-  // can reveal setup needs without starting Computer or its input listener.
-  const availability =
-    nativeMissingPermissions.length > 0 && status?.availability.kind === "available"
-      ? {
-          kind: "permission-required" as const,
-          missing: nativeMissingPermissions,
-          buildSignature: "unknown" as const,
-          message: computerPermissionSetupMessage(nativeMissingPermissions, "unknown"),
-        }
-      : status?.availability;
-  // The same provision the chat's setup card runs, through the same hook: one
-  // call in flight at a time whichever surface started it, and one account of
-  // what happened. This surface keeps that account inline rather than as a
-  // toast, because it has room for it and is where the user is already looking.
-  const setup = useProvisionComputer({ missing: missingPermissions });
-
-  if (!active) return null;
-
-  const availabilityView = statusQuery.isError
-    ? {
-        kind: "blocked" as const,
-        title: "Computer status is unavailable",
-        description:
-          statusQuery.error instanceof Error && statusQuery.error.message
-            ? statusQuery.error.message
-            : "The server could not be reached.",
-      }
-    : resolveComputerAvailabilityView(availability, status?.health, grantsConfirmed);
-  const backend =
-    status?.availability.kind === "available" ? (status.availability.backend ?? null) : null;
-  const health = status?.health;
-  // How this backend shares the machine, in the user's terms. macOS is the one
-  // backend with no seat of its own: it drives the desktop the human is looking
-  // at. Elsewhere, the emergency release is a shortcut the compositor plugin
-  // (KWin or Hyprland) registers with the compositor — no other backend binds
-  // it, and a nested offscreen session never hears the human's keys, so only a
-  // visible plugin-backed desktop may promise it.
-  const capabilitiesDescription =
-    backend === "cua" && status?.capabilities.input === false
-      ? "This backend can observe desktop windows, but native desktop input is unavailable. Isolated headless browser actions require a verified browser runtime and an available task-scoped Escape shortcut. Use Stop in the chat to interrupt the task."
-      : backend === COMPUTER_MAC_BACKEND || backend === "cua"
-        ? "The agent shares your Mac desktop and works in the background by default. It can bring a window forward when your task asks to watch. Background input may still affect focus. Use Stop in the chat to interrupt the task. Physical Escape interrupts the current action when Input Monitoring is granted; it does not disable future tasks."
-        : backend !== null &&
-            COMPUTER_RELEASE_HOTKEY_BACKENDS.includes(backend) &&
-            status?.capabilities.visibleDesktop === true
-          ? `The agent shares the computer described by this backend. Press ${COMPUTER_RELEASE_CONTROL_HOTKEY} at any time to stop it from acting on the desktop, and press it again to let it resume.`
-          : "The agent drives its own seat, so your cursor and focus stay untouched.";
-  /**
-   * Screen capture is granted separately from input on every backend that has a
-   * permission model at all, so a desktop can be fully driveable and still
-   * blind.
-   *
-   * The two readings differ on purpose. `captureUnavailable` is "nothing has
-   * proved capture works", which is also true of a backend nobody has engaged
-   * yet — enough to offer Set up, not enough to accuse the OS of refusing.
-   * `captureBlocked` is the refusal itself: a helper that is running and still
-   * cannot see. Only that one earns the warning, and without it the surface is
-   * entirely green while every screenshot fails.
-   */
-  const captureUnavailable = health?.captureAvailable === false;
-  const captureBlocked = captureUnavailable && health?.status === "connected";
-  const localPlatformUnsupported =
-    localPermissionBridge !== null && appSnapState !== null && appSnapState.platform !== "macos";
-  // Shared with the chat's setup card, which asks the same question of the same
-  // status after pressing the same server-side Set up.
-  const needsSetup =
-    !localPlatformUnsupported &&
-    (nativePermissionSetupError !== null ||
-      nativeMissingPermissions.length > 0 ||
-      computerStatusNeedsSetup(status, grantsConfirmed));
-  // The one counter worth carrying beside the status sentence; a last failure
-  // is already the reconnect sentence, so it is not repeated here.
-  const healthNotes = [computerReconnectsNote(health)].filter(
-    (note): note is string => note !== null,
-  );
-  /**
-   * One status row says whether the desktop is ready, connected, or needs the
-   * user — a blocked backend, a missing grant, a screen-capture refusal, a
-   * reconnect in flight, or a status query that failed. Only the last kind
-   * carries an action, the one that fixes or rechecks it.
-   */
-  const showAttentionRow =
-    nativePermissionSetupError !== null ||
-    availabilityView.kind === "ready" ||
-    availabilityView.kind === "blocked" ||
-    (availabilityView.kind === "checking" && (needsSetup || health?.status === "reconnecting"));
-  const attentionTitle = nativePermissionSetupError
-    ? "Computer permission setup needs attention"
-    : captureBlocked
-      ? "Screen capture is not allowed yet"
-      : availabilityView.title;
-  const attentionDescription =
-    nativePermissionSetupError ??
-    (captureBlocked
-      ? backend === COMPUTER_MAC_BACKEND
-        ? "The agent can act on the desktop but cannot see it, so screenshots fail. Turn Synara on in System Settings › Privacy & Security › Screen Recording, then press Set up to reconnect."
-        : "The agent can act on the desktop but cannot see it, so screenshots fail. Press Set up to reconnect."
-      : availabilityView.description);
-  const attentionTone = cn(
-    "size-2 shrink-0 rounded-full",
-    nativePermissionSetupError
-      ? "bg-red-500"
-      : availabilityView.kind === "ready"
-        ? "bg-emerald-500"
-        : availabilityView.kind === "checking"
-          ? "animate-pulse bg-amber-500"
-          : captureBlocked
-            ? "bg-amber-500"
-            : "bg-red-500",
-  );
   const attentionAction =
-    needsSetup && !statusQuery.isError ? (
+    attention.action === "setup" ? (
       <Button size="sm" variant="outline" disabled={setup.isPending} onClick={setup.provision}>
         {setup.isPending ? "Setting up…" : "Set up"}
       </Button>
-    ) : statusQuery.isError ? (
-      <Button
-        size="sm"
-        variant="outline"
-        disabled={statusQuery.isFetching}
-        onClick={() => {
-          void statusQuery.refetch();
-          refreshPermissionState();
-        }}
-      >
-        {statusQuery.isFetching ? "Checking…" : "Check again"}
+    ) : attention.action === "retry" ? (
+      <Button size="sm" variant="outline" disabled={retry.isChecking} onClick={retry.onRetry}>
+        {retry.isChecking ? "Checking…" : "Check again"}
       </Button>
     ) : null;
-  // Stock is the default and stores no override; only an explicit Custom
-  // choice can differ from the default state.
+  // Stock is the default and stores no override.
   const cursorColorMode = settings.agentCursorColorMode ?? DEFAULT_AGENT_CURSOR_COLOR_MODE;
   const cursorColorsDirty =
-    cursorColorMode !== (defaults.agentCursorColorMode ?? DEFAULT_AGENT_CURSOR_COLOR_MODE) ||
-    (settings.agentCursorFillColor ?? "") !== (defaults.agentCursorFillColor ?? "") ||
-    (settings.agentCursorRimColor ?? "") !== (defaults.agentCursorRimColor ?? "");
+    cursorColorMode !== defaults.agentCursorColorMode ||
+    (settings.agentCursorFillColor ?? "") !== defaults.agentCursorFillColor ||
+    (settings.agentCursorRimColor ?? "") !== defaults.agentCursorRimColor;
   const previewDirty =
     settings.autoOpenComputerPane !== defaults.autoOpenComputerPane ||
     settings.computerPreviewSize !== defaults.computerPreviewSize;
 
   return (
-    <div className="space-y-6">
-      {/* The whole surface: the toggle that turns desktop control on, the one
-          attention row when the desktop cannot deliver, and the two
-          preferences that shape a session. */}
-      <SettingsSectionShell
-        id={settingRowAnchorId("Computer control")}
-        title="Computer control"
-        action={
+    <>
+      <SettingsSection
+        {...searchableSetting("computer-control")}
+        headerAction={
           <div className="flex items-center gap-1.5">
             {settings.computerControlEnabled !== defaults.computerControlEnabled ? (
               <SettingResetButton
@@ -428,168 +606,140 @@ export function ComputerSettingsPanel({
           </div>
         }
       >
-        <p className="px-2 text-ui text-muted-foreground">
+        <p className="@xl/settings:px-4 px-3 text-[13px] text-muted-foreground">
           Enable Computer by default in any chat. Leave this off and use /computer-use for one
           request without adding Computer tools to ordinary turns.
         </p>
-        <SettingsCard>
-          {showAttentionRow ? (
-            <SettingsRow
-              title={
-                <span className="flex items-center gap-2">
-                  <span aria-hidden className={attentionTone} />
-                  {attentionTitle}
-                </span>
-              }
-              description={attentionDescription}
-              status={[setup.note, ...healthNotes].filter(Boolean).join(" ") || undefined}
-              control={attentionAction}
-            />
-          ) : null}
-          {/* The agent's on-screen pointer. Stock keeps the driver's monochrome
-              cursor and stores nothing beyond the default; Custom is the only
-              state that carries fill/rim overrides to the desktop cursor host. */}
+        {attention.show ? (
           <SettingsRow
-            title="Cursor colors"
-            description="The agent pointer is stock monochrome by default — like a normal pointer. Custom colors apply to new computer sessions."
-            resetAction={
-              cursorColorsDirty ? (
-                <SettingResetButton
-                  label="cursor colors"
-                  onClick={() =>
-                    updateSettings({
-                      agentCursorColorMode:
-                        defaults.agentCursorColorMode ?? DEFAULT_AGENT_CURSOR_COLOR_MODE,
-                      agentCursorFillColor: defaults.agentCursorFillColor ?? "",
-                      agentCursorRimColor: defaults.agentCursorRimColor ?? "",
-                    })
-                  }
+            title={
+              <span className="flex items-center gap-2">
+                <span
+                  aria-hidden
+                  className={cn(
+                    "size-2 shrink-0 rounded-full",
+                    ATTENTION_TONE_CLASS[attention.tone],
+                  )}
                 />
-              ) : null
+                {attention.title}
+              </span>
             }
-            control={
-              <SettingsSegmentedControl<AgentCursorColorMode>
-                value={cursorColorMode}
-                onValueChange={(value) => updateSettings({ agentCursorColorMode: value })}
-                options={[
-                  { value: "stock", label: "Stock" },
-                  { value: "custom", label: "Custom" },
-                ]}
-                ariaLabel="Agent cursor colors"
-              />
-            }
-          >
-            {cursorColorMode === "custom" ? (
-              <div className="flex flex-col gap-2 pt-3 sm:flex-row sm:gap-4">
-                <CursorColorField
-                  label="Fill"
-                  value={settings.agentCursorFillColor ?? ""}
-                  onChange={(value) => updateSettings({ agentCursorFillColor: value })}
-                />
-                <CursorColorField
-                  label="Rim"
-                  value={settings.agentCursorRimColor ?? ""}
-                  onChange={(value) => updateSettings({ agentCursorRimColor: value })}
-                />
-              </div>
-            ) : null}
-          </SettingsRow>
-          {/* On a backend that drives the visible desktop the pane defaults to
-              stills-only (interactive mode stays off — a second cursor on the
-              user's own screen is worse than none), but the preview itself is
-              wanted: watching the agent's captured view inside the app is how a
-              user follows background work in windows they are not looking at.
-              One row owns both choices: whether it opens, and how big it is. */}
-          <SettingsRow
-            title="Preview"
-            description="Show the live preview the first time an agent acts on the desktop in a chat. Compact keeps it small and glanceable; Large gives it the full wide card."
-            resetAction={
-              previewDirty ? (
-                <SettingResetButton
-                  label="preview"
-                  onClick={() =>
-                    updateSettings({
-                      autoOpenComputerPane: defaults.autoOpenComputerPane,
-                      computerPreviewSize: defaults.computerPreviewSize,
-                    })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <div className="flex w-full items-center gap-3 sm:w-auto sm:justify-end">
-                <Switch
-                  checked={settings.autoOpenComputerPane}
-                  onCheckedChange={(checked) =>
-                    updateSettings({ autoOpenComputerPane: Boolean(checked) })
-                  }
-                  aria-label="Show the computer preview automatically when an agent drives the desktop"
-                />
-                <SettingsSegmentedControl<ComputerPreviewSize>
-                  value={settings.computerPreviewSize}
-                  onValueChange={(value) => updateSettings({ computerPreviewSize: value })}
-                  options={[
-                    { value: "compact", label: "Compact" },
-                    { value: "large", label: "Large" },
-                  ]}
-                  ariaLabel="In-chat computer preview size"
-                />
-              </div>
-            }
+            description={attention.description}
+            status={[setup.note, ...attention.notes].filter(Boolean).join(" ") || undefined}
+            control={attentionAction}
           />
-        </SettingsCard>
-      </SettingsSectionShell>
+        ) : null}
+        <SettingsRow
+          {...searchableSetting("computer-cursor-colors")}
+          description="The agent pointer is stock monochrome by default — like a normal pointer. Custom colors apply to new computer sessions."
+          resetAction={
+            cursorColorsDirty ? (
+              <SettingResetButton
+                label="cursor colors"
+                onClick={() =>
+                  updateSettings({
+                    agentCursorColorMode: defaults.agentCursorColorMode,
+                    agentCursorFillColor: defaults.agentCursorFillColor,
+                    agentCursorRimColor: defaults.agentCursorRimColor,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SegmentedChoice
+              label="Agent cursor colors"
+              value={cursorColorMode}
+              options={[
+                { value: "stock", label: "Stock" },
+                { value: "custom", label: "Custom" },
+              ]}
+              onChange={(value) => updateSettings({ agentCursorColorMode: value })}
+            />
+          }
+        >
+          {cursorColorMode === "custom" ? (
+            <div className="flex flex-col gap-2 pt-3 pb-2 sm:flex-row sm:gap-4">
+              <CursorColorField
+                label="Fill"
+                value={settings.agentCursorFillColor ?? ""}
+                onChange={(value) => updateSettings({ agentCursorFillColor: value })}
+              />
+              <CursorColorField
+                label="Rim"
+                value={settings.agentCursorRimColor ?? ""}
+                onChange={(value) => updateSettings({ agentCursorRimColor: value })}
+              />
+            </div>
+          ) : null}
+        </SettingsRow>
+        <SettingsRow
+          {...searchableSetting("computer-preview")}
+          description="Show the live preview the first time an agent acts on the desktop in a chat. Compact keeps it small and glanceable; Large gives it the full wide card."
+          resetAction={
+            previewDirty ? (
+              <SettingResetButton
+                label="preview"
+                onClick={() =>
+                  updateSettings({
+                    autoOpenComputerPane: defaults.autoOpenComputerPane,
+                    computerPreviewSize: defaults.computerPreviewSize,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <div className="flex items-center gap-3">
+              <Switch
+                checked={settings.autoOpenComputerPane}
+                onCheckedChange={(checked) =>
+                  updateSettings({ autoOpenComputerPane: Boolean(checked) })
+                }
+                aria-label="Show the computer preview automatically when an agent drives the desktop"
+              />
+              <SegmentedChoice
+                label="In-chat computer preview size"
+                value={settings.computerPreviewSize}
+                options={[
+                  { value: "compact", label: "Compact" },
+                  { value: "large", label: "Large" },
+                ]}
+                onChange={(value) => updateSettings({ computerPreviewSize: value })}
+              />
+            </div>
+          }
+        />
+      </SettingsSection>
 
-      <ComputerGettingStarted appSnapAvailable={hasNativePermissionSetup} />
-      <ComputerAuditHistorySection />
+      {children}
 
-      {/* Details stay out of the way until asked for: the per-grant checklist
-          the macOS helper drives and what this backend can actually do. */}
-      <SettingsSectionShell
+      <SettingsSection
         title="Advanced"
-        action={
+        headerAction={
           <Button
             size="xs"
             variant="ghost"
             aria-expanded={advancedOpen}
             onClick={() => setAdvancedOpen((open) => !open)}
           >
-            <DisclosureChevron open={advancedOpen} />
+            <ChevronDownIcon className={cn("size-3.5", advancedOpen && "rotate-180")} aria-hidden />
             {advancedOpen ? "Hide" : "Show"}
           </Button>
         }
       >
-        <DisclosureRegion open={advancedOpen}>
-          <div className="flex flex-col gap-4">
-            {hasNativePermissionSetup && appSnapState ? (
-              // One permission section serves every surface; only the pane set
-              // differs. The coach and settings deep links live in the shared
-              // section, so Computer never grows a second guide stack. The
-              // Recheck footer is off here: the attention row's Set up is this
-              // panel's one check action.
-              <AppSnapPermissionSection
-                panes={COMPUTER_PERMISSION_PANES}
-                permissionKinds={COMPUTER_PERMISSION_KINDS}
-                feature="Computer control"
-                state={appSnapState}
-                onStateChange={setAppSnapState}
-                guidePane={guidePane}
-                onGuidePaneChange={setGuidePane}
-                showRecheck={false}
-              />
-            ) : null}
-            <SettingsCard>
-              {status && availabilityView.kind === "ready" ? (
-                <SettingsRow
-                  title="Desktop abilities"
-                  description={capabilitiesDescription}
-                  status={`${backend ? (BACKEND_DISPLAY_NAMES[backend] ?? backend) : "No backend"} · ${capabilitySummary(status.capabilities, !captureBlocked)}`}
-                />
-              ) : null}
-            </SettingsCard>
-          </div>
-        </DisclosureRegion>
-      </SettingsSectionShell>
-    </div>
+        {/* Mounted while hidden so the permission guide keeps its state. */}
+        <div hidden={!advancedOpen} className="space-y-4">
+          {permissions}
+          {status && attention.view.kind === "ready" ? (
+            <SettingsRow
+              title="Desktop abilities"
+              description={computerCapabilitiesDescription(attention.backend, status.capabilities)}
+              status={`${attention.backend ? (BACKEND_DISPLAY_NAMES[attention.backend] ?? attention.backend) : "No backend"} · ${computerCapabilitySummary(status.capabilities, !attention.captureBlocked)}`}
+            />
+          ) : null}
+        </div>
+      </SettingsSection>
+    </>
   );
 }

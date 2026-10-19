@@ -1,0 +1,227 @@
+import { describe, expect, it } from "vite-plus/test";
+import {
+  EnvironmentId,
+  ProjectId,
+  CommandId,
+  SourceControlDiscoveryResult,
+} from "@spiritdevs/contracts";
+import * as Option from "effect/Option";
+
+import {
+  buildAddProjectRemoteSourceReadiness,
+  buildProjectAttachWorkspaceRootCommand,
+  buildProjectCreateCommand,
+  buildRootlessProjectCreateCommand,
+  canCreateProjectInEnvironment,
+  findExistingAddProject,
+  getAddProjectInitialQuery,
+  getDefaultCloneUrl,
+  normalizePastedCloneUrl,
+  resolveAddProjectPath,
+  sortAddProjectProviderSources,
+} from "./projects.ts";
+import type { EnvironmentProject } from "../state/models.ts";
+
+describe("add project shared logic", () => {
+  it("only allows project creation in connected environments", () => {
+    expect(canCreateProjectInEnvironment("connected")).toBe(true);
+    expect(canCreateProjectInEnvironment("available")).toBe(false);
+    expect(canCreateProjectInEnvironment("offline")).toBe(false);
+    expect(canCreateProjectInEnvironment("connecting")).toBe(false);
+    expect(canCreateProjectInEnvironment("reconnecting")).toBe(false);
+    expect(canCreateProjectInEnvironment("error")).toBe(false);
+  });
+
+  it("resolves initial browse paths from settings", () => {
+    expect(getAddProjectInitialQuery("")).toBe("~/");
+    expect(getAddProjectInitialQuery("/work")).toBe("/work/");
+    expect(getAddProjectInitialQuery("C:\\work")).toBe("C:\\work\\");
+  });
+
+  it("routes owner/repository shorthand to GitHub over HTTPS", () => {
+    expect(normalizePastedCloneUrl("imputnet/helium")).toBe(
+      "https://github.com/imputnet/helium.git",
+    );
+    expect(normalizePastedCloneUrl("  SpiritDevs/pathway  ")).toBe(
+      "https://github.com/SpiritDevs/pathway.git",
+    );
+  });
+
+  it("keeps explicit clone URLs and local paths unchanged", () => {
+    expect(normalizePastedCloneUrl("https://gitlab.com/group/project.git")).toBe(
+      "https://gitlab.com/group/project.git",
+    );
+    expect(normalizePastedCloneUrl("git@github.com:owner/repo.git")).toBe(
+      "git@github.com:owner/repo.git",
+    );
+    expect(normalizePastedCloneUrl("group/subgroup/project")).toBe("group/subgroup/project");
+    expect(normalizePastedCloneUrl("/srv/git/repo.git")).toBe("/srv/git/repo.git");
+  });
+
+  it("uses HTTPS for repositories selected through a provider", () => {
+    expect(
+      getDefaultCloneUrl({
+        provider: "github",
+        url: "https://github.com/imputnet/helium",
+        sshUrl: "git@github.com:imputnet/helium.git",
+      }),
+    ).toBe("https://github.com/imputnet/helium");
+  });
+
+  it("preserves existing clone transport behavior for other providers", () => {
+    expect(
+      getDefaultCloneUrl({
+        provider: "gitlab",
+        url: "https://gitlab.com/group/project.git",
+        sshUrl: "git@gitlab.com:group/project.git",
+      }),
+    ).toBe("git@gitlab.com:group/project.git");
+  });
+  it("rejects unsupported windows paths on non-windows environments", () => {
+    expect(
+      resolveAddProjectPath({
+        rawPath: "C:\\repo",
+        platform: "MacIntel",
+        currentProjectCwd: null,
+      }),
+    ).toEqual({
+      ok: false,
+      error: "Windows-style paths are only supported on Windows environments.",
+    });
+  });
+
+  it("resolves relative paths from the active project cwd", () => {
+    expect(
+      resolveAddProjectPath({
+        rawPath: "../next",
+        platform: "Linux",
+        currentProjectCwd: "/work/current",
+      }),
+    ).toEqual({ ok: true, path: "/work/next" });
+  });
+
+  it("marks authenticated source control providers as ready", () => {
+    const discovery: SourceControlDiscoveryResult = {
+      versionControlSystems: [],
+      sourceControlProviders: [
+        {
+          kind: "github",
+          label: "GitHub",
+          status: "available",
+          installHint: "Install gh",
+          version: Option.some("1.0.0"),
+          detail: Option.none(),
+          auth: {
+            status: "authenticated",
+            account: Option.some("octo"),
+            host: Option.some("github.com"),
+            detail: Option.none(),
+          },
+        },
+        {
+          kind: "gitlab",
+          label: "GitLab",
+          status: "available",
+          installHint: "Install glab",
+          version: Option.some("1.0.0"),
+          detail: Option.none(),
+          auth: {
+            status: "unauthenticated",
+            account: Option.none(),
+            host: Option.none(),
+            detail: Option.some("Run glab auth login"),
+          },
+        },
+      ],
+    };
+
+    const readiness = buildAddProjectRemoteSourceReadiness(discovery);
+    expect(readiness.url.ready).toBe(true);
+    expect(readiness.github.ready).toBe(true);
+    expect(readiness.gitlab).toEqual({ ready: false, hint: "Run glab auth login" });
+    expect(sortAddProjectProviderSources(readiness)[0]).toBe("github");
+  });
+
+  it("finds existing projects by normalized path in the target environment", () => {
+    const env = EnvironmentId.make("env");
+    const other = EnvironmentId.make("other");
+    const projects: EnvironmentProject[] = [
+      {
+        environmentId: other,
+        id: ProjectId.make("same-path-other-env"),
+        title: "Other",
+        workspaceRoot: "/repo",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        repositoryIdentity: null,
+        defaultModelSelection: null,
+        scripts: [],
+      },
+      {
+        environmentId: env,
+        id: ProjectId.make("project"),
+        title: "Repo",
+        workspaceRoot: "/repo/",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        repositoryIdentity: null,
+        defaultModelSelection: null,
+        scripts: [],
+      },
+    ];
+
+    expect(findExistingAddProject({ projects, environmentId: env, path: "/repo" })?.id).toBe(
+      "project",
+    );
+  });
+
+  it("builds the V2 project.create mutation", () => {
+    expect(
+      buildProjectCreateCommand({
+        commandId: CommandId.make("command"),
+        projectId: ProjectId.make("project"),
+        workspaceRoot: "/work/repo",
+      }),
+    ).toMatchObject({
+      type: "project.create",
+      commandId: "command",
+      projectId: "project",
+      title: "repo",
+      workspaceRoot: "/work/repo",
+      createWorkspaceRootIfMissing: true,
+      defaultModelSelection: null,
+    });
+  });
+  it("builds a rootless project.create command from a title alone", () => {
+    expect(
+      buildRootlessProjectCreateCommand({
+        commandId: CommandId.make("command"),
+        projectId: ProjectId.make("project"),
+        title: "Planning",
+        createdAt: "2026-08-12T00:00:00.000Z",
+      }),
+    ).toEqual({
+      type: "project.create",
+      commandId: "command",
+      projectId: "project",
+      title: "Planning",
+      workspaceRoot: null,
+      defaultModelSelection: null,
+    });
+  });
+
+  it("builds the attach-directory command as a bare meta update", () => {
+    expect(
+      buildProjectAttachWorkspaceRootCommand({
+        commandId: CommandId.make("command"),
+        projectId: ProjectId.make("project"),
+        workspaceRoot: "/work/repo",
+      }),
+    ).toEqual({
+      type: "project.update",
+      commandId: "command",
+      projectId: "project",
+      workspaceRoot: "/work/repo",
+    });
+  });
+});

@@ -1,6 +1,10 @@
-import type { OrchestrationMessage } from "@synara/contracts";
-
-import { latestUserAuthoredMessage } from "./computerVisibleUse.ts";
+/**
+ * Which native Spaces the user reserved for the current computer task, read
+ * from their own latest message.
+ *
+ * @module computer/computerSpaceDesignation
+ */
+import { type ComputerVisibleUseMessage, latestUserAuthoredMessage } from "./computerVisibleUse.ts";
 
 /**
  * Only a complete, explicit user sentence designates a native Space ID.
@@ -30,7 +34,7 @@ export function messageDesignatesComputerSpaces(text: string): readonly number[]
 }
 
 export function computerSpaceDesignationForMessages(
-  messages: readonly OrchestrationMessage[],
+  messages: readonly ComputerVisibleUseMessage[],
 ): readonly number[] {
   const latest = latestUserAuthoredMessage(messages);
   // An agent/automation-origin follow-up starts no new human designation.

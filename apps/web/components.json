@@ -1,19 +1,19 @@
 {
   "$schema": "https://ui.shadcn.com/schema.json",
-  "style": "base-rhea",
+  "style": "base-mira",
   "rsc": false,
   "tsx": true,
   "tailwind": {
     "config": "",
     "css": "src/index.css",
-    "baseColor": "neutral",
+    "baseColor": "zinc",
     "cssVariables": true,
     "prefix": ""
   },
-  "iconLibrary": "tabler",
+  "iconLibrary": "lucide",
   "rtl": false,
-  "menuColor": "default-translucent",
-  "menuAccent": "subtle",
+  "menuColor": "default",
+  "menuAccent": "bold",
   "aliases": {
     "components": "~/components",
     "utils": "~/lib/utils",
@@ -22,6 +22,7 @@
     "hooks": "~/hooks"
   },
   "registries": {
-    "@coss": "https://coss.com/ui/r/{name}.json"
+    "@coss": "https://coss.com/ui/r/{name}.json",
+    "@spell": "https://spell.sh/r/{name}.json"
   }
 }

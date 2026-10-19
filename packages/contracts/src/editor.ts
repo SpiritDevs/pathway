@@ -1,259 +1,129 @@
-// FILE: editor.ts
-// Purpose: Define editor ids and launch metadata shared by the client and server.
-// Layer: Shared contracts
-// Exports: EDITORS, EditorId, OpenInEditorInput
+import * as Schema from "effect/Schema";
+import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 
-import { Schema } from "effect";
-import { TrimmedNonEmptyString } from "./baseSchemas";
-
-export const EditorLaunchStyle = Schema.Literals([
-  "direct-path",
-  "goto",
-  "line-column",
-  "terminal-working-directory",
-]);
+export const EditorLaunchStyle = Schema.Literals(["direct-path", "goto", "line-column"]);
 export type EditorLaunchStyle = typeof EditorLaunchStyle.Type;
 
 type EditorDefinition = {
   readonly id: string;
   readonly label: string;
   readonly commands: readonly [string, ...string[]] | null;
-  readonly macApplications?: readonly [string, ...string[]];
-  readonly windowsUriScheme?: string;
-  readonly windowsStorePackages?: readonly [
-    WindowsStorePackageDefinition,
-    ...WindowsStorePackageDefinition[],
-  ];
+  readonly baseArgs?: readonly string[];
   readonly launchStyle: EditorLaunchStyle;
 };
 
-type WindowsStorePackageDefinition = {
-  readonly packageName: string;
-  readonly publisherId: string;
-};
-
 export const EDITORS = [
-  {
-    id: "cursor",
-    label: "Cursor",
-    commands: ["cursor"],
-    macApplications: ["Cursor"],
-    launchStyle: "goto",
-  },
-  {
-    id: "trae",
-    label: "Trae",
-    commands: ["trae"],
-    macApplications: ["Trae"],
-    launchStyle: "goto",
-  },
-  {
-    id: "vscode",
-    label: "VS Code",
-    commands: ["code"],
-    macApplications: ["Visual Studio Code"],
-    windowsUriScheme: "vscode",
-    windowsStorePackages: [
-      { packageName: "Microsoft.VisualStudioCode", publisherId: "8wekyb3d8bbwe" },
-    ],
-    launchStyle: "goto",
-  },
+  { id: "cursor", label: "Cursor", commands: ["cursor"], launchStyle: "goto" },
+  { id: "trae", label: "Trae", commands: ["trae"], launchStyle: "goto" },
+  { id: "kiro", label: "Kiro", commands: ["kiro"], baseArgs: ["ide"], launchStyle: "goto" },
+  { id: "vscode", label: "VS Code", commands: ["code"], launchStyle: "goto" },
   {
     id: "vscode-insiders",
     label: "VS Code Insiders",
     commands: ["code-insiders"],
-    macApplications: ["Visual Studio Code - Insiders"],
-    windowsUriScheme: "vscode-insiders",
     launchStyle: "goto",
   },
-  {
-    id: "vscodium",
-    label: "VSCodium",
-    commands: ["codium"],
-    macApplications: ["VSCodium"],
-    launchStyle: "goto",
-  },
-  {
-    id: "zed",
-    label: "Zed",
-    commands: ["zed", "zeditor"],
-    macApplications: ["Zed"],
-    launchStyle: "direct-path",
-  },
-  {
-    id: "windsurf",
-    label: "Windsurf",
-    commands: ["windsurf"],
-    macApplications: ["Windsurf"],
-    launchStyle: "goto",
-  },
-  {
-    id: "sublime",
-    label: "Sublime Text",
-    commands: ["subl"],
-    macApplications: ["Sublime Text"],
-    launchStyle: "direct-path",
-  },
-  {
-    id: "antigravity",
-    label: "Antigravity",
-    commands: ["agy"],
-    macApplications: ["Antigravity"],
-    launchStyle: "goto",
-  },
-  {
-    id: "ghostty",
-    label: "Ghostty",
-    commands: ["ghostty"],
-    macApplications: ["Ghostty"],
-    launchStyle: "terminal-working-directory",
-  },
-  {
-    id: "muxy",
-    label: "Muxy",
-    commands: ["muxy"],
-    macApplications: ["Muxy"],
-    launchStyle: "terminal-working-directory",
-  },
-  {
-    id: "terminal",
-    label: "Terminal",
-    commands: [
-      "wt",
-      "gnome-terminal",
-      "kgx",
-      "konsole",
-      "xfce4-terminal",
-      "tilix",
-      "terminator",
-      "x-terminal-emulator",
-      "kitty",
-      "alacritty",
-      "wezterm",
-      "cmd",
-      "powershell",
-      "pwsh",
-    ],
-    macApplications: ["Terminal"],
-    launchStyle: "terminal-working-directory",
-  },
-  {
-    id: "iterm",
-    label: "iTerm",
-    commands: ["iterm2"],
-    macApplications: ["iTerm"],
-    launchStyle: "terminal-working-directory",
-  },
-  {
-    id: "warp",
-    label: "Warp",
-    commands: ["warp"],
-    macApplications: ["Warp"],
-    launchStyle: "terminal-working-directory",
-  },
-  {
-    id: "xcode",
-    label: "Xcode",
-    commands: ["xed"],
-    macApplications: ["Xcode"],
-    launchStyle: "direct-path",
-  },
-  {
-    id: "idea",
-    label: "IntelliJ IDEA",
-    commands: ["idea", "idea64", "idea.sh", "intellij-idea"],
-    macApplications: [
-      "IntelliJ IDEA",
-      "IntelliJ IDEA Ultimate",
-      "IntelliJ IDEA Community Edition",
-      "IntelliJ IDEA CE",
-    ],
-    launchStyle: "line-column",
-  },
-  {
-    id: "webstorm",
-    label: "WebStorm",
-    commands: ["webstorm", "wstorm", "webstorm64", "webstorm.sh"],
-    macApplications: ["WebStorm"],
-    launchStyle: "line-column",
-  },
-  {
-    id: "pycharm",
-    label: "PyCharm",
-    commands: ["pycharm", "charm", "pycharm64", "pycharm.sh", "pycharm-professional"],
-    macApplications: ["PyCharm", "PyCharm Professional", "PyCharm CE"],
-    launchStyle: "line-column",
-  },
-  {
-    id: "phpstorm",
-    label: "PhpStorm",
-    commands: ["phpstorm", "pstorm", "phpstorm64", "phpstorm.sh"],
-    macApplications: ["PhpStorm"],
-    launchStyle: "line-column",
-  },
-  {
-    id: "goland",
-    label: "GoLand",
-    commands: ["goland", "goland64", "goland.sh"],
-    macApplications: ["GoLand"],
-    launchStyle: "line-column",
-  },
-  {
-    id: "clion",
-    label: "CLion",
-    commands: ["clion", "clion64", "clion.sh"],
-    macApplications: ["CLion"],
-    launchStyle: "line-column",
-  },
-  {
-    id: "rider",
-    label: "Rider",
-    commands: ["rider", "rider64", "rider.sh"],
-    macApplications: ["Rider"],
-    launchStyle: "line-column",
-  },
-  {
-    id: "rubymine",
-    label: "RubyMine",
-    commands: ["rubymine", "mine", "rubymine64", "rubymine.sh"],
-    macApplications: ["RubyMine"],
-    launchStyle: "line-column",
-  },
-  {
-    id: "datagrip",
-    label: "DataGrip",
-    commands: ["datagrip", "datagrip64", "datagrip.sh"],
-    macApplications: ["DataGrip"],
-    launchStyle: "line-column",
-  },
-  {
-    id: "rustrover",
-    label: "RustRover",
-    commands: ["rustrover", "rustrover64", "rustrover.sh"],
-    macApplications: ["RustRover"],
-    launchStyle: "line-column",
-  },
-  {
-    id: "android-studio",
-    label: "Android Studio",
-    commands: ["studio", "android-studio", "studio.sh"],
-    macApplications: ["Android Studio"],
-    launchStyle: "line-column",
-  },
+  { id: "vscodium", label: "VSCodium", commands: ["codium"], launchStyle: "goto" },
+  { id: "zed", label: "Zed", commands: ["zed", "zeditor"], launchStyle: "direct-path" },
+  { id: "antigravity", label: "Antigravity", commands: ["agy"], launchStyle: "goto" },
+  { id: "idea", label: "IntelliJ IDEA", commands: ["idea"], launchStyle: "line-column" },
+  { id: "aqua", label: "Aqua", commands: ["aqua"], launchStyle: "line-column" },
+  { id: "clion", label: "CLion", commands: ["clion"], launchStyle: "line-column" },
+  { id: "datagrip", label: "DataGrip", commands: ["datagrip"], launchStyle: "line-column" },
+  { id: "dataspell", label: "DataSpell", commands: ["dataspell"], launchStyle: "line-column" },
+  { id: "goland", label: "GoLand", commands: ["goland"], launchStyle: "line-column" },
+  { id: "phpstorm", label: "PhpStorm", commands: ["phpstorm"], launchStyle: "line-column" },
+  { id: "pycharm", label: "PyCharm", commands: ["pycharm"], launchStyle: "line-column" },
+  { id: "rider", label: "Rider", commands: ["rider"], launchStyle: "line-column" },
+  { id: "rubymine", label: "RubyMine", commands: ["rubymine"], launchStyle: "line-column" },
+  { id: "rustrover", label: "RustRover", commands: ["rustrover"], launchStyle: "line-column" },
+  { id: "webstorm", label: "WebStorm", commands: ["webstorm"], launchStyle: "line-column" },
+  { id: "terminal", label: "Terminal", commands: null, launchStyle: "direct-path" },
+  { id: "ghostty", label: "Ghostty", commands: null, launchStyle: "direct-path" },
   { id: "file-manager", label: "File Manager", commands: null, launchStyle: "direct-path" },
-  // Opens the target with the OS default handler (e.g. Preview for PDFs on macOS,
-  // the registered default viewer on Windows/Linux). Launched via the cross-platform
-  // `open` package server-side, so it has no commands/macApplications of its own and
-  // is intentionally excluded from `resolveAvailableEditors` — surfaces that want it
-  // (the PDF viewer) opt in explicitly rather than cluttering the code-editor menu.
-  { id: "system-default", label: "Default app", commands: null, launchStyle: "direct-path" },
 ] as const satisfies ReadonlyArray<EditorDefinition>;
 
 export const EditorId = Schema.Literals(EDITORS.map((e) => e.id));
 export type EditorId = typeof EditorId.Type;
 
-export const OpenInEditorInput = Schema.Struct({
+export const LaunchEditorInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   editor: EditorId,
 });
-export type OpenInEditorInput = typeof OpenInEditorInput.Type;
+export type LaunchEditorInput = typeof LaunchEditorInput.Type;
+
+export class ExternalLauncherUnknownEditorError extends Schema.TaggedErrorClass<ExternalLauncherUnknownEditorError>()(
+  "ExternalLauncherUnknownEditorError",
+  {
+    editor: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Unknown editor: ${this.editor}`;
+  }
+}
+
+export class ExternalLauncherUnsupportedEditorError extends Schema.TaggedErrorClass<ExternalLauncherUnsupportedEditorError>()(
+  "ExternalLauncherUnsupportedEditorError",
+  {
+    editor: EditorId,
+  },
+) {
+  override get message(): string {
+    return `Unsupported editor: ${this.editor}`;
+  }
+}
+
+export class ExternalLauncherCommandNotFoundError extends Schema.TaggedErrorClass<ExternalLauncherCommandNotFoundError>()(
+  "ExternalLauncherCommandNotFoundError",
+  {
+    editor: EditorId,
+    command: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Editor command not found: ${this.command}`;
+  }
+}
+
+const ExternalLauncherSpawnFields = {
+  command: Schema.String,
+  args: Schema.Array(Schema.String),
+  cause: Schema.Defect(),
+};
+
+export class ExternalLauncherBrowserSpawnError extends Schema.TaggedErrorClass<ExternalLauncherBrowserSpawnError>()(
+  "ExternalLauncherBrowserSpawnError",
+  {
+    ...ExternalLauncherSpawnFields,
+    target: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Failed to launch browser target '${this.target}' with '${[this.command, ...this.args].join(" ")}'`;
+  }
+}
+
+export class ExternalLauncherEditorSpawnError extends Schema.TaggedErrorClass<ExternalLauncherEditorSpawnError>()(
+  "ExternalLauncherEditorSpawnError",
+  {
+    ...ExternalLauncherSpawnFields,
+    editor: EditorId,
+    target: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Failed to launch '${this.target}' in ${this.editor} with '${[this.command, ...this.args].join(" ")}'`;
+  }
+}
+
+export const ExternalLauncherError = Schema.Union([
+  ExternalLauncherUnknownEditorError,
+  ExternalLauncherUnsupportedEditorError,
+  ExternalLauncherCommandNotFoundError,
+  ExternalLauncherBrowserSpawnError,
+  ExternalLauncherEditorSpawnError,
+]);
+export type ExternalLauncherError = typeof ExternalLauncherError.Type;
+
+export const isExternalLauncherError = Schema.is(ExternalLauncherError);

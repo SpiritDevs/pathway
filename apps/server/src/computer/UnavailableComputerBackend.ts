@@ -1,51 +1,36 @@
 /**
  * A backend that exists only to carry the reason there is no backend.
  *
- * Backend selection can fail in ways that happen before any display server is
- * contacted: an operator override naming a backend Synara does not have. The
- * service still needs a `ComputerBackend`
- * to hand the manager, and the alternative — leaving it undefined and
- * special-casing every reader — loses the one thing worth keeping, which is the
- * sentence explaining what went wrong.
+ * Backend selection can fail before any display server is contacted: an
+ * operator override naming a backend Pathway does not have, or a platform with
+ * no backend at all. The service still needs a `ComputerBackend` to hand the
+ * manager, and leaving it undefined would special-case every reader and lose
+ * the one thing worth keeping, the sentence explaining what went wrong.
  *
- * So the failure is the backend. `availability()` reports it, `health()`
- * reports it as the last failure, `capabilities()` is empty because nothing is
- * possible, and every action rejects with the same words. An operator reading
- * the availability card and an agent reading a tool error see one message, not
- * two descriptions of the same fault.
+ * So the failure is the backend. `availability` reports it, `health()` reports
+ * it as the last failure, `capabilities()` is empty, and every action fails
+ * with the same words. An operator reading the availability card and an agent
+ * reading a tool error see one message, not two descriptions of one fault.
+ *
+ * @module computer/UnavailableComputerBackend
  */
-import type {
-  ComputerAccessibilityTreeApp,
-  ComputerAccessibilityTreeWindow,
-  ComputerApp,
-  ComputerAvailability,
-  ComputerCapabilities,
-  ComputerCursorPosition,
-  ComputerHealth,
-  ComputerId,
-  ComputerLaunchAppResult,
-  ComputerScreenSize,
-  ComputerScreenshot,
-  ComputerState,
-  ComputerVerifyStateResult,
-  ComputerWindow,
-  ComputerZoomResult,
-} from "@synara/contracts";
+import type { ComputerAvailability, ComputerHealth, ComputerId } from "@spiritdevs/contracts";
+import * as Clock from "effect/Clock";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
 
 import {
   clampComputerMessage,
-  ComputerBackendError,
   DEFAULT_COMPUTER_ID,
   NO_COMPUTER_CAPABILITIES,
   type ComputerBackend,
-  type ComputerBackendEventListener,
 } from "./ComputerBackend.ts";
+import { ComputerBackendError } from "./computerErrors.ts";
 
-const FALLBACK_MESSAGE = "The Synara computer backend is unavailable for an unstated reason.";
+const FALLBACK_MESSAGE = "The Pathway computer backend is unavailable for an unstated reason.";
 
 export interface UnavailableComputerBackendOptions {
   readonly computerId?: string;
-  readonly now?: () => number;
   /**
    * Replaces the default `backend-unavailable` verdict, for platforms where
    * there is no backend because none could exist: the pane keys its blocked
@@ -60,188 +45,93 @@ export class UnavailableComputerBackend implements ComputerBackend {
 
   private readonly message: string;
   private readonly at: string;
-  private readonly availabilityVerdict: ComputerAvailability | undefined;
+  private readonly verdict: ComputerAvailability;
 
-  constructor(message: string, options: UnavailableComputerBackendOptions = {}) {
+  /** `failedAt` is the epoch millis reported as the last failure. */
+  constructor(message: string, failedAt: number, options: UnavailableComputerBackendOptions = {}) {
     this.computerId = (options.computerId ?? DEFAULT_COMPUTER_ID) as ComputerId;
     this.message = clampComputerMessage(message, FALLBACK_MESSAGE);
-    this.at = new Date((options.now ?? Date.now)()).toISOString();
-    this.availabilityVerdict = options.availability;
-  }
-
-  availability(): Promise<ComputerAvailability> {
-    return Promise.resolve(
-      this.availabilityVerdict ?? { kind: "backend-unavailable", message: this.message },
-    );
-  }
-
-  /** The failure is already known and already free to read, so both agree. */
-  probeAvailability(): Promise<ComputerAvailability> {
-    return this.availability();
-  }
-
-  health(): ComputerHealth {
-    return {
-      status: "unavailable",
-      consecutiveFailures: 1,
-      reconnects: 0,
-      lastFailure: { message: this.message, at: this.at },
-      captureAvailable: false,
+    this.at = DateTime.formatIso(DateTime.makeUnsafe(failedAt));
+    this.verdict = options.availability ?? {
+      kind: "backend-unavailable",
+      message: this.message,
     };
   }
 
-  capabilities(): ComputerCapabilities {
-    return NO_COMPUTER_CAPABILITIES;
-  }
+  private readonly refuse = <A = never>(): Effect.Effect<A, ComputerBackendError> =>
+    Effect.fail(new ComputerBackendError({ message: this.message, retryable: false }));
 
-  listWindows(): Promise<readonly ComputerWindow[]> {
-    return this.refuse();
-  }
+  readonly availability = () => Effect.succeed(this.verdict);
 
-  getScreenSize(): Promise<ComputerScreenSize> {
-    return this.refuse();
-  }
+  /** The failure is already known and already free to read, so both agree. */
+  readonly probeAvailability = () => Effect.succeed(this.verdict);
 
-  getState(): Promise<ComputerState> {
-    return this.refuse();
-  }
+  readonly health = (): ComputerHealth => ({
+    status: "unavailable",
+    consecutiveFailures: 1,
+    reconnects: 0,
+    lastFailure: { message: this.message, at: this.at },
+    captureAvailable: false,
+  });
 
-  captureScreenshot(): Promise<ComputerScreenshot> {
-    return this.refuse();
-  }
+  readonly capabilities = () => NO_COMPUTER_CAPABILITIES;
 
-  launchApp(): Promise<ComputerLaunchAppResult> {
-    return this.refuse();
-  }
+  readonly listWindows = this.refuse;
+  readonly getScreenSize = this.refuse;
+  readonly getState = this.refuse;
+  readonly captureScreenshot = this.refuse;
+  readonly launchApp = this.refuse;
 
   /**
    * Declared even though the interface marks these optional: an absent method
    * makes the manager produce a generic "cannot" error, while refusing here
    * keeps the one message this backend exists to carry.
    */
-  listApps(): Promise<readonly ComputerApp[]> {
-    return this.refuse();
-  }
+  readonly listApps = this.refuse;
+  readonly setWindowFrame = this.refuse;
+  readonly invokeMenu = this.refuse;
+  readonly setWindowMinimized = this.refuse;
+  readonly setAppVisibility = this.refuse;
+  readonly verifyState = this.refuse;
+  readonly zoomWindow = this.refuse;
+  readonly getAccessibilityTree = this.refuse;
+  readonly getCursorPosition = this.refuse;
+  readonly killApp = this.refuse;
 
-  setWindowFrame(): Promise<never> {
-    return this.refuse();
-  }
+  readonly click = this.refuse;
+  readonly doubleClick = this.refuse;
+  readonly tripleClick = this.refuse;
+  readonly rightClick = this.refuse;
+  readonly moveCursor = this.refuse;
+  readonly drag = this.refuse;
+  readonly scroll = this.refuse;
+  readonly typeText = this.refuse;
+  readonly pressKey = this.refuse;
+  readonly hotkey = this.refuse;
+  readonly setValue = this.refuse;
+  readonly performAction = this.refuse;
+  readonly selectText = this.refuse;
 
-  invokeMenu(): Promise<never> {
-    return this.refuse();
-  }
-
-  setWindowMinimized(): Promise<never> {
-    return this.refuse();
-  }
-
-  setAppVisibility(): Promise<never> {
-    return this.refuse();
-  }
-
-  verifyState(): Promise<ComputerVerifyStateResult> {
-    return this.refuse();
-  }
-
-  zoomWindow(): Promise<ComputerZoomResult> {
-    return this.refuse();
-  }
-
-  getAccessibilityTree(): Promise<{
-    readonly apps: readonly ComputerAccessibilityTreeApp[];
-    readonly windows: readonly ComputerAccessibilityTreeWindow[];
-    readonly truncated: boolean;
-  }> {
-    return this.refuse();
-  }
-
-  getCursorPosition(): Promise<Omit<ComputerCursorPosition, "computerId" | "availability">> {
-    return this.refuse();
-  }
-
-  killApp(): Promise<never> {
-    return this.refuse();
-  }
-
-  click(): Promise<never> {
-    return this.refuse();
-  }
-
-  doubleClick(): Promise<never> {
-    return this.refuse();
-  }
-
-  tripleClick(): Promise<never> {
-    return this.refuse();
-  }
-
-  rightClick(): Promise<never> {
-    return this.refuse();
-  }
-
-  moveCursor(): Promise<never> {
-    return this.refuse();
-  }
-
-  drag(): Promise<never> {
-    return this.refuse();
-  }
-
-  scroll(): Promise<never> {
-    return this.refuse();
-  }
-
-  typeText(): Promise<never> {
-    return this.refuse();
-  }
-
-  pressKey(): Promise<never> {
-    return this.refuse();
-  }
-
-  hotkey(): Promise<never> {
-    return this.refuse();
-  }
-
-  setValue(): Promise<never> {
-    return this.refuse();
-  }
-
-  performAction(): Promise<never> {
-    return this.refuse();
-  }
-
-  selectText(): Promise<never> {
-    return this.refuse();
-  }
-
-  onEvent(_listener: ComputerBackendEventListener): () => void {
-    // Nothing will ever change, so the subscription is a no-op rather than a
-    // set that grows for the life of the process.
-    return () => undefined;
-  }
-
-  attachStream(): Promise<void> {
-    return this.refuse();
-  }
-
-  detachStream(): Promise<void> {
-    return Promise.resolve();
-  }
+  readonly attachStream = this.refuse;
+  readonly detachStream = () => Effect.void;
 
   /**
-   * Same rule as the optional methods above: present so the refusal carries
-   * this backend's one message, and so `browser` being set does not itself
-   * advertise a working surface — the manager gates tools on capability, and
-   * every call here still rejects with the recorded reason.
+   * Present so the refusal carries this backend's one message, and so
+   * `browser` being set does not itself advertise a working surface: the
+   * manager gates tools on capability, and every call still fails with the
+   * recorded reason.
    */
-  readonly browser = {
-    call: (): Promise<never> => this.refuse(),
-  };
+  readonly browser = { call: this.refuse };
 
-  dispose(): void {}
-
-  private refuse(): Promise<never> {
-    return Promise.reject(new ComputerBackendError(this.message, { retryable: false }));
-  }
+  readonly dispose = () => Effect.void;
 }
+
+/** An unavailable backend whose failure time is now. */
+export const makeUnavailableComputerBackend = (
+  message: string,
+  options: UnavailableComputerBackendOptions = {},
+): Effect.Effect<UnavailableComputerBackend> =>
+  Effect.map(
+    Clock.currentTimeMillis,
+    (now) => new UnavailableComputerBackend(message, now, options),
+  );

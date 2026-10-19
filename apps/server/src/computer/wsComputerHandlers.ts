@@ -1,17 +1,27 @@
-import type { AgentGatewaySessionRegistryShape } from "../agentGateway/Services/AgentGatewaySessionRegistry";
-import { computerApprovalGate } from "./ComputerApprovalGate.ts";
-/** WebSocket handlers for the computer RPC group. */
+/**
+ * WebSocket handlers for the computer RPC group.
+ *
+ * Transport scopes admit a call before it gets here. These handlers add the
+ * environment's Computer access policy (ADR 0041) on every way in — enabling
+ * control, setup and input — and leave watching and Stop open to anyone the
+ * transport admitted. `computer.subscribeEvents` is a stream RPC wired in
+ * `ws.ts`, beside the per-connection event interests.
+ *
+ * @module computer/wsComputerHandlers
+ */
 import {
   COMPUTER_WS_METHODS,
   type ComputerActionResult,
   type ComputerClickInput,
+  type ComputerControlEnabledResult,
   type ComputerDoubleClickInput,
   type ComputerDragInput,
+  ComputerError,
+  type ComputerGetAuditHistoryInput,
+  type ComputerGetAuditHistoryResult,
   type ComputerGetScreenSizeInput,
   type ComputerGetScreenSizeResult,
   type ComputerGetStateInput,
-  type ComputerGetAuditHistoryInput,
-  type ComputerGetAuditHistoryResult,
   type ComputerGetStatusInput,
   type ComputerHotkeyInput,
   type ComputerInputClickInput,
@@ -29,21 +39,22 @@ import {
   type ComputerRightClickInput,
   type ComputerScrollInput,
   type ComputerSelectTextInput,
+  type ComputerSetControlEnabledInput,
   type ComputerSetValueInput,
   type ComputerState,
   type ComputerStatusResult,
   type ComputerThreadInput,
-  type ComputerSetControlEnabledInput,
   type ComputerTypeTextInput,
+  type EnvironmentAuthorizationError,
   type ThreadComputerState,
-  WsRpcError,
-} from "@synara/contracts";
-import { Effect } from "effect";
+} from "@spiritdevs/contracts";
+import * as Effect from "effect/Effect";
 
+import type { ComputerApprovalGateShape } from "./ComputerApprovalGate.ts";
 import { NO_COMPUTER_CAPABILITIES } from "./ComputerBackend.ts";
 import type { ComputerManager } from "./ComputerManager.ts";
-import { withDesktopOperationSignal } from "./DesktopOperationQueue.ts";
 import type { ComputerServiceShape } from "./Services/ComputerService.ts";
+import { withPaneInput } from "./paneInput.ts";
 
 /**
  * Shown only when no computer service started at all, so it cannot name the
@@ -54,101 +65,135 @@ import type { ComputerServiceShape } from "./Services/ComputerService.ts";
  */
 const UNSUPPORTED_MESSAGE = "No computer backend is available on this server.";
 
-function unsupported<A>(): Effect.Effect<A, WsRpcError> {
-  return Effect.fail(new WsRpcError({ message: UNSUPPORTED_MESSAGE }));
+export type WsComputerError = ComputerError | EnvironmentAuthorizationError;
+
+type Handler<I, A> = (input: I) => Effect.Effect<A, WsComputerError>;
+
+function unsupported<A>(): Effect.Effect<A, ComputerError> {
+  return Effect.fail(new ComputerError({ message: UNSUPPORTED_MESSAGE }));
 }
 
-function attempt<A>(
-  promise: () => Promise<A>,
+/** A typed failure becomes the RPC's `ComputerError`; defects stay defects. */
+function attempt<A, E extends { readonly message: string }>(
+  effect: Effect.Effect<A, E>,
   fallbackMessage: string,
-): Effect.Effect<A, WsRpcError> {
-  return Effect.tryPromise({
-    try: (signal) => withDesktopOperationSignal(signal, promise),
-    catch: (cause) =>
-      new WsRpcError({
-        message: cause instanceof Error && cause.message ? cause.message : fallbackMessage,
-      }),
-  });
+): Effect.Effect<A, ComputerError> {
+  return Effect.mapError(
+    effect,
+    (cause) => new ComputerError({ message: cause.message || fallbackMessage }),
+  );
+}
+
+/**
+ * Every input route from the pane: the human's own click, wheel or key, run
+ * inside `withPaneInput`, so a backend asking `isPaneInput` gets the same
+ * answer for the direct routes and the `input*` ones.
+ */
+function paneInput<A, E extends { readonly message: string }>(
+  effect: Effect.Effect<A, E>,
+  fallbackMessage: string,
+): Effect.Effect<A, ComputerError> {
+  return attempt(withPaneInput(effect), fallbackMessage);
 }
 
 export interface WsComputerHandlers {
-  readonly [COMPUTER_WS_METHODS.setControlEnabled]: (
-    input: ComputerSetControlEnabledInput,
-  ) => Effect.Effect<{ enabled: boolean; generation: number }, WsRpcError>;
-  readonly [COMPUTER_WS_METHODS.getStatus]: (
-    input: ComputerGetStatusInput,
-  ) => Effect.Effect<ComputerStatusResult, WsRpcError>;
-  readonly [COMPUTER_WS_METHODS.getAuditHistory]: (
-    input: ComputerGetAuditHistoryInput,
-  ) => Effect.Effect<ComputerGetAuditHistoryResult, WsRpcError>;
-  readonly [COMPUTER_WS_METHODS.provision]: (
-    input: ComputerProvisionInput,
-  ) => Effect.Effect<ComputerProvisionResult, WsRpcError>;
-  readonly [COMPUTER_WS_METHODS.listWindows]: (
-    input: ComputerListWindowsInput,
-  ) => Effect.Effect<ComputerListWindowsResult, WsRpcError>;
-  readonly [COMPUTER_WS_METHODS.getState]: (
-    input: ComputerGetStateInput,
-  ) => Effect.Effect<ComputerState, WsRpcError>;
-  readonly [COMPUTER_WS_METHODS.getScreenSize]: (
-    input: ComputerGetScreenSizeInput,
-  ) => Effect.Effect<ComputerGetScreenSizeResult, WsRpcError>;
-  readonly [COMPUTER_WS_METHODS.launchApp]: (
-    input: ComputerLaunchAppInput,
-  ) => Effect.Effect<ComputerLaunchAppResult, WsRpcError>;
-  readonly [COMPUTER_WS_METHODS.click]: (
-    input: ComputerClickInput,
-  ) => Effect.Effect<ComputerActionResult, WsRpcError>;
-  readonly [COMPUTER_WS_METHODS.doubleClick]: (
-    input: ComputerDoubleClickInput,
-  ) => Effect.Effect<ComputerActionResult, WsRpcError>;
-  readonly [COMPUTER_WS_METHODS.rightClick]: (
-    input: ComputerRightClickInput,
-  ) => Effect.Effect<ComputerActionResult, WsRpcError>;
-  readonly [COMPUTER_WS_METHODS.moveCursor]: (
-    input: ComputerMoveCursorInput,
-  ) => Effect.Effect<ComputerActionResult, WsRpcError>;
-  readonly [COMPUTER_WS_METHODS.drag]: (
-    input: ComputerDragInput,
-  ) => Effect.Effect<ComputerActionResult, WsRpcError>;
-  readonly [COMPUTER_WS_METHODS.scroll]: (
-    input: ComputerScrollInput,
-  ) => Effect.Effect<ComputerActionResult, WsRpcError>;
-  readonly [COMPUTER_WS_METHODS.typeText]: (
-    input: ComputerTypeTextInput,
-  ) => Effect.Effect<ComputerActionResult, WsRpcError>;
-  readonly [COMPUTER_WS_METHODS.pressKey]: (
-    input: ComputerPressKeyInput,
-  ) => Effect.Effect<ComputerActionResult, WsRpcError>;
-  readonly [COMPUTER_WS_METHODS.hotkey]: (
-    input: ComputerHotkeyInput,
-  ) => Effect.Effect<ComputerActionResult, WsRpcError>;
-  readonly [COMPUTER_WS_METHODS.setValue]: (
-    input: ComputerSetValueInput,
-  ) => Effect.Effect<ComputerActionResult, WsRpcError>;
-  readonly [COMPUTER_WS_METHODS.performAction]: (
-    input: ComputerPerformActionInput,
-  ) => Effect.Effect<ComputerActionResult, WsRpcError>;
-  readonly [COMPUTER_WS_METHODS.selectText]: (
-    input: ComputerSelectTextInput,
-  ) => Effect.Effect<ComputerActionResult, WsRpcError>;
-  readonly [COMPUTER_WS_METHODS.getThreadState]: (
-    input: ComputerThreadInput,
-  ) => Effect.Effect<ThreadComputerState, WsRpcError>;
-  readonly [COMPUTER_WS_METHODS.inputClick]: (
-    input: ComputerInputClickInput,
-  ) => Effect.Effect<ComputerActionResult, WsRpcError>;
-  readonly [COMPUTER_WS_METHODS.inputScroll]: (
-    input: ComputerInputScrollInput,
-  ) => Effect.Effect<ComputerActionResult, WsRpcError>;
-  readonly [COMPUTER_WS_METHODS.inputKey]: (
-    input: ComputerInputKeyInput,
-  ) => Effect.Effect<ComputerActionResult, WsRpcError>;
+  readonly [COMPUTER_WS_METHODS.setControlEnabled]: Handler<
+    ComputerSetControlEnabledInput,
+    ComputerControlEnabledResult
+  >;
+  readonly [COMPUTER_WS_METHODS.getStatus]: Handler<ComputerGetStatusInput, ComputerStatusResult>;
+  readonly [COMPUTER_WS_METHODS.getAuditHistory]: Handler<
+    ComputerGetAuditHistoryInput,
+    ComputerGetAuditHistoryResult
+  >;
+  readonly [COMPUTER_WS_METHODS.provision]: Handler<
+    ComputerProvisionInput,
+    ComputerProvisionResult
+  >;
+  readonly [COMPUTER_WS_METHODS.listWindows]: Handler<
+    ComputerListWindowsInput,
+    ComputerListWindowsResult
+  >;
+  readonly [COMPUTER_WS_METHODS.getState]: Handler<ComputerGetStateInput, ComputerState>;
+  readonly [COMPUTER_WS_METHODS.getScreenSize]: Handler<
+    ComputerGetScreenSizeInput,
+    ComputerGetScreenSizeResult
+  >;
+  readonly [COMPUTER_WS_METHODS.launchApp]: Handler<
+    ComputerLaunchAppInput,
+    ComputerLaunchAppResult
+  >;
+  readonly [COMPUTER_WS_METHODS.click]: Handler<ComputerClickInput, ComputerActionResult>;
+  readonly [COMPUTER_WS_METHODS.doubleClick]: Handler<
+    ComputerDoubleClickInput,
+    ComputerActionResult
+  >;
+  readonly [COMPUTER_WS_METHODS.rightClick]: Handler<ComputerRightClickInput, ComputerActionResult>;
+  readonly [COMPUTER_WS_METHODS.moveCursor]: Handler<ComputerMoveCursorInput, ComputerActionResult>;
+  readonly [COMPUTER_WS_METHODS.drag]: Handler<ComputerDragInput, ComputerActionResult>;
+  readonly [COMPUTER_WS_METHODS.scroll]: Handler<ComputerScrollInput, ComputerActionResult>;
+  readonly [COMPUTER_WS_METHODS.typeText]: Handler<ComputerTypeTextInput, ComputerActionResult>;
+  readonly [COMPUTER_WS_METHODS.pressKey]: Handler<ComputerPressKeyInput, ComputerActionResult>;
+  readonly [COMPUTER_WS_METHODS.hotkey]: Handler<ComputerHotkeyInput, ComputerActionResult>;
+  readonly [COMPUTER_WS_METHODS.setValue]: Handler<ComputerSetValueInput, ComputerActionResult>;
+  readonly [COMPUTER_WS_METHODS.performAction]: Handler<
+    ComputerPerformActionInput,
+    ComputerActionResult
+  >;
+  readonly [COMPUTER_WS_METHODS.selectText]: Handler<ComputerSelectTextInput, ComputerActionResult>;
+  readonly [COMPUTER_WS_METHODS.getThreadState]: Handler<ComputerThreadInput, ThreadComputerState>;
+  readonly [COMPUTER_WS_METHODS.inputClick]: Handler<ComputerInputClickInput, ComputerActionResult>;
+  readonly [COMPUTER_WS_METHODS.inputScroll]: Handler<
+    ComputerInputScrollInput,
+    ComputerActionResult
+  >;
+  readonly [COMPUTER_WS_METHODS.inputKey]: Handler<ComputerInputKeyInput, ComputerActionResult>;
+}
+
+export interface WsComputerHandlerOptions {
+  /** Withdraws a thread's open approval cards when its control is switched off. */
+  readonly approvalGate?: Pick<ComputerApprovalGateShape, "cancelThread">;
+  /**
+   * The Computer access policy check, run before every restricted call.
+   * Watching and Stop never run it. Omitted, nothing is restricted.
+   */
+  readonly admitComputerUse?: Effect.Effect<void, WsComputerError>;
 }
 
 export function makeWsComputerHandlers(
   computerService: ComputerServiceShape | undefined,
-  registry?: AgentGatewaySessionRegistryShape,
+  options: WsComputerHandlerOptions = {},
+): WsComputerHandlers {
+  const handlers = makeUnrestrictedHandlers(computerService, options.approvalGate);
+  return options.admitComputerUse
+    ? restrictComputerUse(handlers, options.admitComputerUse)
+    : handlers;
+}
+
+/**
+ * Runs every handler through `wrap` - the socket's scope check and tracing.
+ * Keeping the Computer handlers one typed object, spread into the WS group,
+ * keeps that group's handler literal small enough for the compiler to infer.
+ */
+export function wrapWsComputerHandlers(
+  handlers: WsComputerHandlers,
+  wrap: <A>(
+    method: string,
+    effect: Effect.Effect<A, WsComputerError>,
+  ) => Effect.Effect<A, WsComputerError>,
+): WsComputerHandlers {
+  const wrapped: Record<string, Handler<unknown, unknown>> = {};
+  for (const [method, handler] of Object.entries(handlers) as ReadonlyArray<
+    [string, Handler<unknown, unknown>]
+  >) {
+    wrapped[method] = (input) => wrap(method, handler(input));
+  }
+  return wrapped as unknown as WsComputerHandlers;
+}
+
+function makeUnrestrictedHandlers(
+  computerService: ComputerServiceShape | undefined,
+  approvalGate: Pick<ComputerApprovalGateShape, "cancelThread"> | undefined,
 ): WsComputerHandlers {
   if (!computerService?.supported) {
     const unsupportedStatus = {
@@ -171,26 +216,23 @@ export function makeWsComputerHandlers(
       capabilities: NO_COMPUTER_CAPABILITIES,
     } satisfies ComputerStatusResult;
     const unsupportedState = (input: ComputerThreadInput) =>
-      attempt(async () => {
-        return {
-          ...unsupportedStatus,
-          threadId: input.threadId,
-          version: 0,
-          windows: [],
-          screenSize: { width: 1, height: 1 },
-          agentActive: false,
-          controlledByOtherThread: false,
-          lastError: null,
-        } satisfies ThreadComputerState;
-      }, "Failed to read computer availability");
+      Effect.succeed({
+        ...unsupportedStatus,
+        threadId: input.threadId,
+        version: 0,
+        windows: [],
+        screenSize: { width: 1, height: 1 },
+        agentActive: false,
+        controlledByOtherThread: false,
+        lastError: null,
+      } satisfies ThreadComputerState);
     return {
-      [COMPUTER_WS_METHODS.setControlEnabled]: () =>
-        Effect.fail(new WsRpcError({ message: UNSUPPORTED_MESSAGE })),
+      [COMPUTER_WS_METHODS.setControlEnabled]: () => unsupported(),
       [COMPUTER_WS_METHODS.getStatus]: () => Effect.succeed(unsupportedStatus),
       [COMPUTER_WS_METHODS.getAuditHistory]: (input) =>
         computerService
           ? attempt(
-              () => computerService.manager.getAuditHistory(input),
+              computerService.manager.getAuditHistory(input),
               "Failed to read Computer activity history",
             )
           : Effect.succeed({ entries: [], nextCursor: null, truncated: false, status: "disabled" }),
@@ -221,95 +263,125 @@ export function makeWsComputerHandlers(
   const manager = computerService.manager;
   return {
     [COMPUTER_WS_METHODS.setControlEnabled]: (input) =>
-      attempt(async () => {
-        if (!input.enabled) {
-          registry?.setComputerControlEnabled?.(input.threadId, false);
-          computerApprovalGate.cancelThread(input.threadId);
-        }
-        const result = await manager.setControlEnabled(input.threadId, input.enabled);
-        registry?.setComputerControlEnabled?.(input.threadId, result.enabled);
-        return result;
-      }, "Failed to change computer authority"),
-    [COMPUTER_WS_METHODS.getStatus]: () =>
-      attempt(() => manager.getStatus(), "Failed to read computer status"),
+      attempt(
+        Effect.gen(function* () {
+          // Stop withdraws the thread's open approval cards before revoking, so
+          // nothing answered after Stop can re-arm the desktop.
+          if (!input.enabled && approvalGate) yield* approvalGate.cancelThread(input.threadId);
+          return yield* manager.setControlEnabled(input.threadId, input.enabled);
+        }),
+        "Failed to change computer authority",
+      ),
+    [COMPUTER_WS_METHODS.getStatus]: () => manager.getStatus(),
     [COMPUTER_WS_METHODS.getAuditHistory]: (input) =>
-      attempt(() => manager.getAuditHistory(input), "Failed to read Computer activity history"),
+      attempt(manager.getAuditHistory(input), "Failed to read Computer activity history"),
     [COMPUTER_WS_METHODS.provision]: () =>
-      attempt(() => manager.provision(), "Failed to set up computer control"),
+      attempt(manager.provision(), "Failed to set up computer control"),
     [COMPUTER_WS_METHODS.listWindows]: () =>
-      attempt(() => manager.listWindows(), "Failed to list computer windows"),
+      attempt(manager.listWindows(), "Failed to list computer windows"),
     [COMPUTER_WS_METHODS.getState]: (input) =>
       attempt(
-        () =>
-          manager.getState({
-            ...(input.includeScreenshot !== undefined
-              ? { includeScreenshot: input.includeScreenshot }
-              : {}),
-            ...(input.includeText !== undefined ? { includeText: input.includeText } : {}),
-            ...(input.windowId !== undefined ? { windowId: input.windowId } : {}),
-          }),
+        manager.getState({
+          ...(input.includeScreenshot !== undefined
+            ? { includeScreenshot: input.includeScreenshot }
+            : {}),
+          ...(input.includeText !== undefined ? { includeText: input.includeText } : {}),
+          ...(input.windowId !== undefined ? { windowId: input.windowId } : {}),
+        }),
         "Failed to read computer perception state",
       ),
     [COMPUTER_WS_METHODS.getScreenSize]: () =>
-      attempt(() => manager.getScreenSize(), "Failed to read computer screen size"),
+      attempt(manager.getScreenSize(), "Failed to read computer screen size"),
     [COMPUTER_WS_METHODS.launchApp]: (input) =>
       attempt(
-        () => manager.launchApp(undefined, input.app, input.arguments ?? []),
+        manager.launchApp(undefined, input.app, input.arguments ?? []),
         "Failed to launch computer application",
       ),
     [COMPUTER_WS_METHODS.click]: (input) =>
-      attempt(() => manager.click(undefined, input), "Failed to click on computer"),
+      paneInput(manager.click(undefined, input), "Failed to click on computer"),
     [COMPUTER_WS_METHODS.doubleClick]: (input) =>
-      attempt(() => manager.doubleClick(undefined, input), "Failed to double-click on computer"),
+      paneInput(manager.doubleClick(undefined, input), "Failed to double-click on computer"),
     [COMPUTER_WS_METHODS.rightClick]: (input) =>
-      attempt(() => manager.rightClick(undefined, input), "Failed to right-click on computer"),
+      paneInput(manager.rightClick(undefined, input), "Failed to right-click on computer"),
     [COMPUTER_WS_METHODS.moveCursor]: (input) =>
-      attempt(() => manager.moveCursor(undefined, input), "Failed to move computer cursor"),
+      paneInput(manager.moveCursor(undefined, input), "Failed to move computer cursor"),
     [COMPUTER_WS_METHODS.drag]: (input) =>
-      attempt(
-        () => manager.drag(undefined, input.from, input.to, input.durationMs ?? 250),
+      paneInput(
+        manager.drag(undefined, input.from, input.to, input.durationMs ?? 250),
         "Failed to drag on computer",
       ),
     [COMPUTER_WS_METHODS.scroll]: (input) =>
-      attempt(
-        () => manager.scroll(undefined, scrollTarget(input), input.deltaX, input.deltaY),
+      paneInput(
+        manager.scroll(undefined, scrollTarget(input), input.deltaX, input.deltaY),
         "Failed to scroll on computer",
       ),
     [COMPUTER_WS_METHODS.typeText]: (input) =>
-      attempt(() => manager.typeText(undefined, input.text), "Failed to type on computer"),
+      paneInput(manager.typeText(undefined, input.text), "Failed to type on computer"),
     [COMPUTER_WS_METHODS.pressKey]: (input) =>
-      attempt(() => manager.pressKey(undefined, input.key), "Failed to press computer key"),
+      paneInput(manager.pressKey(undefined, input.key), "Failed to press computer key"),
     [COMPUTER_WS_METHODS.hotkey]: (input) =>
-      attempt(() => manager.hotkey(undefined, input.keys), "Failed to send computer hotkey"),
+      paneInput(manager.hotkey(undefined, input.keys), "Failed to send computer hotkey"),
     [COMPUTER_WS_METHODS.setValue]: (input) =>
-      attempt(
-        () => manager.setValue(undefined, input, input.value),
-        "Failed to set computer value",
-      ),
+      paneInput(manager.setValue(undefined, input, input.value), "Failed to set computer value"),
     [COMPUTER_WS_METHODS.performAction]: (input) =>
-      attempt(
-        () => manager.performAction(undefined, input, input.action),
+      paneInput(
+        manager.performAction(undefined, input, input.action),
         "Failed to perform computer action",
       ),
     [COMPUTER_WS_METHODS.selectText]: (input) =>
-      attempt(
-        () => manager.selectText(undefined, input, { start: input.start, length: input.length }),
+      paneInput(
+        manager.selectText(undefined, input, { start: input.start, length: input.length }),
         "Failed to select computer text",
       ),
-    [COMPUTER_WS_METHODS.getThreadState]: (input) =>
-      attempt(() => manager.getThreadState(input.threadId), "Failed to read computer state"),
+    [COMPUTER_WS_METHODS.getThreadState]: (input) => manager.getThreadState(input.threadId),
     [COMPUTER_WS_METHODS.inputClick]: (input) =>
-      attempt(() => userInputClick(manager, input), "Failed to click on computer"),
+      paneInput(userInputClick(manager, input), "Failed to click on computer"),
     [COMPUTER_WS_METHODS.inputScroll]: (input) =>
-      attempt(
-        () =>
-          manager.withUserPointTarget({ x: input.x, y: input.y }, (target) =>
-            manager.scroll(undefined, target, input.deltaX, input.deltaY),
-          ),
+      paneInput(
+        manager.withUserPointTarget({ x: input.x, y: input.y }, (target) =>
+          manager.scroll(undefined, target, input.deltaX, input.deltaY),
+        ),
         "Failed to scroll on computer",
       ),
     [COMPUTER_WS_METHODS.inputKey]: (input) =>
-      attempt(() => userInputKey(manager, input), "Failed to press computer key"),
+      paneInput(userInputKey(manager, input), "Failed to press computer key"),
+  };
+}
+
+/**
+ * Runs `admit` before every way in: enabling control, setup, and all input.
+ * Watching and Stop (`setControlEnabled` with `enabled: false`) stay open.
+ */
+function restrictComputerUse(
+  handlers: WsComputerHandlers,
+  admit: Effect.Effect<void, WsComputerError>,
+): WsComputerHandlers {
+  const restricted =
+    <I, A>(handler: Handler<I, A>): Handler<I, A> =>
+    (input) =>
+      Effect.andThen(admit, () => handler(input));
+  const setControlEnabled = handlers[COMPUTER_WS_METHODS.setControlEnabled];
+  return {
+    ...handlers,
+    [COMPUTER_WS_METHODS.setControlEnabled]: (input) =>
+      input.enabled ? restricted(setControlEnabled)(input) : setControlEnabled(input),
+    [COMPUTER_WS_METHODS.provision]: restricted(handlers[COMPUTER_WS_METHODS.provision]),
+    [COMPUTER_WS_METHODS.launchApp]: restricted(handlers[COMPUTER_WS_METHODS.launchApp]),
+    [COMPUTER_WS_METHODS.click]: restricted(handlers[COMPUTER_WS_METHODS.click]),
+    [COMPUTER_WS_METHODS.doubleClick]: restricted(handlers[COMPUTER_WS_METHODS.doubleClick]),
+    [COMPUTER_WS_METHODS.rightClick]: restricted(handlers[COMPUTER_WS_METHODS.rightClick]),
+    [COMPUTER_WS_METHODS.moveCursor]: restricted(handlers[COMPUTER_WS_METHODS.moveCursor]),
+    [COMPUTER_WS_METHODS.drag]: restricted(handlers[COMPUTER_WS_METHODS.drag]),
+    [COMPUTER_WS_METHODS.scroll]: restricted(handlers[COMPUTER_WS_METHODS.scroll]),
+    [COMPUTER_WS_METHODS.typeText]: restricted(handlers[COMPUTER_WS_METHODS.typeText]),
+    [COMPUTER_WS_METHODS.pressKey]: restricted(handlers[COMPUTER_WS_METHODS.pressKey]),
+    [COMPUTER_WS_METHODS.hotkey]: restricted(handlers[COMPUTER_WS_METHODS.hotkey]),
+    [COMPUTER_WS_METHODS.setValue]: restricted(handlers[COMPUTER_WS_METHODS.setValue]),
+    [COMPUTER_WS_METHODS.performAction]: restricted(handlers[COMPUTER_WS_METHODS.performAction]),
+    [COMPUTER_WS_METHODS.selectText]: restricted(handlers[COMPUTER_WS_METHODS.selectText]),
+    [COMPUTER_WS_METHODS.inputClick]: restricted(handlers[COMPUTER_WS_METHODS.inputClick]),
+    [COMPUTER_WS_METHODS.inputScroll]: restricted(handlers[COMPUTER_WS_METHODS.inputScroll]),
+    [COMPUTER_WS_METHODS.inputKey]: restricted(handlers[COMPUTER_WS_METHODS.inputKey]),
   };
 }
 
@@ -317,10 +389,7 @@ export function makeWsComputerHandlers(
  * A pane click carries a resolved desktop point, so it goes straight to the
  * coordinate path of the manager — no AT-SPI tree read, no semantic matching.
  */
-function userInputClick(
-  manager: ComputerManager,
-  input: ComputerInputClickInput,
-): Promise<ComputerActionResult> {
+function userInputClick(manager: ComputerManager, input: ComputerInputClickInput) {
   return manager.withUserPointTarget({ x: input.x, y: input.y }, (target) => {
     if (input.button === "right") return manager.rightClick(undefined, target);
     return (input.clickCount ?? 1) >= 2
@@ -329,10 +398,7 @@ function userInputClick(
   });
 }
 
-function userInputKey(
-  manager: ComputerManager,
-  input: ComputerInputKeyInput,
-): Promise<ComputerActionResult> {
+function userInputKey(manager: ComputerManager, input: ComputerInputKeyInput) {
   // A repeated modifier would be pressed twice and released twice, which reads
   // as a tap of that modifier on the way out of the chord.
   const modifiers = [...new Set(input.modifiers ?? [])];

@@ -1,0 +1,959 @@
+import { useAtomValue } from "@effect/atom-react";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@spiritdevs/client-runtime/state/runtime";
+import {
+  PROVIDER_DISPLAY_NAMES,
+  ProviderDriverKind,
+  type EnvironmentId,
+  type ProviderInstanceId,
+  type ProviderUsageDriver,
+  type ServerProvider,
+  type ServerProviderUsageSnapshot,
+} from "@spiritdevs/contracts";
+import * as Option from "effect/Option";
+import { Atom } from "effect/unstable/reactivity";
+import { ChevronDownIcon, RefreshCwIcon } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+
+import { cn } from "~/lib/utils";
+import { useEnvironments } from "~/state/environments";
+import { environmentServerConfigsAtom, serverEnvironment } from "~/state/server";
+import { useEnvironmentQuery, type EnvironmentQueryView } from "~/state/query";
+import { useAtomCommand } from "~/state/use-atom-command";
+import { SettingsSection } from "../settings/settingsLayout";
+import { Button } from "../ui/button";
+import { Collapsible, CollapsiblePanel } from "../ui/collapsible";
+import { stackedThreadToast, toastManager } from "../ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
+import {
+  deriveProviderInstanceEntries,
+  shouldShowProviderInstanceBadge,
+} from "../../providerInstances";
+import { THREAD_DETAILS_PANEL_DISCLOSURE_ROW_CLASS } from "../chat/threadDetailsPanelStyles";
+import {
+  deriveProviderUsageLimits,
+  filterProviderUsageForDisplay,
+  formatProviderUsageCaptureAge,
+  formatProviderUsageRateLimit,
+  selectPrimaryProviderUsageLimit,
+  shouldCollapseProviderUsage,
+  type ProviderUsageDisplayLimit,
+} from "./providerUsageDisplay";
+import {
+  createProviderUsageArrivalTracker,
+  deriveConnectedProviderUsageAccounts,
+  deriveConnectedProviderResetCreditAccounts,
+  isProviderUsageDriver,
+  type ConnectedProviderUsageAccount,
+} from "./providerUsageAccounts";
+import { readRememberedProviderUsage, rememberProviderUsage } from "./providerUsageCache";
+
+import { ProviderResetCredits, type ResetCreditSelection } from "./ProviderResetCredits";
+
+const SLOW_REFRESH_SPIN_CLASS = "animate-spin [animation-duration:2s] motion-reduce:animate-none";
+
+function providerName(provider: ProviderUsageDriver): string {
+  return PROVIDER_DISPLAY_NAMES[ProviderDriverKind.make(provider)] ?? provider;
+}
+
+interface ProviderUsageRefreshTarget {
+  readonly environmentId: EnvironmentId;
+  readonly instanceId: ProviderInstanceId;
+  readonly provider: ProviderUsageDriver;
+  readonly label: string;
+}
+
+function refreshFailureMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "The provider did not return updated usage.";
+}
+
+function useForcedProviderUsageRefresh(targets: ReadonlyArray<ProviderUsageRefreshTarget>) {
+  const refreshUsage = useAtomCommand(serverEnvironment.refreshProviderUsage, {
+    reportFailure: false,
+  });
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const inFlightRef = useRef(false);
+
+  const refresh = useCallback(async () => {
+    if (inFlightRef.current || targets.length === 0) return;
+    inFlightRef.current = true;
+    setIsRefreshing(true);
+    const failed: Array<{ readonly target: ProviderUsageRefreshTarget; readonly error: unknown }> =
+      [];
+    try {
+      await Promise.all(
+        targets.map(async (target) => {
+          const result = await refreshUsage({
+            environmentId: target.environmentId,
+            input: {
+              instanceId: target.instanceId,
+              provider: target.provider,
+              forceRefresh: true,
+            },
+          });
+          if (result._tag !== "Success" && !isAtomCommandInterrupted(result)) {
+            failed.push({ target, error: squashAtomCommandFailure(result) });
+          }
+        }),
+      );
+
+      if (failed.length > 0) {
+        const failedLabels = failed.map(({ target }) => target.label).join(", ");
+        const allFailed = failed.length === targets.length;
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: allFailed ? "Couldn’t refresh usage" : "Some usage couldn’t be refreshed",
+            description:
+              targets.length === 1
+                ? refreshFailureMessage(failed[0]?.error)
+                : `Couldn’t refresh ${failedLabels}.`,
+          }),
+        );
+      }
+    } finally {
+      inFlightRef.current = false;
+      setIsRefreshing(false);
+    }
+  }, [refreshUsage, targets]);
+
+  return { isRefreshing, refresh };
+}
+
+function usageSectionHeading({
+  id,
+  refreshDisabled,
+  refreshing,
+  onRefresh,
+}: {
+  readonly id?: string;
+  readonly refreshDisabled: boolean;
+  readonly refreshing: boolean;
+  readonly onRefresh: () => Promise<void>;
+}) {
+  const handleRefreshClick = (event: MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void onRefresh();
+  };
+
+  return (
+    <div className="flex min-h-6 items-center justify-between gap-2 px-3.5 pb-1 pt-3">
+      <h3 id={id} className="text-[11px] font-medium text-muted-foreground">
+        Usage
+      </h3>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              type="button"
+              size="icon-xs"
+              variant="ghost"
+              data-keep-action-card-open
+              aria-label="Refresh usage"
+              aria-busy={refreshing}
+              disabled={refreshDisabled || refreshing}
+              onClick={handleRefreshClick}
+              className={cn(
+                "pointer-events-none -my-1 -mr-1 size-6 opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/usage:pointer-events-auto group-hover/usage:opacity-100 group-focus-within/usage:pointer-events-auto group-focus-within/usage:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100 motion-reduce:transition-none",
+                refreshing && "pointer-events-auto opacity-100",
+              )}
+            >
+              <RefreshCwIcon
+                className={cn(
+                  "size-3.5",
+                  refreshing && "text-foreground",
+                  refreshing && SLOW_REFRESH_SPIN_CLASS,
+                )}
+                aria-hidden="true"
+              />
+            </Button>
+          }
+        />
+        <TooltipPopup side="top">Refresh usage</TooltipPopup>
+      </Tooltip>
+    </div>
+  );
+}
+
+function useProviderUsage(input: {
+  environmentId: EnvironmentId;
+  instanceId: ProviderInstanceId;
+  provider: ProviderUsageDriver;
+  enabled: boolean;
+}): EnvironmentQueryView<ServerProviderUsageSnapshot> {
+  const target = useMemo(
+    () =>
+      input.enabled
+        ? serverEnvironment.providerUsageLive({
+            environmentId: input.environmentId,
+            input: {},
+          })
+        : null,
+    [input.enabled, input.environmentId],
+  );
+  const usage = useEnvironmentQuery(target);
+  return {
+    ...usage,
+    // The live subscription never completes, so its `waiting` flag stays true
+    // for the life of the stream. Only the first list arrival is loading.
+    isPending: usage.isPending && usage.data === null,
+    data:
+      usage.data?.find(
+        (snapshot) =>
+          snapshot.instanceId === input.instanceId && snapshot.provider === input.provider,
+      ) ?? null,
+  };
+}
+
+const TONE_CLASS_NAME: Record<Exclude<ProviderUsageDisplayLimit["tone"], null>, string> = {
+  healthy: "bg-success",
+  warning: "bg-warning",
+  danger: "bg-destructive",
+};
+
+function UsageLimitRow({
+  limit,
+  compact = false,
+  resetInline = false,
+}: {
+  limit: ProviderUsageDisplayLimit;
+  compact?: boolean;
+  resetInline?: boolean;
+}) {
+  const label = limit.scope ? `${limit.window} · ${limit.scope}` : limit.window;
+  return (
+    <div className={cn("space-y-1.5", compact && "space-y-1")}>
+      <div className="flex items-baseline justify-between gap-3 text-xs">
+        <span className="font-medium text-foreground">{label}</span>
+        <span className="flex shrink-0 items-baseline gap-2 tabular-nums text-muted-foreground">
+          <span>{limit.remainingLabel}</span>
+          {resetInline && limit.resetLabel ? (
+            <span className="text-[11px]">{limit.resetLabel}</span>
+          ) : null}
+        </span>
+      </div>
+      {limit.remainingPercent === null || limit.tone === null ? null : (
+        <div className={cn("h-1.5 overflow-hidden rounded-full bg-muted", compact && "h-1")}>
+          <div
+            role="progressbar"
+            aria-label={`${label} quota remaining`}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={limit.remainingPercent}
+            className={cn("h-full rounded-full", TONE_CLASS_NAME[limit.tone])}
+            style={{ width: `${limit.remainingPercent}%` }}
+          />
+        </div>
+      )}
+      {!resetInline && limit.resetLabel ? (
+        <p className="text-right text-[11px] tabular-nums text-muted-foreground">
+          {limit.resetLabel}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function ProviderUsageDetails({
+  snapshot,
+  loading,
+  error,
+  compact = false,
+}: {
+  snapshot: ServerProviderUsageSnapshot | null;
+  loading: boolean;
+  error: string | null;
+  compact?: boolean;
+}) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const rateLimitedUntil = snapshot?.rateLimitedUntil;
+  useEffect(() => {
+    if (snapshot === null) return;
+    setNowMs(Date.now());
+    const timer = globalThis.setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => globalThis.clearInterval(timer);
+  }, [snapshot !== null]);
+  if (loading && snapshot === null) {
+    return <p className="text-xs text-muted-foreground">Loading provider usage…</p>;
+  }
+  if (error && snapshot === null) {
+    return (
+      <p className="text-xs text-muted-foreground">Usage is unavailable on this environment.</p>
+    );
+  }
+  if (snapshot === null) return null;
+  const detail = rateLimitedUntil
+    ? (formatProviderUsageRateLimit(providerName(snapshot.provider), rateLimitedUntil, nowMs) ??
+      snapshot.detail)
+    : snapshot.detail;
+  if (snapshot.status !== "ok") {
+    return <p className="text-xs leading-relaxed text-muted-foreground">{detail}</p>;
+  }
+  const limits = deriveProviderUsageLimits(snapshot.limits);
+  const captureAge = snapshot.fetchedAt ? formatProviderUsageCaptureAge(snapshot.fetchedAt) : null;
+  const hasUsage = limits.length > 0 || snapshot.usageLines.length > 0;
+  return (
+    <div className={cn("space-y-3", compact && "space-y-2.5")}>
+      {(snapshot.stale ||
+        nowMs - Date.parse(snapshot.fetchedAt ?? snapshot.updatedAt) >= 300_000) &&
+      (detail || captureAge) ? (
+        <p className="text-xs leading-relaxed text-warning-foreground">
+          {[detail, captureAge].filter(Boolean).join(" · ")}
+        </p>
+      ) : null}
+      {!hasUsage ? (
+        <p className="text-xs text-muted-foreground">No quota data reported yet.</p>
+      ) : null}
+      {limits.map((limit, index) => (
+        <UsageLimitRow
+          key={`${limit.windowKey ?? "legacy"}:${limit.scope ?? "all"}:${index}`}
+          limit={limit}
+          compact={compact}
+        />
+      ))}
+      {snapshot.usageLines.length > 0 ? (
+        <div className={cn("space-y-1 border-t border-border/70 pt-2.5", compact && "pt-2")}>
+          {snapshot.usageLines.map((line) => (
+            <div
+              key={`${line.label}:${line.value}`}
+              className="flex items-baseline justify-between gap-3 text-xs"
+            >
+              <span className="text-muted-foreground">{line.label}</span>
+              <span className="text-right tabular-nums text-foreground">{line.value}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+export function EnvironmentProviderUsage({
+  environmentId,
+  provider,
+  enabled,
+  displayMode = "card",
+  grouped = false,
+  parentRefreshing = false,
+  showSpark = false,
+  iconDisplayName,
+  showIconBadge = false,
+}: {
+  environmentId: EnvironmentId;
+  provider: ServerProvider;
+  enabled: boolean;
+  displayMode?: "card" | "panel";
+  grouped?: boolean;
+  parentRefreshing?: boolean;
+  showSpark?: boolean;
+  iconDisplayName?: string;
+  showIconBadge?: boolean;
+}) {
+  const isPanel = displayMode === "panel";
+  const [open, setOpen] = useState(false);
+  const usageProvider = provider.driver as ProviderUsageDriver;
+  const usage = useProviderUsage({
+    environmentId,
+    instanceId: provider.instanceId,
+    provider: usageProvider,
+    enabled,
+  });
+  const displayName = iconDisplayName ?? provider.displayName ?? providerName(usageProvider);
+  const refreshTargets = useMemo(
+    () => [
+      {
+        environmentId,
+        instanceId: provider.instanceId,
+        provider: usageProvider,
+        label: displayName,
+      },
+    ],
+    [displayName, environmentId, provider.instanceId, usageProvider],
+  );
+  const singleRefresh = useForcedProviderUsageRefresh(refreshTargets);
+  const snapshot = filterProviderUsageForDisplay(usage.data, showSpark);
+  const refreshing = grouped ? parentRefreshing : singleRefresh.isRefreshing;
+  const primary = selectPrimaryProviderUsageLimit(snapshot);
+  const limits = snapshot?.status === "ok" ? deriveProviderUsageLimits(snapshot.limits) : [];
+  const summary =
+    primary?.remainingLabel ??
+    (usage.isPending
+      ? "Loading…"
+      : snapshot?.status === "needs-auth"
+        ? "Not signed in"
+        : snapshot?.status === "error" || usage.error
+          ? "Unavailable"
+          : "Usage");
+
+  const heading =
+    !grouped && isPanel
+      ? usageSectionHeading({
+          refreshDisabled: !enabled,
+          refreshing,
+          onRefresh: singleRefresh.refresh,
+        })
+      : null;
+
+  if (
+    isPanel &&
+    usageProvider === "claudeAgent" &&
+    (provider.auth.status === "unauthenticated" || snapshot?.status === "needs-auth")
+  ) {
+    return null;
+  }
+
+  if (!shouldCollapseProviderUsage(limits)) {
+    return (
+      <section
+        aria-label={`${displayName} provider usage`}
+        className={cn(
+          !grouped && isPanel && "group/usage",
+          !grouped && "border-t",
+          !grouped && (isPanel ? "border-border/65" : "border-border/70 py-2"),
+        )}
+      >
+        {grouped ? null : isPanel ? (
+          heading
+        ) : (
+          <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">Usage</p>
+        )}
+        <div
+          className={isPanel ? "px-2 pb-2.5" : undefined}
+          data-provider-usage-pending={usage.isPending || undefined}
+          aria-busy={usage.isPending}
+        >
+          {primary ? (
+            <div className="flex items-start gap-2 px-2 py-1.5">
+              <ProviderInstanceIcon
+                driverKind={provider.driver}
+                displayName={displayName}
+                accentColor={provider.accentColor}
+                showBadge={showIconBadge}
+                badgeClassName="right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3 px-0.5 text-[7px]"
+                className="mt-0.5 size-4"
+                iconClassName="size-4"
+              />
+              <div className="min-w-0 flex-1">
+                {grouped ? (
+                  <p className="mb-1 truncate text-xs font-medium text-foreground">{displayName}</p>
+                ) : null}
+                <UsageLimitRow limit={primary} compact resetInline />
+                {snapshot?.status === "ok" && snapshot.usageLines.length > 0 ? (
+                  <div className="mt-2 space-y-1 border-t border-border/70 pt-2">
+                    {snapshot.usageLines.map((line) => (
+                      <div
+                        key={`${line.label}:${line.value}`}
+                        className="flex items-baseline justify-between gap-3 text-xs"
+                      >
+                        <span className="text-muted-foreground">{line.label}</span>
+                        <span className="text-right tabular-nums text-foreground">
+                          {line.value}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ) : (
+            <div className="px-2 py-1.5">
+              <ProviderUsageDetails
+                snapshot={snapshot}
+                loading={usage.isPending}
+                error={usage.error}
+                compact
+              />
+            </div>
+          )}
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section
+      aria-label={`${displayName} provider usage`}
+      className={cn(
+        !grouped && isPanel && "group/usage",
+        !grouped && "border-t",
+        !grouped && (isPanel ? "border-border/65" : "border-border/70 py-2"),
+      )}
+    >
+      {grouped ? null : isPanel ? (
+        heading
+      ) : (
+        <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">Usage</p>
+      )}
+      <div
+        className={isPanel ? "px-2 pb-2.5" : undefined}
+        data-provider-usage-pending={usage.isPending || undefined}
+        aria-busy={usage.isPending}
+      >
+        <Collapsible open={open} onOpenChange={setOpen}>
+          <button
+            type="button"
+            data-keep-action-card-open
+            aria-expanded={open}
+            className={cn(
+              isPanel
+                ? THREAD_DETAILS_PANEL_DISCLOSURE_ROW_CLASS
+                : "flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
+            )}
+            onClick={() => setOpen((value) => !value)}
+          >
+            <ProviderInstanceIcon
+              driverKind={provider.driver}
+              displayName={displayName}
+              accentColor={provider.accentColor}
+              showBadge={showIconBadge}
+              badgeClassName="right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3 px-0.5 text-[7px]"
+              className={cn("size-4", isPanel && "-translate-x-2")}
+              iconClassName="size-4"
+            />
+            <span className="min-w-0 flex-1 truncate">{grouped ? displayName : summary}</span>
+            {grouped ? (
+              <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+                {summary}
+              </span>
+            ) : null}
+            {primary?.resetLabel ? (
+              <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+                {primary.resetLabel}
+              </span>
+            ) : null}
+            <ChevronDownIcon
+              className={cn(
+                "size-4 shrink-0 text-muted-foreground transition-transform duration-200 motion-reduce:transition-none",
+                open && "rotate-180",
+              )}
+              aria-hidden="true"
+            />
+          </button>
+          <CollapsiblePanel>
+            <div className="px-2 pt-2 pb-1">
+              <ProviderUsageDetails
+                snapshot={snapshot}
+                loading={usage.isPending}
+                error={usage.error}
+                compact
+              />
+            </div>
+          </CollapsiblePanel>
+        </Collapsible>
+      </div>
+    </section>
+  );
+}
+
+export function EnvironmentProviderUsageList({
+  environmentId,
+  enabled,
+  showSpark = false,
+}: {
+  environmentId: EnvironmentId;
+  enabled: boolean;
+  showSpark?: boolean;
+}) {
+  const providers = useAtomValue(serverEnvironment.providersValueAtom(environmentId));
+  const supported = useMemo(
+    () =>
+      deriveProviderInstanceEntries(providers ?? []).filter(
+        (entry) =>
+          entry.enabled &&
+          entry.installed &&
+          isProviderUsageDriver(entry.driverKind) &&
+          !(entry.driverKind === "claudeAgent" && entry.snapshot.auth.status === "unauthenticated"),
+      ),
+    [providers],
+  );
+  const refreshTargets = useMemo(
+    () =>
+      supported.map((entry) => ({
+        environmentId,
+        instanceId: entry.instanceId,
+        provider: entry.driverKind as ProviderUsageDriver,
+        label: entry.displayName,
+      })),
+    [environmentId, supported],
+  );
+  const usageRefresh = useForcedProviderUsageRefresh(refreshTargets);
+
+  if (providers !== null && supported.length === 0) return null;
+
+  return (
+    <section
+      aria-labelledby="new-thread-provider-usage-heading"
+      className="group/usage border-t border-border/65"
+    >
+      {usageSectionHeading({
+        id: "new-thread-provider-usage-heading",
+        refreshDisabled: !enabled || supported.length === 0,
+        refreshing: usageRefresh.isRefreshing,
+        onRefresh: usageRefresh.refresh,
+      })}
+      {providers === null ? (
+        <p className="px-4 pb-3 pt-1 text-xs text-muted-foreground">Loading provider accounts…</p>
+      ) : (
+        <div className="divide-y divide-border/70">
+          {supported.map((entry) => (
+            <EnvironmentProviderUsage
+              key={entry.instanceId}
+              environmentId={environmentId}
+              provider={entry.snapshot}
+              enabled={enabled}
+              displayMode="panel"
+              grouped
+              iconDisplayName={entry.displayName}
+              showIconBadge={shouldShowProviderInstanceBadge(entry, supported)}
+              parentRefreshing={usageRefresh.isRefreshing}
+              showSpark={showSpark}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ProviderUsageCard({ account }: { account: ConnectedProviderUsageAccount }) {
+  const { displayName, environmentId, provider } = account;
+  const usageProvider = provider.driver as ProviderUsageDriver;
+  const usage = useProviderUsage({
+    environmentId,
+    instanceId: provider.instanceId,
+    provider: usageProvider,
+    enabled: true,
+  });
+  const snapshot = usage.data ?? account.snapshot;
+  const statusLabel = snapshot?.stale
+    ? "Last known"
+    : snapshot?.status === "needs-auth"
+      ? "Not signed in"
+      : snapshot?.status === "unsupported"
+        ? "Unsupported"
+        : snapshot?.status === "error" || usage.error
+          ? "Unavailable"
+          : snapshot?.planName;
+  const statusClassName =
+    snapshot?.stale || snapshot?.status === "needs-auth"
+      ? "bg-warning/12 text-warning-foreground"
+      : snapshot?.status === "error" || usage.error
+        ? "bg-destructive/10 text-destructive"
+        : "bg-muted text-muted-foreground";
+
+  return (
+    <article className="rounded-lg border border-border bg-card p-4">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-muted/60">
+            <ProviderInstanceIcon
+              driverKind={provider.driver}
+              displayName={displayName}
+              accentColor={provider.accentColor}
+              className="size-4"
+              iconClassName="size-4"
+            />
+          </span>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-medium text-foreground">{displayName}</p>
+            <p className="truncate text-[11px] text-muted-foreground">
+              {[account.provider.auth.email, account.environmentLabel].filter(Boolean).join(" · ")}
+            </p>
+            {displayName !== providerName(usageProvider) ? (
+              <p className="text-[11px] text-muted-foreground">{providerName(usageProvider)}</p>
+            ) : null}
+          </div>
+        </div>
+        {statusLabel ? (
+          <span
+            className={cn(
+              "shrink-0 rounded-full px-2 py-1 text-[11px] leading-none",
+              statusClassName,
+            )}
+          >
+            {statusLabel}
+          </span>
+        ) : null}
+      </div>
+      <ProviderUsageDetails snapshot={snapshot} loading={usage.isPending} error={usage.error} />
+    </article>
+  );
+}
+
+function ConnectedProviderUsageCards({
+  accounts,
+  loading,
+}: {
+  accounts: ReadonlyArray<ConnectedProviderUsageAccount>;
+  loading: boolean;
+}) {
+  if (!loading && accounts.length === 0) return null;
+
+  return (
+    <div className="space-y-3">
+      {loading ? (
+        <div className="rounded-lg border border-border px-4 py-3 text-xs text-muted-foreground">
+          Loading provider accounts…
+        </div>
+      ) : (
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {accounts.map((account) => (
+            <ProviderUsageCard key={account.key} account={account} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConnectedProviderUsageRow({ account }: { account: ConnectedProviderUsageAccount }) {
+  const { displayName, environmentId, provider } = account;
+  const usageProvider = provider.driver as ProviderUsageDriver;
+  const usage = useProviderUsage({
+    environmentId,
+    instanceId: provider.instanceId,
+    provider: usageProvider,
+    enabled: true,
+  });
+  const snapshot = usage.data ?? account.snapshot;
+
+  if (
+    usageProvider === "claudeAgent" &&
+    (snapshot?.status === "needs-auth" ||
+      (provider.auth.status !== "authenticated" && snapshot?.status !== "ok"))
+  )
+    return null;
+
+  return (
+    <div className="rounded-md bg-muted/45 px-2.5 py-2.5">
+      <div className="mb-2 flex min-w-0 items-center gap-2">
+        <ProviderInstanceIcon
+          driverKind={provider.driver}
+          displayName={displayName}
+          accentColor={provider.accentColor}
+          className="size-4"
+          iconClassName="size-4"
+        />
+        <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
+          {displayName}
+          <span className="ml-1 font-normal text-muted-foreground">
+            · {[account.provider.auth.email, account.environmentLabel].filter(Boolean).join(" · ")}
+          </span>
+        </span>
+        {snapshot?.status === "ok" && snapshot.planName ? (
+          <span className="shrink-0 text-[10px] text-muted-foreground">{snapshot.planName}</span>
+        ) : null}
+      </div>
+      <ProviderUsageDetails
+        snapshot={filterProviderUsageForDisplay(snapshot)}
+        loading={usage.isPending}
+        error={usage.error}
+        compact
+      />
+    </div>
+  );
+}
+
+function useConnectedProviderUsageAccounts() {
+  const { isReady, environments } = useEnvironments();
+  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
+  const connected = useMemo(
+    () => environments.filter((environment) => environment.connection.phase === "connected"),
+    [environments],
+  );
+  const usageAtom = useMemo(
+    () =>
+      Atom.make(
+        (get) =>
+          new Map(
+            connected.map((environment) => {
+              const result = get(
+                serverEnvironment.providerUsageLive({
+                  environmentId: environment.environmentId,
+                  input: {},
+                }),
+              );
+              const success =
+                result._tag === "Success"
+                  ? result
+                  : result._tag === "Failure"
+                    ? Option.getOrNull(result.previousSuccess)
+                    : null;
+              if (success) rememberProviderUsage(environment.environmentId, success.value);
+              return [
+                environment.environmentId,
+                {
+                  data:
+                    success?.value ?? readRememberedProviderUsage(environment.environmentId) ?? [],
+                  receivedAt: success?.timestamp ?? 0,
+                  loading: result._tag === "Initial",
+                },
+              ];
+            }),
+          ),
+      ),
+    [connected],
+  );
+  const usage = useAtomValue(usageAtom);
+  const trackArrivals = useMemo(createProviderUsageArrivalTracker, []);
+  const trackedEnvironments = useMemo(
+    () =>
+      trackArrivals(
+        connected.map((environment) => ({
+          environmentId: environment.environmentId,
+          environmentLabel: environment.label,
+          providers: serverConfigs.get(environment.environmentId)?.providers ?? null,
+          usage: usage.get(environment.environmentId)?.data ?? [],
+          receivedAt: usage.get(environment.environmentId)?.receivedAt ?? 0,
+        })),
+      ),
+    [connected, serverConfigs, usage, trackArrivals],
+  );
+  const accounts = useMemo(
+    () => deriveConnectedProviderUsageAccounts(trackedEnvironments),
+    [trackedEnvironments],
+  );
+  const resetCreditAccounts = useMemo(
+    () => deriveConnectedProviderResetCreditAccounts(trackedEnvironments),
+    [trackedEnvironments],
+  );
+  const pending =
+    !isReady ||
+    connected.some(
+      (environment) =>
+        !serverConfigs.has(environment.environmentId) ||
+        usage.get(environment.environmentId)?.loading,
+    );
+  // Remembered readings render immediately; only an empty first load blocks the list.
+  const loading = pending && ![...usage.values()].some((entry) => entry.data.length > 0);
+  return {
+    accounts: loading ? [] : accounts,
+    resetCreditAccounts: loading ? [] : resetCreditAccounts,
+    connectedCount: connected.length,
+    loading,
+    refreshing: pending && !loading,
+  };
+}
+
+export function ConnectedProviderUsageMenu({
+  onRequestRedeem,
+}: { onRequestRedeem?: (selection: ResetCreditSelection) => void } = {}) {
+  const {
+    accounts: connectedAccounts,
+    resetCreditAccounts,
+    connectedCount,
+    loading,
+    refreshing,
+  } = useConnectedProviderUsageAccounts();
+  const accounts = connectedAccounts.filter(
+    (account) =>
+      account.provider.driver !== "claudeAgent" ||
+      account.provider.auth.status !== "unauthenticated",
+  );
+
+  return (
+    <div className="min-w-0">
+      <div className="px-3 pb-2 pt-2">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-sm font-medium text-foreground">Provider usage</p>
+          {refreshing ? (
+            <RefreshCwIcon
+              role="status"
+              aria-label="Updating provider usage"
+              className={cn("size-3 text-muted-foreground", SLOW_REFRESH_SPIN_CLASS)}
+            />
+          ) : null}
+        </div>
+        <p className="mt-0.5 text-[11px] text-muted-foreground">
+          Live subscription limits from connected accounts.
+        </p>
+      </div>
+      <div className="mx-2 h-px bg-border" />
+      {loading ? (
+        <p className="px-3 py-3 text-xs text-muted-foreground">Loading provider accounts…</p>
+      ) : connectedCount === 0 ? (
+        <p className="px-3 py-3 text-xs text-muted-foreground">No environments connected.</p>
+      ) : accounts.length === 0 ? (
+        <p className="px-3 py-3 text-xs text-muted-foreground">No supported accounts found.</p>
+      ) : (
+        <div className="space-y-1 px-2 py-2">
+          {accounts.map((account) => (
+            <ConnectedProviderUsageRow key={account.key} account={account} />
+          ))}
+          <ProviderResetCredits accounts={resetCreditAccounts} onRequestRedeem={onRequestRedeem} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function ProviderUsageSettingsSection() {
+  const { accounts, resetCreditAccounts, loading, refreshing } =
+    useConnectedProviderUsageAccounts();
+  const refreshTargets = useMemo(
+    () => [
+      ...new Map(
+        [...accounts, ...resetCreditAccounts].map((account) => [
+          JSON.stringify([account.environmentId, account.provider.instanceId]),
+          {
+            environmentId: account.environmentId,
+            instanceId: account.provider.instanceId,
+            provider: account.provider.driver as ProviderUsageDriver,
+            label: account.displayName,
+          },
+        ]),
+      ).values(),
+    ],
+    [accounts, resetCreditAccounts],
+  );
+  const usageRefresh = useForcedProviderUsageRefresh(refreshTargets);
+
+  return (
+    <SettingsSection
+      title="Provider limits"
+      headerAction={
+        <button
+          type="button"
+          className="flex cursor-pointer items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+          aria-label="Refresh provider usage"
+          aria-busy={usageRefresh.isRefreshing}
+          disabled={usageRefresh.isRefreshing || accounts.length === 0}
+          onClick={() => void usageRefresh.refresh()}
+        >
+          <RefreshCwIcon
+            className={cn(
+              "size-3.5",
+              (usageRefresh.isRefreshing || refreshing) && SLOW_REFRESH_SPIN_CLASS,
+            )}
+            aria-hidden="true"
+          />
+          Refresh
+        </button>
+      }
+    >
+      <div className="space-y-4 px-3 sm:px-4">
+        <p className="text-xs text-muted-foreground">
+          Live subscription quota from each connected provider account.
+        </p>
+        <div className="space-y-5">
+          <ConnectedProviderUsageCards accounts={accounts} loading={loading} />
+          <ProviderResetCredits accounts={resetCreditAccounts} />
+        </div>
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          Pathway reads each CLI&apos;s stored sign-in on its connected environment and sends only
+          the quota summary to this client. Credentials stay on that environment.
+        </p>
+      </div>
+    </SettingsSection>
+  );
+}
+
+export function supportsProviderUsage(
+  provider: ServerProvider | undefined,
+): provider is ServerProvider {
+  return provider !== undefined && isProviderUsageDriver(provider.driver);
+}

@@ -1,16 +1,12 @@
 /**
  * Rendering and clamping a `ComputerUiNode` tree as text.
  *
- * Backend-neutral on purpose. This used to live in `atspiTreeTargeting.ts`,
- * which is the Linux AT-SPI fusion module, so the macOS backend and its AX tree
- * parser both imported their text helpers from the AT-SPI path — a dependency
- * that says something untrue about the code and would have to be untangled by
- * whoever next touched either platform. Nothing here knows where the tree came
- * from.
+ * Backend-neutral on purpose: the macOS and AT-SPI backends both render
+ * through it, and nothing here knows where the tree came from.
  *
  * @module computer/uiTreeText
  */
-import type { ComputerUiNode } from "@synara/contracts";
+import type { ComputerUiNode } from "@spiritdevs/contracts";
 
 import { clampTextToLength } from "./utf8Truncation.ts";
 

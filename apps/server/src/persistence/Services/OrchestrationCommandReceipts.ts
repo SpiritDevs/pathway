@@ -6,47 +6,29 @@
  *
  * @module OrchestrationCommandReceiptRepository
  */
+import { CommandId, IsoDateTime, NonNegativeInt, ProjectId, ThreadId } from "@spiritdevs/contracts";
 import {
-  CommandId,
-  IsoDateTime,
-  NonNegativeInt,
   OrchestrationAggregateKind,
   OrchestrationCommandReceiptStatus,
-  PositiveInt,
-  ProjectId,
-  SpaceId,
-  ThreadId,
-} from "@synara/contracts";
-import { Option, Schema, ServiceMap } from "effect";
-import type { Effect } from "effect";
+} from "@spiritdevs/contracts/legacy-orchestration";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import * as Context from "effect/Context";
+import type * as Effect from "effect/Effect";
 
 import type { OrchestrationCommandReceiptRepositoryError } from "../Errors.ts";
 
-const CommandFingerprint = Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/));
-
-const ReceiptFields = {
+export const OrchestrationCommandReceipt = Schema.Struct({
   commandId: CommandId,
   aggregateKind: OrchestrationAggregateKind,
-  aggregateId: Schema.Union([SpaceId, ProjectId, ThreadId]),
+  aggregateId: Schema.Union([ProjectId, ThreadId]),
+  commandType: Schema.String,
   acceptedAt: IsoDateTime,
   resultSequence: NonNegativeInt,
   status: OrchestrationCommandReceiptStatus,
   error: Schema.NullOr(Schema.String),
-} as const;
-
-export const OrchestrationCommandReceipt = Schema.Struct({
-  ...ReceiptFields,
-  fingerprintVersion: Schema.NullOr(PositiveInt),
-  commandFingerprint: Schema.NullOr(CommandFingerprint),
 });
 export type OrchestrationCommandReceipt = typeof OrchestrationCommandReceipt.Type;
-
-export const NewOrchestrationCommandReceipt = Schema.Struct({
-  ...ReceiptFields,
-  fingerprintVersion: PositiveInt,
-  commandFingerprint: CommandFingerprint,
-});
-export type NewOrchestrationCommandReceipt = typeof NewOrchestrationCommandReceipt.Type;
 
 export const GetByCommandIdInput = Schema.Struct({
   commandId: CommandId,
@@ -57,15 +39,18 @@ export type GetByCommandIdInput = typeof GetByCommandIdInput.Type;
  * OrchestrationCommandReceiptRepositoryShape - Service API for command receipts.
  */
 export interface OrchestrationCommandReceiptRepositoryShape {
-  /**
-   * Insert a command receipt without replacing an existing command identity.
-   *
-   * Returns `false` when `commandId` already exists; callers must compare the stored
-   * fingerprint and must never overwrite its original result.
-   */
-  readonly insert: (
-    receipt: NewOrchestrationCommandReceipt,
+  readonly insertIfAbsent: (
+    receipt: OrchestrationCommandReceipt,
   ) => Effect.Effect<boolean, OrchestrationCommandReceiptRepositoryError>;
+
+  /**
+   * Insert or replace a command receipt row.
+   *
+   * Upserts by `commandId` for idempotent command-result tracking.
+   */
+  readonly upsert: (
+    receipt: OrchestrationCommandReceipt,
+  ) => Effect.Effect<void, OrchestrationCommandReceiptRepositoryError>;
 
   /**
    * Read a command receipt by command id.
@@ -81,9 +66,9 @@ export interface OrchestrationCommandReceiptRepositoryShape {
 /**
  * OrchestrationCommandReceiptRepository - Service tag for command receipt persistence.
  */
-export class OrchestrationCommandReceiptRepository extends ServiceMap.Service<
+export class OrchestrationCommandReceiptRepository extends Context.Service<
   OrchestrationCommandReceiptRepository,
   OrchestrationCommandReceiptRepositoryShape
 >()(
-  "synara/persistence/Services/OrchestrationCommandReceipts/OrchestrationCommandReceiptRepository",
+  "@spiritdevs/pathway/persistence/Services/OrchestrationCommandReceipts/OrchestrationCommandReceiptRepository",
 ) {}

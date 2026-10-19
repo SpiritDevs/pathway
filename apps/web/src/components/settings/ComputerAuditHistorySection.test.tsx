@@ -1,12 +1,21 @@
-import type { ComputerAuditHistoryEntry, ComputerGetAuditHistoryResult } from "@synara/contracts";
+import type {
+  ComputerAuditHistoryEntry,
+  ComputerGetAuditHistoryResult,
+  EnvironmentId,
+} from "@spiritdevs/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import {
   ComputerAuditHistoryList,
+  ComputerAuditHistorySection,
+} from "./ComputerAuditHistorySection";
+import {
   computerAuditHistoryEntries,
   nextComputerAuditHistoryPage,
-} from "./ComputerAuditHistorySection";
+} from "./ComputerAuditHistorySection.logic";
+
+const ENVIRONMENT_ID = "environment-1" as EnvironmentId;
 
 function entry(
   index: number,
@@ -14,11 +23,12 @@ function entry(
 ): ComputerAuditHistoryEntry {
   return {
     id: index.toString(16).padStart(64, "0"),
-    ts: "2026-09-20T12:00:00.000Z",
+    ts: "2026-09-20T12:00:00.000Z" as ComputerAuditHistoryEntry["ts"],
     tool: "computer_browser_click",
     effect,
   };
 }
+
 function page(
   entries: readonly ComputerAuditHistoryEntry[],
   nextCursor: string | null = "older",
@@ -85,5 +95,34 @@ describe("Computer audit history", () => {
     );
     expect(markup).toContain("Effect observed");
     expect(markup).toContain("This is not a complete history");
+  });
+
+  it("offers history collapsed to a connection that may read it", () => {
+    const markup = renderToStaticMarkup(
+      <ComputerAuditHistorySection environmentId={ENVIRONMENT_ID} readAccess="granted" />,
+    );
+    expect(markup).toContain("Recent Computer actions");
+    expect(markup).toContain('id="computer-audit-history"');
+    expect(markup).toContain('aria-expanded="false"');
+    expect(markup).toContain("Show history");
+    expect(markup).not.toContain("Loading recent actions");
+  });
+
+  it("shows an admin-only state, with nothing to open, without access:read", () => {
+    const markup = renderToStaticMarkup(
+      <ComputerAuditHistorySection environmentId={ENVIRONMENT_ID} readAccess="denied" />,
+    );
+    expect(markup).toContain("Admin connection required");
+    expect(markup).toContain("access:read");
+    expect(markup).not.toContain("Show history");
+  });
+
+  it("offers nothing while the session is still being read", () => {
+    const markup = renderToStaticMarkup(
+      <ComputerAuditHistorySection environmentId={ENVIRONMENT_ID} readAccess="pending" />,
+    );
+    expect(markup).toContain("Recent Computer actions");
+    expect(markup).not.toContain("Show history");
+    expect(markup).not.toContain("Admin connection required");
   });
 });

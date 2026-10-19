@@ -7,11 +7,14 @@ export function buildInlineTerminalContextText(
     header: string;
   }>,
 ): string {
-  return contexts
-    .map((context) => context.header.trim())
-    .filter((header) => header.length > 0)
-    .map(formatInlineTerminalContextLabel)
-    .join(" ");
+  const labels: Array<string> = [];
+  for (const context of contexts) {
+    const header = context.header.trim();
+    if (header.length > 0) {
+      labels.push(formatInlineTerminalContextLabel(header));
+    }
+  }
+  return labels.join(" ");
 }
 
 export function formatInlineTerminalContextLabel(header: string): string {
@@ -32,22 +35,6 @@ export function formatInlineTerminalContextLabel(header: string): string {
     lineStart,
     lineEnd,
   });
-}
-
-export function resolveUserMessageMarkdownText(
-  visibleText: string,
-  contexts: ReadonlyArray<{
-    header: string;
-  }>,
-): string {
-  if (contexts.length === 0) {
-    return visibleText;
-  }
-  if (textContainsInlineTerminalContextLabels(visibleText, contexts)) {
-    return visibleText;
-  }
-  const prefix = buildInlineTerminalContextText(contexts);
-  return [prefix, visibleText].filter((part) => part.length > 0).join(" ");
 }
 
 export function textContainsInlineTerminalContextLabels(

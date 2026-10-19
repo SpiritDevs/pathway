@@ -1,6 +1,6 @@
-import type { ComputerId } from "@synara/contracts";
-import { encodeComputerFrame } from "@synara/shared/computerFrame";
-import { describe, expect, it, vi } from "vitest";
+import { ComputerId } from "@spiritdevs/contracts";
+import { encodeComputerFrame } from "@spiritdevs/shared/computerFrame";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   COMPUTER_FRAME_RESYNC_COOLDOWN_MS,
@@ -8,8 +8,8 @@ import {
   type WebSocketLike,
 } from "./computerFrameSource";
 
-const COMPUTER_ID = "desktop" as ComputerId;
-const EXPLICIT_URL = "ws://127.0.0.1:4321";
+const COMPUTER_ID = ComputerId.make("desktop");
+const FRAME_URL = "ws://127.0.0.1:4321/ws/computer-frames?computerId=desktop";
 type Listener = (event: never) => void;
 
 function createFakeSocket() {
@@ -49,33 +49,13 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
-describe("computer frame socket url", () => {
-  it("targets the computer frame route and query parameter", () => {
-    const { socket } = createFakeSocket();
-    let requested = "";
-    createComputerFrameSource({
-      computerId: COMPUTER_ID,
-      explicitUrl: EXPLICIT_URL,
-      handlers: { onFrame: vi.fn(), onReset: vi.fn() },
-      createSocket: (url) => {
-        requested = url;
-        return socket;
-      },
-    });
-    const url = new URL(requested);
-    expect(url.pathname).toBe("/ws/computer-frames");
-    expect(url.searchParams.get("computerId")).toBe(COMPUTER_ID);
-  });
-});
-
 describe("createComputerFrameSource", () => {
   function subscribe(options?: { now?: () => number }) {
     const { socket, close, send } = createFakeSocket();
     const onFrame = vi.fn();
     const onReset = vi.fn();
     const source = createComputerFrameSource({
-      computerId: COMPUTER_ID,
-      explicitUrl: EXPLICIT_URL,
+      url: FRAME_URL,
       handlers: { onFrame, onReset },
       createSocket: () => socket,
       ...options,
@@ -90,7 +70,7 @@ describe("createComputerFrameSource", () => {
     expect(onFrame).toHaveBeenCalledTimes(1);
     expect(onFrame.mock.calls[0]?.[0].header.computerId).toBe(COMPUTER_ID);
     expect(onFrame.mock.calls[0]?.[0].header.sequence).toBe(7);
-    expect([...onFrame.mock.calls[0]?.[0].payload]).toEqual([1, 2, 3]);
+    expect(Array.from(onFrame.mock.calls[0]?.[0].payload ?? [])).toEqual([1, 2, 3]);
   });
 
   it("ignores text and resets malformed binary envelopes", () => {
@@ -103,9 +83,14 @@ describe("createComputerFrameSource", () => {
   });
 
   it("reconnect-facing reset reasons and close are single-use", () => {
-    const closed = subscribe();
-    closed.socket.emit("close", {});
-    expect(closed.onReset).toHaveBeenCalledWith("closed");
+    const refused = subscribe();
+    refused.socket.emit("close", { code: 1006, reason: "" });
+    expect(refused.onReset).toHaveBeenCalledWith("closed", { code: 1006, reason: "" });
+
+    const policy = subscribe();
+    policy.socket.emit("open", {});
+    policy.socket.emit("close", { code: 1008, reason: "not allowed" });
+    expect(policy.onReset).toHaveBeenCalledWith("closed", { code: 1008, reason: "not allowed" });
 
     const errored = subscribe();
     errored.socket.emit("error", {});

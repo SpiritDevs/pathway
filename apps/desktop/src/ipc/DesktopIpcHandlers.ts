@@ -1,0 +1,147 @@
+import * as Effect from "effect/Effect";
+import { getDictationState, executeDictation, listDictationHistory } from "./methods/dictation.ts";
+
+import * as DesktopIpc from "./DesktopIpc.ts";
+import * as ThreadAlerts from "./methods/threadAlerts.ts";
+import { getClientSettings, setClientSettings } from "./methods/clientSettings.ts";
+import {
+  clearConnectionCatalog,
+  getConnectionCatalog,
+  setConnectionCatalog,
+} from "./methods/connectionCatalog.ts";
+import {
+  getAdvertisedEndpoints,
+  getServerExposureState,
+  setServerExposureMode,
+} from "./methods/serverExposure.ts";
+import {
+  bootstrapSshBearerSession,
+  disconnectSshEnvironment,
+  discoverSshHosts,
+  ensureSshEnvironment,
+  fetchSshEnvironmentDescriptor,
+  fetchSshSessionState,
+  issueSshWebSocketTicket,
+  resolveSshPasswordPrompt,
+} from "./methods/sshEnvironment.ts";
+import {
+  checkForUpdate,
+  downloadUpdate,
+  getUpdateState,
+  installUpdate,
+  setUpdateChannel,
+} from "./methods/updates.ts";
+import {
+  getAppBranding,
+  getLocalEnvironmentBootstraps,
+  getLocalEnvironmentBearerToken,
+  getWindowFullscreenState,
+  openExternal,
+  pickFolder,
+  pickThemeFiles,
+  setTheme,
+  setWindowButtonsVisible,
+  showContextMenu,
+} from "./methods/window.ts";
+import {
+  acknowledgeSnapShot,
+  captureSnapShot,
+  exportSnapShot,
+  setSnapShotAccount,
+  checkSnapShotShortcut,
+  dismissSnapShotAnimation,
+  getSnapShotState,
+  setupSnapShot,
+  previewSnapShotConfig,
+  applySnapShotConfig,
+  listPendingSnapShots,
+  readSnapShot,
+  requestSnapShotPermissions,
+  setSnapShotAnimationDestination,
+  setSnapShotShortcutSuppressed,
+} from "./methods/snapShot.ts";
+import * as ComputerIpc from "./methods/computer.ts";
+import * as PreviewIpc from "./methods/preview.ts";
+import { getWslState, setWslBackendEnabled, setWslDistro, setWslOnly } from "./methods/wsl.ts";
+
+export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers")(function* () {
+  const ipc = yield* DesktopIpc.DesktopIpc;
+  yield* ipc.handle(getDictationState);
+  yield* ipc.handle(executeDictation);
+  yield* ipc.handle(listDictationHistory);
+  yield* ipc.handle(ThreadAlerts.getThreadAlertSupport);
+  yield* ipc.handle(ThreadAlerts.showThreadAlert);
+  yield* ipc.handle(ThreadAlerts.closeThreadAlert);
+  yield* ipc.handle(ThreadAlerts.consumeThreadAlertClicks);
+  yield* ipc.handle(ThreadAlerts.playThreadAlertSystemSound);
+  yield* ipc.handle(ThreadAlerts.openThreadAlertSettings);
+  yield* PreviewIpc.installPreviewEventForwarding();
+
+  yield* ipc.handleSync(getAppBranding);
+  yield* ipc.handleSync(getWindowFullscreenState);
+  yield* ipc.handleSync(getLocalEnvironmentBootstraps);
+  yield* ipc.handle(getLocalEnvironmentBearerToken);
+
+  yield* ipc.handle(getClientSettings);
+  yield* ipc.handle(setClientSettings);
+  yield* ipc.handle(getConnectionCatalog);
+  yield* ipc.handle(getSnapShotState);
+  yield* ipc.handle(captureSnapShot);
+  yield* ipc.handle(exportSnapShot);
+  yield* ipc.handle(setSnapShotAccount);
+  yield* ipc.handle(setupSnapShot);
+  yield* ipc.handle(previewSnapShotConfig);
+  yield* ipc.handle(applySnapShotConfig);
+  yield* ipc.handle(requestSnapShotPermissions);
+  yield* ipc.handle(checkSnapShotShortcut);
+  yield* ipc.handle(setSnapShotShortcutSuppressed);
+  yield* ipc.handle(listPendingSnapShots);
+  yield* ipc.handle(readSnapShot);
+  yield* ipc.handle(setSnapShotAnimationDestination);
+  yield* ipc.handle(dismissSnapShotAnimation);
+  yield* ipc.handle(acknowledgeSnapShot);
+  yield* ipc.handle(setConnectionCatalog);
+  yield* ipc.handle(clearConnectionCatalog);
+
+  yield* ipc.handle(discoverSshHosts);
+  yield* ipc.handle(ensureSshEnvironment);
+  yield* ipc.handle(disconnectSshEnvironment);
+  yield* ipc.handle(fetchSshEnvironmentDescriptor);
+  yield* ipc.handle(bootstrapSshBearerSession);
+  yield* ipc.handle(fetchSshSessionState);
+  yield* ipc.handle(issueSshWebSocketTicket);
+  yield* ipc.handle(resolveSshPasswordPrompt);
+
+  yield* ipc.handle(getServerExposureState);
+  yield* ipc.handle(setServerExposureMode);
+  yield* ipc.handle(getAdvertisedEndpoints);
+
+  yield* ipc.handle(getWslState);
+  yield* ipc.handle(setWslBackendEnabled);
+  yield* ipc.handle(setWslDistro);
+  yield* ipc.handle(setWslOnly);
+
+  yield* ipc.handle(pickFolder);
+  yield* ipc.handle(pickThemeFiles);
+  yield* ipc.handle(setTheme);
+  yield* ipc.handle(setWindowButtonsVisible);
+  yield* ipc.handle(showContextMenu);
+  yield* ipc.handle(openExternal);
+  yield* ipc.handle(getUpdateState);
+  yield* ipc.handle(setUpdateChannel);
+  yield* ipc.handle(downloadUpdate);
+  yield* ipc.handle(installUpdate);
+  yield* ipc.handle(checkForUpdate);
+  for (const previewMethod of PreviewIpc.methods) {
+    yield* ipc.handle(previewMethod);
+  }
+  yield* ipc.handle(ComputerIpc.getComputerState);
+  yield* ipc.handle(ComputerIpc.requestComputerPermissions);
+  yield* ipc.handle(ComputerIpc.startComputerPermissionSetup);
+  yield* ipc.handle(ComputerIpc.openComputerPermissionSettings);
+  yield* ipc.handle(ComputerIpc.showComputerPermissionGuide);
+  yield* ipc.handle(ComputerIpc.hideComputerPermissionGuide);
+  yield* ipc.handle(ComputerIpc.restartComputerApp);
+  yield* ipc.handle(ComputerIpc.setComputerCursorStyle);
+  yield* ipc.handle(ComputerIpc.setComputerPreviewWatched);
+});

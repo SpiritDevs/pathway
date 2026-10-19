@@ -1,154 +1,414 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as PlatformError from "effect/PlatformError";
+import * as Sink from "effect/Sink";
+import * as Stream from "effect/Stream";
+import { TestClock } from "effect/testing";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { HostProcessEnvironment, HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
+import { SpawnExecutableResolution } from "@spiritdevs/shared/shell";
 
-import { runProcess } from "./processRunner";
+import * as ProcessRunner from "./processRunner.ts";
+
+type ChildProcessCommand = {
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly options: {
+    readonly shell?: boolean | string;
+  };
+};
+
+// Accesses private properties of ChildProcessCommand for testing purposes
+function asChildProcessCommand(command: unknown): ChildProcessCommand {
+  return command as ChildProcessCommand;
+}
+
+function makeHandle(input: {
+  readonly stdout?: string | Stream.Stream<Uint8Array>;
+  readonly stderr?: string | Stream.Stream<Uint8Array>;
+  readonly code?: number;
+  readonly stdin?: ChildProcessSpawner.ChildProcessHandle["stdin"];
+  readonly exitCode?: Effect.Effect<ChildProcessSpawner.ExitCode>;
+}) {
+  return ChildProcessSpawner.makeHandle({
+    pid: ChildProcessSpawner.ProcessId(1),
+    exitCode: input.exitCode ?? Effect.succeed(ChildProcessSpawner.ExitCode(input.code ?? 0)),
+    isRunning: Effect.succeed(false),
+    kill: () => Effect.void,
+    unref: Effect.succeed(Effect.void),
+    stdin: input.stdin ?? Sink.drain,
+    stdout:
+      typeof input.stdout === "string"
+        ? Stream.encodeText(Stream.make(input.stdout))
+        : (input.stdout ?? Stream.empty),
+    stderr:
+      typeof input.stderr === "string"
+        ? Stream.encodeText(Stream.make(input.stderr))
+        : (input.stderr ?? Stream.empty),
+    all: Stream.empty,
+    getInputFd: () => Sink.drain,
+    getOutputFd: () => Stream.empty,
+  });
+}
+
+function makeSpawner(
+  f: (
+    command: ChildProcessCommand,
+  ) => Effect.Effect<ChildProcessSpawner.ChildProcessHandle, PlatformError.PlatformError>,
+) {
+  return ChildProcessSpawner.make((command) => f(asChildProcessCommand(command)));
+}
+
+const runWith =
+  (spawner: ChildProcessSpawner.ChildProcessSpawner["Service"]) =>
+  (input: ProcessRunner.ProcessRunInput) =>
+    Effect.service(ProcessRunner.ProcessRunner).pipe(
+      Effect.flatMap((runner) =>
+        runner.run({
+          ...input,
+        }),
+      ),
+      Effect.provide(
+        ProcessRunner.layer.pipe(
+          Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner)),
+        ),
+      ),
+    );
 
 describe("runProcess", () => {
-  it("fails when output exceeds max buffer in default mode", async () => {
-    await expect(
-      runProcess("node", ["-e", "process.stdout.write('x'.repeat(2048))"], { maxBufferBytes: 128 }),
-    ).rejects.toThrow("exceeded stdout buffer limit");
-  });
+  it.effect("collects stdout through an injected ChildProcessSpawner", () =>
+    Effect.gen(function* () {
+      const spawner = makeSpawner((command) =>
+        Effect.sync(() => {
+          expect(command.command).toBe("fake");
+          expect(command.args).toEqual(["stdout-bytes", "32"]);
+          return makeHandle({ stdout: "x".repeat(32) });
+        }),
+      );
 
-  it("truncates output when outputMode is truncate", async () => {
-    const result = await runProcess("node", ["-e", "process.stdout.write('x'.repeat(2048))"], {
-      maxBufferBytes: 128,
-      outputMode: "truncate",
-    });
+      const result = yield* runWith(spawner)({
+        command: "fake",
+        args: ["stdout-bytes", "32"],
+      });
 
-    expect(result.code).toBe(0);
-    expect(result.stdout.length).toBeLessThanOrEqual(128);
-    expect(result.stdoutTruncated).toBe(true);
-    expect(result.stderrTruncated).toBe(false);
-  });
+      expect(result.code).toBe(0);
+      expect(result.stdout).toBe("x".repeat(32));
+      expect(result.timedOut).toBe(false);
+    }),
+  );
 
-  it("does not emit a replacement character when truncation splits UTF-8 output", async () => {
-    const result = await runProcess("node", ["-e", "process.stdout.write('ab€cd')"], {
-      maxBufferBytes: 4,
-      outputMode: "truncate",
-    });
-
-    expect(result.stdout).toBe("ab");
-    expect(result.stdoutTruncated).toBe(true);
-  });
-
-  it("preserves UTF-8 characters split across process chunks and live observers", async () => {
-    const stdoutChunks: string[] = [];
-    const result = await runProcess(
-      "node",
-      [
-        "-e",
-        "process.stdout.write(Buffer.from([0xe2])); setTimeout(() => process.stdout.write(Buffer.from([0x82, 0xac])), 25)",
-      ],
-      { onStdoutChunk: (chunk) => stdoutChunks.push(chunk) },
+  it.effect("runs through the ProcessRunner service", () => {
+    const spawner = makeSpawner((command) =>
+      Effect.sync(() => {
+        expect(command.command).toBe("fake");
+        expect(command.args).toEqual(["--service"]);
+        return makeHandle({ stdout: "service ok" });
+      }),
+    );
+    const layer = ProcessRunner.layer.pipe(
+      Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner)),
     );
 
-    expect(result.stdout).toBe("€");
-    expect(stdoutChunks.join("")).toBe("€");
+    return Effect.gen(function* () {
+      const runner = yield* ProcessRunner.ProcessRunner;
+      const result = yield* runner.run({
+        command: "fake",
+        args: ["--service"],
+      });
+
+      expect(result.stdout).toBe("service ok");
+    }).pipe(Effect.provide(layer));
   });
 
-  it("reports live stdout and stderr chunks while retaining the final output", async () => {
-    const stdoutChunks: string[] = [];
-    const stderrChunks: string[] = [];
-    const result = await runProcess(
-      "node",
-      ["-e", "process.stdout.write('out'); process.stderr.write('err')"],
-      {
-        onStdoutChunk: (chunk) => stdoutChunks.push(chunk),
-        onStderrChunk: (chunk) => stderrChunks.push(chunk),
-      },
+  it.effect("resolves and escapes Windows command shims before spawning", () => {
+    const spawner = makeSpawner((command) =>
+      Effect.sync(() => {
+        expect(command.command).toBe('^"C:\\Users\\tester\\AppData\\Roaming\\npm\\az.cmd^"');
+        expect(command.args).toEqual([
+          '^"repos^"',
+          '^"pr^"',
+          '^"list^"',
+          '^"--source-branch^"',
+          '^"feature^ ^&^ release^"',
+        ]);
+        expect(command.options.shell).toBe(true);
+        return makeHandle({ stdout: "[]" });
+      }),
     );
 
-    expect(stdoutChunks.join("")).toBe("out");
-    expect(stderrChunks.join("")).toBe("err");
-    expect(result.stdout).toBe("out");
-    expect(result.stderr).toBe("err");
+    return runWith(spawner)({
+      command: "az",
+      args: ["repos", "pr", "list", "--source-branch", "feature & release"],
+      env: { AZURE_CONFIG_DIR: "C:\\Users\\tester\\.azure" },
+    }).pipe(
+      Effect.provideService(HostProcessPlatform, "win32"),
+      Effect.provideService(HostProcessEnvironment, {
+        PATH: "C:\\Users\\tester\\AppData\\Roaming\\npm",
+        PATHEXT: ".COM;.EXE;.BAT;.CMD",
+      }),
+      Effect.provideService(SpawnExecutableResolution, (_command, _platform, env) =>
+        env.PATH === "C:\\Users\\tester\\AppData\\Roaming\\npm" &&
+        env.AZURE_CONFIG_DIR === "C:\\Users\\tester\\.azure"
+          ? "C:\\Users\\tester\\AppData\\Roaming\\npm\\az.cmd"
+          : undefined,
+      ),
+      Effect.map((result) => {
+        expect(result.stdout).toBe("[]");
+      }),
+    );
   });
 
-  it("keeps output observers isolated from the child-process lifecycle", async () => {
-    const result = await runProcess("node", ["-e", "process.stdout.write('ok')"], {
-      onStdoutChunk: () => {
-        throw new Error("observer failed");
-      },
-    });
+  it.effect("preserves resolved spawn context and cause", () =>
+    Effect.gen(function* () {
+      const cause = PlatformError.systemError({
+        _tag: "PermissionDenied",
+        module: "ChildProcessSpawner",
+        method: "spawn",
+        pathOrDescriptor: "/actual/fake",
+      });
+      const spawner = makeSpawner(() => Effect.fail(cause));
 
-    expect(result.stdout).toBe("ok");
-    expect(result.code).toBe(0);
-  });
+      const error = yield* runWith(spawner)({
+        command: "fake",
+        args: ["--flag", "secret-token-value"],
+        cwd: "/logical",
+        spawnCwd: "/actual",
+      }).pipe(Effect.flip);
 
-  it("rejects without spawning when the signal is already aborted", async () => {
-    const controller = new AbortController();
-    controller.abort();
+      expect(error._tag).toBe("ProcessSpawnError");
+      if (error._tag !== "ProcessSpawnError") {
+        return expect.fail("Expected ProcessSpawnError");
+      }
+      expect(error).toMatchObject({
+        command: "fake",
+        argumentCount: 2,
+        cwd: "/logical",
+        spawnCwd: "/actual",
+        resolvedCommand: "fake",
+        resolvedArgumentCount: 2,
+        shell: false,
+      });
+      expect(error.cause).toBe(cause);
+      expect(error.message).toBe("Failed to spawn process 'fake' in '/actual'");
+      expect(error).not.toHaveProperty("args");
+      expect(error).not.toHaveProperty("resolvedArgs");
+      expect(error.message).not.toContain("secret-token-value");
+    }),
+  );
 
-    await expect(
-      runProcess("node", ["-e", "process.exit(99)"], { signal: controller.signal }),
-    ).rejects.toMatchObject({ name: "AbortError" });
-  });
+  it.effect("fails when output exceeds max buffer in default mode", () =>
+    Effect.gen(function* () {
+      const spawner = makeSpawner(() => Effect.succeed(makeHandle({ stdout: "x".repeat(2048) })));
 
-  it("terminates a running child on abort and clears its later timeout", async () => {
-    const controller = new AbortController();
-    const running = runProcess("node", ["-e", "setInterval(() => {}, 1_000)"], {
-      signal: controller.signal,
-      timeoutMs: 150,
-    });
+      const error = yield* runWith(spawner)({
+        command: "fake",
+        args: ["stdout-bytes", "2048"],
+        maxOutputBytes: 128,
+      }).pipe(Effect.flip);
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    controller.abort();
+      expect(error._tag).toBe("ProcessOutputLimitError");
+      if (error._tag !== "ProcessOutputLimitError") {
+        return expect.fail("Expected ProcessOutputLimitError");
+      }
+      expect(error).toMatchObject({
+        stream: "stdout",
+        maxBytes: 128,
+        observedBytes: 2048,
+      });
+      expect(error.message).toBe(
+        "Process 'fake' stdout produced 2048 bytes, exceeding the 128 byte limit",
+      );
+    }),
+  );
 
-    await expect(running).rejects.toMatchObject({ name: "AbortError" });
-    // Cross the original deadline: the cleared timeout must not produce a second failure or keep
-    // the test process alive after the aborted child has closed.
-    await new Promise((resolve) => setTimeout(resolve, 150));
-  });
+  it.effect("accepts output at the byte limit followed by an empty chunk", () =>
+    Effect.gen(function* () {
+      const output = new TextEncoder().encode("exactly");
+      const spawner = makeSpawner(() =>
+        Effect.succeed(
+          makeHandle({
+            stdout: Stream.make(output, new Uint8Array()),
+          }),
+        ),
+      );
 
-  it("keeps timeout failures distinct from explicit aborts", async () => {
-    const timedOut = runProcess("node", ["-e", "setInterval(() => {}, 1_000)"], {
-      timeoutMs: 30,
-    });
+      const result = yield* runWith(spawner)({
+        command: "fake",
+        args: ["exact-limit"],
+        maxOutputBytes: output.byteLength,
+      });
 
-    await expect(timedOut).rejects.toMatchObject({
-      name: "Error",
-      message: expect.stringContaining("timed out"),
-    });
-  });
+      expect(result.stdout).toBe("exactly");
+    }),
+  );
 
-  it("keeps the timeout classification when abort arrives after the deadline", async () => {
-    const controller = new AbortController();
-    const outcome = runProcess("node", ["-e", "setInterval(() => {}, 1_000)"], {
-      signal: controller.signal,
-      timeoutMs: 30,
-    }).catch((error: unknown) => error);
+  it.effect("fails fast on output limit before timeout for long-running output", () =>
+    Effect.gen(function* () {
+      const textChunk = "x".repeat(64);
+      const spawner = makeSpawner(() =>
+        Effect.succeed(
+          makeHandle({
+            stdout: Stream.fromIterable(Array.from({ length: 10 }, () => textChunk)).pipe(
+              Stream.encodeText,
+            ),
+            exitCode: Effect.never,
+          }),
+        ),
+      );
 
-    await new Promise((resolve) => setTimeout(resolve, 60));
-    controller.abort();
+      const error = yield* runWith(spawner)({
+        command: "fake",
+        args: ["spam-stdout"],
+        maxOutputBytes: 128,
+        timeout: "2 seconds",
+      }).pipe(Effect.flip);
 
-    expect(await outcome).toMatchObject({
-      name: "Error",
-      message: expect.stringContaining("timed out"),
-    });
-  });
+      expect(error).toBeInstanceOf(ProcessRunner.ProcessOutputLimitError);
+    }),
+  );
+
+  it.effect("truncates output when outputMode is truncate", () =>
+    Effect.gen(function* () {
+      const spawner = makeSpawner(() => Effect.succeed(makeHandle({ stdout: "x".repeat(2048) })));
+
+      const result = yield* runWith(spawner)({
+        command: "fake",
+        args: ["stdout-bytes", "2048"],
+        maxOutputBytes: 128,
+        outputMode: "truncate",
+      });
+
+      expect(result.code).toBe(0);
+      expect(result.stdout.length).toBeLessThanOrEqual(128);
+      expect(result.stdoutTruncated).toBe(true);
+      expect(result.stderrTruncated).toBe(false);
+    }),
+  );
+
+  it.effect("writes stdin before waiting for exit", () =>
+    Effect.gen(function* () {
+      const stdinWritten = yield* Deferred.make<void>();
+      const decoder = new TextDecoder();
+      const spawner = makeSpawner(() =>
+        Effect.succeed(
+          makeHandle({
+            stdout: "stdin payload",
+            stdin: Sink.forEach((chunk: Uint8Array) => {
+              const text = decoder.decode(chunk, { stream: true });
+              return text.includes("stdin payload")
+                ? Deferred.succeed(stdinWritten, undefined)
+                : Effect.void;
+            }),
+            exitCode: Deferred.await(stdinWritten).pipe(Effect.as(ChildProcessSpawner.ExitCode(0))),
+          }),
+        ),
+      );
+
+      const result = yield* runWith(spawner)({
+        command: "fake",
+        args: ["stdin-echo"],
+        stdin: "stdin payload",
+      });
+
+      expect(result.stdout).toBe("stdin payload");
+      expect(result.code).toBe(0);
+    }),
+  );
+
+  it.effect("returns output for non-zero exit codes", () =>
+    Effect.gen(function* () {
+      const spawner = makeSpawner(() => Effect.succeed(makeHandle({ stderr: "boom", code: 2 })));
+
+      const result = yield* runWith(spawner)({
+        command: "fake",
+        args: ["stderr-exit", "boom", "2"],
+      });
+
+      expect(result.code).toBe(2);
+      expect(result.stderr).toBe("boom");
+    }),
+  );
+
+  it.effect("fails on timeout", () =>
+    Effect.gen(function* () {
+      const spawner = makeSpawner(() =>
+        Effect.succeed(
+          makeHandle({
+            exitCode: Effect.never,
+          }),
+        ),
+      );
+      const errorFiber = yield* runWith(spawner)({
+        command: "fake",
+        args: ["sleep"],
+        cwd: "/logical",
+        spawnCwd: "/actual",
+        timeout: "50 millis",
+      }).pipe(Effect.flip, Effect.forkScoped);
+
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust(Duration.millis(50));
+      const error = yield* Fiber.join(errorFiber);
+
+      expect(error._tag).toBe("ProcessTimeoutError");
+      if (error._tag !== "ProcessTimeoutError") {
+        return expect.fail("Expected ProcessTimeoutError");
+      }
+      expect(error).toMatchObject({
+        command: "fake",
+        argumentCount: 1,
+        cwd: "/logical",
+        spawnCwd: "/actual",
+        timeoutMs: 50,
+      });
+      expect(error.message).toBe("Process 'fake' in '/actual' timed out after 50ms");
+    }),
+  );
+
+  it.effect("returns a synthetic timed out result when timeoutBehavior is timedOutResult", () =>
+    Effect.gen(function* () {
+      const spawner = makeSpawner(() =>
+        Effect.succeed(
+          makeHandle({
+            exitCode: Effect.never,
+          }),
+        ),
+      );
+      const resultFiber = yield* runWith(spawner)({
+        command: "fake",
+        args: ["sleep"],
+        timeout: "50 millis",
+        timeoutBehavior: "timedOutResult",
+      }).pipe(Effect.forkScoped);
+
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust(Duration.millis(50));
+      const result = yield* Fiber.join(resultFiber);
+
+      expect(result).toMatchObject({
+        stdout: "",
+        stderr: "",
+        code: null,
+        timedOut: true,
+        stdoutTruncated: false,
+        stderrTruncated: false,
+      });
+    }),
+  );
 });
 
-// The owned ChildProcess handle is sufficient for POSIX cancellation. A missing
-// ps executable must never turn a timeout/abort into a wait for natural exit.
-describe.skipIf(process.platform === "win32")("cancellation without ps on PATH", () => {
-  it.each(["timeout", "abort"] as const)("terminates an owned child on %s", async (cause) => {
-    const previousPath = process.env.PATH;
-    const controller = new AbortController();
-    const started = Date.now();
-    let abortTimer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      process.env.PATH = "/synara-test-no-executables";
-      const running = runProcess(process.execPath, ["-e", "setTimeout(() => {}, 4000)"], {
-        timeoutMs: cause === "timeout" ? 30 : 5000,
-        signal: controller.signal,
-      });
-      if (cause === "abort") abortTimer = setTimeout(() => controller.abort(), 30);
-      await expect(running).rejects.toThrow(cause === "timeout" ? "timed out" : "aborted");
-      expect(Date.now() - started).toBeLessThan(2000);
-    } finally {
-      if (abortTimer) clearTimeout(abortTimer);
-      if (previousPath === undefined) delete process.env.PATH;
-      else process.env.PATH = previousPath;
-    }
-  });
+describe("isWindowsCommandNotFound", () => {
+  it.effect("matches the localized German cmd.exe error text", () =>
+    Effect.gen(function* () {
+      const isCommandNotFound = yield* ProcessRunner.isWindowsCommandNotFound(
+        1,
+        "wird nicht als interner oder externer Befehl, betriebsfahiges Programm oder Batch-Datei erkannt",
+      ).pipe(Effect.provideService(HostProcessPlatform, "win32"));
+      expect(isCommandNotFound).toBe(true);
+    }),
+  );
 });

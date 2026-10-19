@@ -1,12 +1,16 @@
-import { deflateSync } from "node:zlib";
+// @effect-diagnostics nodeBuiltinImport:off - the fixtures encode PNGs with zlib's deflate.
+import * as NodeZlib from "node:zlib";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 
 import {
   decodePngLuma,
   estimateVerticalTravel,
   ScrollGearingStore,
   type LumaImage,
+  unfilterToLuma,
 } from "./scrollCalibration.ts";
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -72,7 +76,7 @@ function encodePng(
   return Buffer.concat([
     PNG_SIGNATURE,
     ihdr(width, height, options.bitDepth ?? 8, colorType, options.interlace ?? 0),
-    chunk("IDAT", deflateSync(raw)),
+    chunk("IDAT", NodeZlib.deflateSync(raw)),
     chunk("IEND", Buffer.alloc(0)),
   ]);
 }
@@ -96,115 +100,133 @@ function noise(width: number, height: number, seed: number): Uint8Array {
  * A window onto a taller page, so a shift shows content that really exists
  * rather than blank filler — which is what a scroll does.
  */
-async function pageWindow(
+function pageWindow(
   page: Uint8Array,
   width: number,
   height: number,
   topRow: number,
-): Promise<LumaImage | undefined> {
+): Effect.Effect<LumaImage> {
   const bytes = grayPng(width, height, page.subarray(topRow * width, (topRow + height) * width));
-  return decodePngLuma(bytes);
+  return Effect.map(decodePngLuma(bytes), (image) => image!);
 }
 
 describe("decodePngLuma", () => {
-  it("round-trips an 8-bit grayscale image", async () => {
-    const width = 8;
-    const height = 4;
-    const luma = new Uint8Array(width * height);
-    for (let index = 0; index < luma.length; index += 1) luma[index] = (index * 7) % 256;
+  it.effect("round-trips an 8-bit grayscale image", () =>
+    Effect.gen(function* () {
+      const width = 8;
+      const height = 4;
+      const luma = new Uint8Array(width * height);
+      for (let index = 0; index < luma.length; index += 1) luma[index] = (index * 7) % 256;
 
-    const decoded = await decodePngLuma(grayPng(width, height, luma));
-    expect(decoded?.width).toBe(width);
-    expect(decoded?.height).toBe(height);
-    expect(Array.from(decoded?.luma ?? [])).toEqual(Array.from(luma));
-  });
+      const decoded = yield* decodePngLuma(grayPng(width, height, luma));
+      expect(decoded?.width).toBe(width);
+      expect(decoded?.height).toBe(height);
+      expect(Array.from(decoded?.luma ?? [])).toEqual(Array.from(luma));
+    }),
+  );
 
-  it("converts RGB samples to luma", async () => {
-    // Pure red, green, blue, then white: the coefficients are visible directly.
-    const samples = Uint8Array.of(255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255);
-    const decoded = await decodePngLuma(encodePng(4, 1, 2, samples));
-    expect(Array.from(decoded?.luma ?? [])).toEqual([76, 149, 29, 255]);
-  });
+  it.effect("keeps a shared decode alive when one of its callers is interrupted", () =>
+    Effect.gen(function* () {
+      const luma = Uint8Array.from({ length: 64 }, (_, index) => index);
+      const bytes = grayPng(8, 8, luma);
+      const first = yield* Effect.forkChild(decodePngLuma(bytes), { startImmediately: true });
+      const second = yield* Effect.forkChild(decodePngLuma(bytes), { startImmediately: true });
+      yield* Fiber.interrupt(first);
+      const decoded = yield* Fiber.join(second);
+      expect(Array.from(decoded?.luma ?? [])).toEqual(Array.from(luma));
+    }),
+  );
 
-  it("survives every scanline filter", async () => {
-    // Filters are chosen per row by the encoder in the wild; the decoder has to
-    // undo all five, and Paeth is the one with a spec-exact tie rule.
-    const width = 6;
-    const height = 5;
-    const stride = width * 3;
-    const samples = noise(stride, height, 99);
-    const raw = Buffer.alloc((stride + 1) * height);
-    const previous = new Uint8Array(stride);
-    for (let row = 0; row < height; row += 1) {
-      // Filter 0 on the first row, then 1..4: encoding with the same predictors
-      // the decoder implements, so a mismatch shows up as wrong pixels.
-      const filter = row === 0 ? 0 : row;
-      raw[row * (stride + 1)] = filter;
-      for (let index = 0; index < stride; index += 1) {
-        const value = samples[row * stride + index]!;
-        const left = index >= 3 ? samples[row * stride + index - 3]! : 0;
-        const up = previous[index]!;
-        const upLeft = index >= 3 ? previous[index - 3]! : 0;
-        const predicted =
-          filter === 1
-            ? left
-            : filter === 2
-              ? up
-              : filter === 3
-                ? (left + up) >> 1
-                : filter === 4
-                  ? paethReference(left, up, upLeft)
-                  : 0;
-        raw[row * (stride + 1) + 1 + index] = (value - predicted) & 0xff;
+  it.effect("converts RGB samples to luma", () =>
+    Effect.gen(function* () {
+      // Pure red, green, blue, then white: the coefficients are visible directly.
+      const samples = Uint8Array.of(255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255);
+      const decoded = yield* decodePngLuma(encodePng(4, 1, 2, samples));
+      expect(Array.from(decoded?.luma ?? [])).toEqual([76, 149, 29, 255]);
+    }),
+  );
+
+  it.effect("survives every scanline filter", () =>
+    Effect.gen(function* () {
+      // Filters are chosen per row by the encoder in the wild; the decoder has to
+      // undo all five, and Paeth is the one with a spec-exact tie rule.
+      const width = 6;
+      const height = 5;
+      const stride = width * 3;
+      const samples = noise(stride, height, 99);
+      const raw = Buffer.alloc((stride + 1) * height);
+      const previous = new Uint8Array(stride);
+      for (let row = 0; row < height; row += 1) {
+        // Filter 0 on the first row, then 1..4: encoding with the same predictors
+        // the decoder implements, so a mismatch shows up as wrong pixels.
+        const filter = row === 0 ? 0 : row;
+        raw[row * (stride + 1)] = filter;
+        for (let index = 0; index < stride; index += 1) {
+          const value = samples[row * stride + index]!;
+          const left = index >= 3 ? samples[row * stride + index - 3]! : 0;
+          const up = previous[index]!;
+          const upLeft = index >= 3 ? previous[index - 3]! : 0;
+          const predicted =
+            filter === 1
+              ? left
+              : filter === 2
+                ? up
+                : filter === 3
+                  ? (left + up) >> 1
+                  : filter === 4
+                    ? paethReference(left, up, upLeft)
+                    : 0;
+          raw[row * (stride + 1) + 1 + index] = (value - predicted) & 0xff;
+        }
+        previous.set(samples.subarray(row * stride, (row + 1) * stride));
       }
-      previous.set(samples.subarray(row * stride, (row + 1) * stride));
-    }
-    const bytes = Buffer.concat([
-      PNG_SIGNATURE,
-      ihdr(width, height, 8, 2),
-      chunk("IDAT", deflateSync(raw)),
-      chunk("IEND", Buffer.alloc(0)),
-    ]);
+      const bytes = Buffer.concat([
+        PNG_SIGNATURE,
+        ihdr(width, height, 8, 2),
+        chunk("IDAT", NodeZlib.deflateSync(raw)),
+        chunk("IEND", Buffer.alloc(0)),
+      ]);
 
-    const decoded = await decodePngLuma(bytes);
-    expect(decoded?.width).toBe(width);
-    const expected = await decodePngLuma(encodePng(width, height, 2, samples));
-    expect(Array.from(decoded?.luma ?? [])).toEqual(Array.from(expected?.luma ?? [1]));
-  });
+      const decoded = yield* decodePngLuma(bytes);
+      expect(decoded?.width).toBe(width);
+      const expected = yield* decodePngLuma(encodePng(width, height, 2, samples));
+      expect(Array.from(decoded?.luma ?? [])).toEqual(Array.from(expected?.luma ?? [1]));
+    }),
+  );
 
-  it("declines what it does not decode instead of throwing", async () => {
-    const luma = noise(4, 4, 7);
-    // Interlaced, 16-bit, and palette are all legal PNG and all unsupported.
-    await expect(
-      decodePngLuma(encodePng(4, 4, 0, luma, { interlace: 1 })),
-    ).resolves.toBeUndefined();
-    await expect(
-      decodePngLuma(encodePng(4, 4, 0, luma, { bitDepth: 16 })),
-    ).resolves.toBeUndefined();
-    const palette = Buffer.concat([
-      PNG_SIGNATURE,
-      ihdr(4, 4, 8, 3),
-      chunk("IDAT", deflateSync(Buffer.alloc(20))),
-      chunk("IEND", Buffer.alloc(0)),
-    ]);
-    await expect(decodePngLuma(palette)).resolves.toBeUndefined();
-  });
+  it.effect("declines what it does not decode instead of failing", () =>
+    Effect.gen(function* () {
+      const luma = noise(4, 4, 7);
+      // Interlaced, 16-bit, and palette are all legal PNG and all unsupported.
+      expect(yield* decodePngLuma(encodePng(4, 4, 0, luma, { interlace: 1 }))).toBeUndefined();
+      expect(yield* decodePngLuma(encodePng(4, 4, 0, luma, { bitDepth: 16 }))).toBeUndefined();
+      const palette = Buffer.concat([
+        PNG_SIGNATURE,
+        ihdr(4, 4, 8, 3),
+        chunk("IDAT", NodeZlib.deflateSync(Buffer.alloc(20))),
+        chunk("IEND", Buffer.alloc(0)),
+      ]);
+      expect(yield* decodePngLuma(palette)).toBeUndefined();
+    }),
+  );
 
-  it("declines malformed bytes instead of throwing", async () => {
-    await expect(decodePngLuma(new Uint8Array(0))).resolves.toBeUndefined();
-    await expect(decodePngLuma(Uint8Array.of(1, 2, 3, 4, 5, 6, 7, 8, 9))).resolves.toBeUndefined();
-    // A valid header whose pixel data is not deflate: inflate throws, and the
-    // measurement has to degrade rather than fail the scroll that already ran.
-    const badIdat = Buffer.concat([
-      PNG_SIGNATURE,
-      ihdr(4, 4, 8, 0),
-      chunk("IDAT", Buffer.from("not compressed", "utf8")),
-      chunk("IEND", Buffer.alloc(0)),
-    ]);
-    await expect(decodePngLuma(badIdat)).resolves.toBeUndefined();
-    // Truncated mid-chunk.
-    await expect(decodePngLuma(badIdat.subarray(0, 20))).resolves.toBeUndefined();
-  });
+  it.effect("declines malformed bytes instead of failing", () =>
+    Effect.gen(function* () {
+      expect(yield* decodePngLuma(new Uint8Array(0))).toBeUndefined();
+      expect(yield* decodePngLuma(Uint8Array.of(1, 2, 3, 4, 5, 6, 7, 8, 9))).toBeUndefined();
+      // A valid header whose pixel data is not deflate: inflate fails, and the
+      // measurement has to degrade rather than fail the scroll that already ran.
+      const badIdat = Buffer.concat([
+        PNG_SIGNATURE,
+        ihdr(4, 4, 8, 0),
+        chunk("IDAT", Buffer.from("not compressed", "utf8")),
+        chunk("IEND", Buffer.alloc(0)),
+      ]);
+      expect(yield* decodePngLuma(badIdat)).toBeUndefined();
+      // Truncated mid-chunk.
+      expect(yield* decodePngLuma(badIdat.subarray(0, 20))).toBeUndefined();
+    }),
+  );
 });
 
 function paethReference(left: number, up: number, upLeft: number): number {
@@ -233,49 +255,59 @@ describe("estimateVerticalTravel", () => {
   const height = 400;
   const page = noise(width, height + 300, 20_260_822);
 
-  it("recovers a downward scroll as positive travel", async () => {
-    // Positive delta_y moves content up the screen: the after capture shows what
-    // was 37 rows further down the page, so after[i] === before[i + 37].
-    const before = (await pageWindow(page, width, height, 150))!;
-    const after = (await pageWindow(page, width, height, 187))!;
-    expect(estimateVerticalTravel(before, after)).toBe(37);
-  });
+  it.effect("recovers a downward scroll as positive travel", () =>
+    Effect.gen(function* () {
+      // Positive delta_y moves content up the screen: the after capture shows what
+      // was 37 rows further down the page, so after[i] === before[i + 37].
+      const before = yield* pageWindow(page, width, height, 150);
+      const after = yield* pageWindow(page, width, height, 187);
+      expect(estimateVerticalTravel(before, after)).toBe(37);
+    }),
+  );
 
-  it("recovers an upward scroll as negative travel", async () => {
-    const before = (await pageWindow(page, width, height, 150))!;
-    const after = (await pageWindow(page, width, height, 67))!;
-    expect(estimateVerticalTravel(before, after)).toBe(-83);
-  });
+  it.effect("recovers an upward scroll as negative travel", () =>
+    Effect.gen(function* () {
+      const before = yield* pageWindow(page, width, height, 150);
+      const after = yield* pageWindow(page, width, height, 67);
+      expect(estimateVerticalTravel(before, after)).toBe(-83);
+    }),
+  );
 
-  it("requires substantial shared content before learning a large scroll", async () => {
-    const before = (await pageWindow(page, width, height, 0))!;
-    // The central 320-row band needs at least 128 matching rows. Both offsets
-    // have an exact match, but the second leaves too little shared content.
-    const enoughOverlap = (await pageWindow(page, width, height, 192))!;
-    const tooLittleOverlap = (await pageWindow(page, width, height, 193))!;
-    expect(estimateVerticalTravel(before, enoughOverlap)).toBe(192);
-    expect(estimateVerticalTravel(before, tooLittleOverlap)).toBeUndefined();
-  });
+  it.effect("requires substantial shared content before learning a large scroll", () =>
+    Effect.gen(function* () {
+      const before = yield* pageWindow(page, width, height, 0);
+      // The central 320-row band needs at least 128 matching rows. Both offsets
+      // have an exact match, but the second leaves too little shared content.
+      const enoughOverlap = yield* pageWindow(page, width, height, 192);
+      const tooLittleOverlap = yield* pageWindow(page, width, height, 193);
+      expect(estimateVerticalTravel(before, enoughOverlap)).toBe(192);
+      expect(estimateVerticalTravel(before, tooLittleOverlap)).toBeUndefined();
+    }),
+  );
 
-  it("reports zero for a window that did not move", async () => {
-    const before = (await pageWindow(page, width, height, 150))!;
-    expect(estimateVerticalTravel(before, before)).toBe(0);
-  });
+  it.effect("reports zero for a window that did not move", () =>
+    Effect.gen(function* () {
+      const before = yield* pageWindow(page, width, height, 150);
+      expect(estimateVerticalTravel(before, before)).toBe(0);
+    }),
+  );
 
-  it("refuses a shifted pair whose best alignment is still a poor match", async () => {
-    // The live footer-alias case: when the true shift lies outside the search
-    // range, repetitive content can still produce a relative winner. A real
-    // alignment of lossless captures is near-exact, so a winner that differs
-    // this much from its counterpart rows is a coincidence, not a match.
-    const before = (await pageWindow(page, width, height, 150))!;
-    const after = {
-      ...before,
-      luma: before.luma.map((value, index) => (value + ((index * 2_654_435_761) % 41)) & 0xff),
-    };
-    expect(estimateVerticalTravel(before, after)).toBeUndefined();
-  });
+  it.effect("refuses a shifted pair whose best alignment is still a poor match", () =>
+    Effect.gen(function* () {
+      // The live footer-alias case: when the true shift lies outside the search
+      // range, repetitive content can still produce a relative winner. A real
+      // alignment of lossless captures is near-exact, so a winner that differs
+      // this much from its counterpart rows is a coincidence, not a match.
+      const before = yield* pageWindow(page, width, height, 150);
+      const after = {
+        ...before,
+        luma: before.luma.map((value, index) => (value + ((index * 2_654_435_761) % 41)) & 0xff),
+      };
+      expect(estimateVerticalTravel(before, after)).toBeUndefined();
+    }),
+  );
 
-  it("refuses a blank window, where any shift matches", async () => {
+  it("refuses a blank window, where any shift matches", () => {
     const blank: LumaImage = {
       width,
       height,
@@ -284,26 +316,32 @@ describe("estimateVerticalTravel", () => {
     expect(estimateVerticalTravel(blank, blank)).toBeUndefined();
   });
 
-  it("refuses captures of different sizes", async () => {
-    const before = (await pageWindow(page, width, height, 150))!;
-    const after = (await pageWindow(page, width, height - 40, 150))!;
-    expect(estimateVerticalTravel(before, after)).toBeUndefined();
-  });
+  it.effect("refuses captures of different sizes", () =>
+    Effect.gen(function* () {
+      const before = yield* pageWindow(page, width, height, 150);
+      const after = yield* pageWindow(page, width, height - 40, 150);
+      expect(estimateVerticalTravel(before, after)).toBeUndefined();
+    }),
+  );
 
-  it("refuses a capture too short to correlate", async () => {
-    const short = (await decodePngLuma(grayPng(width, 40, noise(width, 40, 3))))!;
-    expect(estimateVerticalTravel(short, short)).toBeUndefined();
-  });
+  it.effect("refuses a capture too short to correlate", () =>
+    Effect.gen(function* () {
+      const short = (yield* decodePngLuma(grayPng(width, 40, noise(width, 40, 3))))!;
+      expect(estimateVerticalTravel(short, short)).toBeUndefined();
+    }),
+  );
 
-  it("honors a caller-supplied shift ceiling", async () => {
-    const before = (await pageWindow(page, width, height, 150))!;
-    const after = (await pageWindow(page, width, height, 187))!;
-    expect(estimateVerticalTravel(before, after, { maxShift: 10 })).toBeUndefined();
-  });
+  it.effect("honors a caller-supplied shift ceiling", () =>
+    Effect.gen(function* () {
+      const before = yield* pageWindow(page, width, height, 150);
+      const after = yield* pageWindow(page, width, height, 187);
+      expect(estimateVerticalTravel(before, after, { maxShift: 10 })).toBeUndefined();
+    }),
+  );
 });
 
 describe("ScrollGearingStore", () => {
-  it("assumes pixel-true until it has measured otherwise", async () => {
+  it("assumes pixel-true until it has measured otherwise", () => {
     const store = new ScrollGearingStore();
     expect(store.gearing("w1")).toBe(1);
     expect(store.plan("w1", 400)).toBe(400);
@@ -318,7 +356,7 @@ describe("ScrollGearingStore", () => {
     expect(store.gearing("w1")).toBe(1);
   });
 
-  it("converges on a 7x browser in one measurement", async () => {
+  it("converges on a 7x browser in one measurement", () => {
     const store = new ScrollGearingStore();
     const device = 7;
 
@@ -338,7 +376,7 @@ describe("ScrollGearingStore", () => {
     expect(store.gearing("browser")).toBeCloseTo(7, 6);
   });
 
-  it("smooths later observations rather than chasing one of them", async () => {
+  it("smooths later observations rather than chasing one of them", () => {
     const store = new ScrollGearingStore();
     store.learn("w1", 400, 1_600);
     expect(store.gearing("w1")).toBe(4);
@@ -346,7 +384,7 @@ describe("ScrollGearingStore", () => {
     expect(store.gearing("w1")).toBe(6);
   });
 
-  it("drops samples that cannot mean anything", async () => {
+  it("drops samples that cannot mean anything", () => {
     const store = new ScrollGearingStore();
     // The page hit its edge.
     store.learn("w1", 400, 0);
@@ -363,7 +401,7 @@ describe("ScrollGearingStore", () => {
     expect(store.plan("w1", 400)).toBe(400);
   });
 
-  it("never plans a nonzero request down to nothing", async () => {
+  it("never plans a nonzero request down to nothing", () => {
     const store = new ScrollGearingStore();
     store.learn("w1", 400, 400 * 50);
     expect(store.gearing("w1")).toBe(50);
@@ -371,7 +409,7 @@ describe("ScrollGearingStore", () => {
     expect(store.plan("w1", -10)).toBe(-1);
   });
 
-  it("forgets the oldest window rather than growing without bound", async () => {
+  it("forgets the oldest window rather than growing without bound", () => {
     const store = new ScrollGearingStore();
     for (let index = 0; index < 64; index += 1) {
       store.learn(`w${index}`, 400, 2_800);
@@ -391,26 +429,42 @@ describe("ScrollGearingStore", () => {
   });
 });
 
-it("yields while reconstructing large captures and reuses an intermediate decode", async () => {
-  const bytes = grayPng(1536, 960, noise(1536, 960, 42));
-  let turns = 0;
-  let running = true;
-  const tick = () => {
-    if (running) {
-      turns += 1;
-      setImmediate(tick);
+it.effect("yields while reconstructing large captures and reuses an intermediate decode", () =>
+  Effect.gen(function* () {
+    const width = 1536;
+    const height = 960;
+    const pixels = noise(width, height, 42);
+    // A sibling fiber that counts scheduler turns: it only runs when the
+    // reconstruction yields, and each yield resumes on a later event-loop turn.
+    // Reconstruction is timed apart from the decode because a threadpool
+    // inflate lets the counter spin on its own.
+    const raw = new Uint8Array((width + 1) * height);
+    for (let row = 0; row < height; row += 1) {
+      raw.set(pixels.subarray(row * width, (row + 1) * width), row * (width + 1) + 1);
     }
-  };
-  setImmediate(tick);
-  try {
-    const first = decodePngLuma(bytes);
-    expect(decodePngLuma(bytes)).toBe(first);
-    const image = await first;
-    expect(image?.width).toBe(1536);
-    // Inflation alone yields once. Scanline reconstruction must yield repeatedly.
+    let turns = 0;
+    const ticker = yield* Effect.forkChild(
+      Effect.forever(
+        Effect.suspend(() => {
+          turns += 1;
+          return Effect.yieldNow;
+        }),
+      ),
+    );
+    const reconstructed = yield* unfilterToLuma(raw, width, height, 1);
+    yield* Fiber.interrupt(ticker);
+    expect(Array.from(reconstructed?.luma.subarray(0, 16) ?? [])).toEqual(
+      Array.from(pixels.subarray(0, 16)),
+    );
     expect(turns).toBeGreaterThan(10);
-    expect(await decodePngLuma(bytes)).toBe(image);
-  } finally {
-    running = false;
-  }
-});
+
+    const bytes = grayPng(width, height, pixels);
+    const [first, second] = yield* Effect.all([decodePngLuma(bytes), decodePngLuma(bytes)], {
+      concurrency: "unbounded",
+    });
+    expect(first?.width).toBe(width);
+    // Concurrent callers share one decode, and a later caller reuses it.
+    expect(second).toBe(first);
+    expect(yield* decodePngLuma(bytes)).toBe(first);
+  }),
+);
