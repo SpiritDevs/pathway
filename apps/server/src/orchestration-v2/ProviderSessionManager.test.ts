@@ -853,7 +853,7 @@ it.effect(
         assert.equal(resolved?.providerDriverKind, CODEX_DRIVER);
         assert.deepEqual(
           resolved?.capabilities,
-          new Set(["preview", "orchestration", "worktree", "email"]),
+          new Set(["preview", "orchestration", "worktree", "email", "device"]),
         );
 
         yield* manager.close(providerSessionId);

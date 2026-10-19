@@ -1,3 +1,4 @@
+import { SshDeviceHostConfigs } from "./device.ts";
 import { KeybindingShortcut } from "./keybindings.ts";
 import * as Effect from "effect/Effect";
 import * as Duration from "effect/Duration";
@@ -862,6 +863,10 @@ export const DEFAULT_ISSUE_AUTOMATION_SETTINGS: IssueAutomationSettings = {
 };
 
 export const ServerSettings = Schema.Struct({
+  enableAgentDeviceAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  enableDeviceSupport: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  deviceOnboardingCompleted: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  deviceHosts: SshDeviceHostConfigs.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   /** A user-chosen environment name. Empty keeps the host-derived automatic name. */
   environmentName: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   // Legacy token-by-token assistant output. Deliberately a fresh key (was
@@ -1042,6 +1047,10 @@ const OpenCodeSettingsPatch = Schema.Struct({
 });
 
 export const ServerSettingsPatch = Schema.Struct({
+  enableAgentDeviceAccess: Schema.optionalKey(Schema.Boolean),
+  enableDeviceSupport: Schema.optionalKey(Schema.Boolean),
+  deviceOnboardingCompleted: Schema.optionalKey(Schema.Boolean),
+  deviceHosts: Schema.optionalKey(SshDeviceHostConfigs),
   // Server settings
   environmentName: Schema.optionalKey(TrimmedString),
   enableLegacyTokenStreaming: Schema.optionalKey(Schema.Boolean),

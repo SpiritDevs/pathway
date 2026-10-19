@@ -1,3 +1,10 @@
+import * as DeviceService from "../device/DeviceService.ts";
+import { DeviceToolScreenshotResult } from "@spiritdevs/contracts";
+import { DeviceStandardToolkit, DeviceScreenshotToolkit } from "./toolkits/device/tools.ts";
+import {
+  DeviceStandardToolkitHandlersLive,
+  DeviceScreenshotToolkitHandlersLive,
+} from "./toolkits/device/handlers.ts";
 import * as DelegatedBusiness from "../cloud/delegatedBusiness.ts";
 import {
   CLIENT_CAPABILITIES_META_KEY,
@@ -250,6 +257,8 @@ const previewSnapshotFailure = <E>(cause: Cause.Cause<E>) => {
   }).pipe(Effect.as(result));
 };
 
+const isDeviceToolScreenshotResult = Schema.is(DeviceToolScreenshotResult);
+
 const invokeBuiltTool = (
   built: BuiltToolkit,
   name: string,
@@ -266,11 +275,32 @@ const invokeBuiltTool = (
       Effect.tapCause(Effect.logError),
       Effect.matchCause({
         onFailure: toolFailure,
-        onSuccess: ({ encodedResult }) => ({
-          isError: false,
-          ...(typeof encodedResult === "object" ? { structuredContent: encodedResult } : {}),
-          content: [{ type: "text" as const, text: JSON.stringify(encodedResult) }],
-        }),
+        onSuccess: ({ encodedResult }) => {
+          if (name === "device_screenshot" && isDeviceToolScreenshotResult(encodedResult)) {
+            const { screenshot, device } = encodedResult;
+            const metadata = {
+              device,
+              screenshot: {
+                mimeType: screenshot.mimeType,
+                width: screenshot.width,
+                height: screenshot.height,
+              },
+            };
+            return {
+              isError: false,
+              structuredContent: metadata,
+              content: [
+                { type: "text" as const, text: JSON.stringify(metadata) },
+                { type: "image" as const, mimeType: screenshot.mimeType, data: screenshot.data },
+              ],
+            };
+          }
+          return {
+            isError: false,
+            ...(typeof encodedResult === "object" ? { structuredContent: encodedResult } : {}),
+            content: [{ type: "text" as const, text: JSON.stringify(encodedResult) }],
+          };
+        },
       }),
     ),
   );
@@ -1180,6 +1210,8 @@ const OrchestratorMcpServiceLive = OrchestratorMcpService.layer.pipe(
 );
 
 const ToolkitHandlersLive = Layer.mergeAll(
+  DeviceStandardToolkitHandlersLive,
+  DeviceScreenshotToolkitHandlersLive,
   PreviewStandardToolkitHandlersLive,
   PreviewSnapshotToolkitHandlersLive,
   IssuesToolkitHandlersLive,
@@ -1206,8 +1238,10 @@ const buildPathwayMcpToolkits = Effect.gen(function* () {
   const orchestrator = (yield* OrchestratorToolkit) as unknown as BuiltToolkit;
   const worktree = (yield* WorktreeToolkit) as unknown as BuiltToolkit;
   const email = (yield* EmailToolkit) as unknown as BuiltToolkit;
+  const devices = (yield* DeviceStandardToolkit) as unknown as BuiltToolkit;
+  const deviceScreenshots = (yield* DeviceScreenshotToolkit) as unknown as BuiltToolkit;
   return {
-    toolkits: [standardPreview, issues, orchestrator, worktree, email],
+    toolkits: [standardPreview, issues, orchestrator, worktree, email, devices, deviceScreenshots],
     snapshot,
   };
 });
@@ -1301,6 +1335,7 @@ const McpV2HttpHandlerLive = Layer.effect(
     yield* OrchestratorMcpService.OrchestratorMcpService;
     yield* WorktreeMcpService.WorktreeMcpService;
     yield* IssueTrackerService;
+    yield* DeviceService.DeviceService;
     yield* ProjectionProjectRepository;
     const { snapshot, toolkits } = yield* buildPathwayMcpToolkits;
     const emailService = yield* EmailMcpService.EmailMcpService;

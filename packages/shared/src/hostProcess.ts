@@ -1,3 +1,4 @@
+import * as NodeSea from "node:sea";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as NodeOS from "node:os";
@@ -52,3 +53,9 @@ export const HostProcessArguments = Context.Reference<ReadonlyArray<string>>(
 );
 
 export const isHostWindows = Effect.map(HostProcessPlatform, (platform) => platform === "win32");
+
+/** Standalone builds must launch tools with a real Node runtime. */
+export const HostProcessIsExecutable = Context.Reference<boolean>(
+  "@spiritdevs/shared/hostProcess/HostProcessIsExecutable",
+  { defaultValue: () => NodeSea.isSea() },
+);

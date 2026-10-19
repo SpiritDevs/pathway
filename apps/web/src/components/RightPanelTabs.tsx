@@ -5,6 +5,7 @@ import type {
 } from "@spiritdevs/contracts";
 import { getTerminalLabel } from "@spiritdevs/shared/terminalLabels";
 import {
+  Smartphone,
   Bot,
   CircleDot,
   FileDiff,
@@ -64,6 +65,7 @@ interface RightPanelTabsProps {
   onCloseSurfacesToRight: (surface: RightPanelSurface) => void;
   onCloseAllSurfaces: () => void;
   onCopyFilePath: (relativePath: string) => void;
+  onAddDevice?: (() => void) | undefined;
   onAddBrowser: () => void;
   onAddTerminal: () => void;
   onAddDiff: () => void;
@@ -143,6 +145,7 @@ function SurfaceMenuItem(props: {
 }
 
 function RightPanelEmptyState(props: {
+  onAddDevice?: (() => void) | undefined;
   onAddBrowser: () => void;
   onAddTerminal: () => void;
   onAddDiff: () => void;
@@ -161,6 +164,20 @@ function RightPanelEmptyState(props: {
   allowedSurfaceKinds?: ReadonlySet<RightPanelKind>;
 }) {
   const actions = [
+    ...(props.onAddDevice
+      ? [
+          {
+            kind: "device",
+            label: "Device",
+            description: "Open a simulator or emulator.",
+            icon: Smartphone,
+            available: true,
+            disabledReason: "",
+            onClick: props.onAddDevice,
+            badgeCount: 0,
+          },
+        ]
+      : []),
     {
       kind: "preview",
       label: "Browser",
@@ -306,6 +323,8 @@ export function resolveRightPanelSurfaceTitle(
   threadTitlesById?: ReadonlyMap<string, string>,
 ): string {
   switch (surface.kind) {
+    case "device":
+      return surface.target?.name ?? "Devices";
     case "diff":
       return "Diff";
     case "files":
@@ -371,6 +390,8 @@ function SurfaceIcon({
       const url = !snapshot || snapshot.navStatus._tag === "Idle" ? null : snapshot.navStatus.url;
       return <PreviewFavicon url={url} />;
     }
+    case "device":
+      return <Smartphone className="size-3 shrink-0" />;
     case "diff":
       return <FileDiff className="size-3 shrink-0" />;
     case "files":
@@ -583,6 +604,12 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                   <Plus className="size-3.5" />
                 </MenuTrigger>
                 <MenuPopup align="start" side="bottom" sideOffset={6} className="min-w-44">
+                  {props.onAddDevice && (props.allowedSurfaceKinds?.has("device") ?? true) ? (
+                    <MenuItem onClick={props.onAddDevice}>
+                      <Smartphone className="size-4" />
+                      Device
+                    </MenuItem>
+                  ) : null}
                   {(props.allowedSurfaceKinds?.has("preview") ?? true) ? (
                     <SurfaceMenuItem
                       available={props.browserAvailable}
@@ -666,6 +693,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       <div className="flex min-h-0 flex-1 flex-col" data-right-panel-surface-content>
         {props.activeSurfaceId === null ? (
           <RightPanelEmptyState
+            onAddDevice={props.onAddDevice}
             onAddBrowser={props.onAddBrowser}
             onAddTerminal={props.onAddTerminal}
             onAddDiff={props.onAddDiff}
