@@ -6,6 +6,8 @@ import Foundation
 
 enum PathwayRPCError: LocalizedError, Sendable {
     case disconnected
+    /// A conversation stream fell behind its bounded queue and ended; its owner must resubscribe from a fresh snapshot.
+    case overflowed
     case timedOut
     case protocolViolation(String)
     case remote(String)
@@ -16,6 +18,7 @@ enum PathwayRPCError: LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .disconnected: "The Pathway environment disconnected."
+        case .overflowed: "The live thread fell behind. Pathway is reloading it."
         case .timedOut: "The environment did not respond in time. Check the latest state before retrying."
         case let .protocolViolation(message): message
         case let .remote(message): message
@@ -340,9 +343,10 @@ actor PathwayRPCClient {
             for value in values {
                 if let result = subscriptionContinuation?.yield(value),
                    pathwayRPCBufferOverflowIsFatal(result, policy: subscriptionBufferingPolicy) {
-                    throw PathwayRPCError.protocolViolation(
-                        "The live thread produced events faster than the app could display them."
-                    )
+                    // Ending the stream delivers its buffered values first, then this error, so
+                    // the consumer learns about the gap even while its queue is full.
+                    await endSubscription(throwing: .overflowed)
+                    return
                 }
             }
             try await sendControl("Ack", requestID: response.requestId)
@@ -490,6 +494,29 @@ actor PathwayRPCClient {
         subscriptionTag = nil
         subscriptionPayload = nil
         if let previousRequestID { try? await sendControl("Interrupt", requestID: previousRequestID) }
+        stopIfIdle()
+    }
+
+    /// Ends the current subscription with a terminal error the consumer must handle.
+    private func endSubscription(throwing error: PathwayRPCError) async {
+        guard let continuation = subscriptionContinuation else { return }
+        PathwayDiagnostics.shared.record(subscriptionTag ?? "subscription", outcome: "ended", error: error)
+        let previousRequestID = subscriptionRequestID
+        subscriptionID = nil
+        subscriptionRequestID = nil
+        subscriptionGate.reset()
+        subscriptionContinuation = nil
+        subscriptionTag = nil
+        subscriptionPayload = nil
+        continuation.finish(throwing: error)
+        if let previousRequestID { try? await sendControl("Interrupt", requestID: previousRequestID) }
+        stopIfIdle()
+    }
+
+    /// Without a subscription or a waiting request, nothing needs the socket to reconnect.
+    private func stopIfIdle() {
+        guard subscriptionID == nil, pending.isEmpty, desired else { return }
+        stop()
     }
 
     private func cancelPending(_ id: Int) {
@@ -520,8 +547,21 @@ actor PathwayRPCClient {
     /// a newer disconnect notification in the consumer.
     private func yieldTransportState(_ state: String) {
         PathwayDiagnostics.shared.record("environment.connection", outcome: state)
-        guard let subscriptionContinuation else { return }
-        pathwayRPCYieldTransportState(state, to: subscriptionContinuation, policy: subscriptionBufferingPolicy)
+        guard let subscriptionContinuation,
+              !pathwayRPCYieldTransportState(state, to: subscriptionContinuation, policy: subscriptionBufferingPolicy)
+        else { return }
+        // The stream already finished with `overflowed`; release it so the loop does not reconnect for nobody.
+        let previousRequestID = subscriptionRequestID
+        subscriptionID = nil
+        subscriptionRequestID = nil
+        subscriptionGate.reset()
+        self.subscriptionContinuation = nil
+        subscriptionTag = nil
+        subscriptionPayload = nil
+        Task {
+            if let previousRequestID { try? await self.sendControl("Interrupt", requestID: previousRequestID) }
+            await self.stopIfIdle()
+        }
     }
 
     private func allocateRequestID() -> Int {
@@ -557,15 +597,17 @@ func pathwayRPCBufferOverflowIsFatal(
     return true
 }
 
+/// Returns true when the full queue could not take the change and the stream ended with `overflowed`.
+@discardableResult
 func pathwayRPCYieldTransportState(
     _ state: String,
     to continuation: AsyncThrowingStream<JSONValue, Error>.Continuation,
     policy: AsyncThrowingStream<JSONValue, Error>.Continuation.BufferingPolicy
-) {
+) -> Bool {
     let result = continuation.yield(.object(["_pathwayTransport": .string(state)]))
-    if pathwayRPCBufferOverflowIsFatal(result, policy: policy) {
-        continuation.finish(throwing: PathwayRPCError.disconnected)
-    }
+    guard pathwayRPCBufferOverflowIsFatal(result, policy: policy) else { return false }
+    continuation.finish(throwing: PathwayRPCError.overflowed)
+    return true
 }
 
 // swiftlint:enable type_body_length

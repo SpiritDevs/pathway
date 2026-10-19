@@ -356,6 +356,10 @@ final class PathwayAgentThreadModel {
     @ObservationIgnored let injectedRequest: Request?
     @ObservationIgnored var rpc: PathwayRPCClient?
     @ObservationIgnored private var streamTask: Task<Void, Never>?
+    /// Tests replace the environment's live thread stream; production subscribes over `rpc`.
+    @ObservationIgnored var threadStreamOverride: (@MainActor () async -> AsyncThrowingStream<JSONValue, Error>)?
+    @ObservationIgnored var streamRecoveryDelay: (Int) -> Duration = PathwayAgentThreadModel.defaultStreamRecoveryDelay
+    @ObservationIgnored private var streamRecoveries = 0
     @ObservationIgnored private var cacheWriteTask: Task<Void, Never>?
     @ObservationIgnored private var pendingCacheWrite: PathwayThreadCachePendingWrite?
     @ObservationIgnored private(set) var configTask: Task<Void, Never>?
@@ -407,8 +411,8 @@ final class PathwayAgentThreadModel {
     }
 
     func start() {
-        guard streamTask == nil, let connect else { return }
-        connectionState = .connecting
+        guard streamTask == nil, connect != nil || threadStreamOverride != nil else { return }
+        connectionState = items.isEmpty ? .connecting : .cached
         streamTask = Task { @MainActor [weak self] in
             guard let self else { return }
             await restoreDraft()
@@ -416,40 +420,79 @@ final class PathwayAgentThreadModel {
                 items = cached; connectionState = .cached
             }
             guard !Task.isCancelled else { return }
-            let environment = environment
-            let rpc = PathwayRPCClient { [weak self] in
-                let connection = try await connect.prepare(environment: environment)
-                await self?.setComputerSessionScopes(connection.scopes)
-                return connection.webSocketURL
-            }
-            self.rpc = rpc
-            // Each RPC client owns one subscription; settings must not replace the thread stream.
-            let settingsRPC = PathwayRPCClient { try await connect.prepare(environment: environment).webSocketURL }
-            self.settingsRPC = settingsRPC
-            settingsTask = Task { @MainActor [weak self] in
-                do {
-                    for try await value in await settingsRPC.subscribe("subscribeServerConfig", payload: .object([:])) {
-                        guard !Task.isCancelled, let self else { return }
-                        if value.objectValue?["_pathwayTransport"] != nil { invalidateServerConfig() }
-                        else { applySubscriptionValue(value) }
-                    }
-                } catch {
-                    guard !Task.isCancelled else { return }
-                    self?.invalidateServerConfig()
-                }
-            }
-            configTask = Task { [weak self] in
-                await self?.refreshServerConfig()
-                await self?.refreshParentRoster()
-            }
+            if let connect { openEnvironment(connect) }
             do {
-                for try await value in await rpc.subscribeToThread(thread.threadId) {
+                for try await value in await openThreadStream() {
                     guard !Task.isCancelled else { return }
                     applySubscriptionValue(value)
                 }
+                guard !Task.isCancelled else { return }
+                throw PathwayRPCError.disconnected
             } catch is CancellationError { return }
-            catch { connectionState = items.isEmpty ? .failed(error.localizedDescription) : .cached }
+            catch { await streamEnded(error) }
         }
+    }
+
+    private func openEnvironment(_ connect: PathwayConnectClient) {
+        let environment = environment
+        let rpc = PathwayRPCClient { [weak self] in
+            let connection = try await connect.prepare(environment: environment)
+            await self?.setComputerSessionScopes(connection.scopes)
+            return connection.webSocketURL
+        }
+        self.rpc = rpc
+        // Each RPC client owns one subscription; settings must not replace the thread stream.
+        let settingsRPC = PathwayRPCClient { try await connect.prepare(environment: environment).webSocketURL }
+        self.settingsRPC = settingsRPC
+        settingsTask = Task { @MainActor [weak self] in
+            do {
+                for try await value in await settingsRPC.subscribe("subscribeServerConfig", payload: .object([:])) {
+                    guard !Task.isCancelled, let self else { return }
+                    if value.objectValue?["_pathwayTransport"] != nil { invalidateServerConfig() }
+                    else { applySubscriptionValue(value) }
+                }
+            } catch {
+                guard !Task.isCancelled else { return }
+                self?.invalidateServerConfig()
+            }
+        }
+        configTask = Task { [weak self] in
+            await self?.refreshServerConfig()
+            await self?.refreshParentRoster()
+        }
+    }
+
+    private func openThreadStream() async -> AsyncThrowingStream<JSONValue, Error> {
+        if let threadStreamOverride { return await threadStreamOverride() }
+        guard let rpc else { return AsyncThrowingStream { $0.finish(throwing: PathwayRPCError.disconnected) } }
+        return await rpc.subscribeToThread(thread.threadId)
+    }
+
+    /// The live stream ended without `stop()`. Its sockets and readiness go, the timeline stays,
+    /// and a stream that fell behind resubscribes from a fresh snapshot after a capped backoff.
+    private func streamEnded(_ error: Error) async {
+        let recoverable = if case PathwayRPCError.overflowed = error { true } else { false }
+        isSubscriptionReady = false
+        invalidateComputerConnection()
+        invalidateServerConfig()
+        configTask?.cancel(); configTask = nil
+        settingsTask?.cancel(); settingsTask = nil
+        connectionState = recoverable ? (items.isEmpty ? .connecting : .cached) : .failed(error.localizedDescription)
+        let previousRPC = rpc; rpc = nil
+        let previousSettingsRPC = settingsRPC; settingsRPC = nil
+        await previousRPC?.stop()
+        await previousSettingsRPC?.stop()
+        guard !Task.isCancelled else { return }
+        guard recoverable else { streamTask = nil; return }
+        streamRecoveries += 1
+        do { try await Task.sleep(for: streamRecoveryDelay(streamRecoveries)) } catch { return }
+        guard !Task.isCancelled else { return }
+        streamTask = nil
+        start()
+    }
+
+    nonisolated static func defaultStreamRecoveryDelay(_ attempt: Int) -> Duration {
+        .milliseconds(min(5_000, 250 << min(attempt - 1, 5)))
     }
 
     func stop() async {
@@ -981,7 +1024,7 @@ final class PathwayAgentThreadModel {
             }
             if isSubscriptionReady { connectionState = .live }
         case "synchronized":
-            isSubscriptionReady = true; connectionState = .live
+            isSubscriptionReady = true; connectionState = .live; streamRecoveries = 0
             configTask?.cancel()
             configTask = Task { [weak self] in
                 await self?.refreshServerConfig()
