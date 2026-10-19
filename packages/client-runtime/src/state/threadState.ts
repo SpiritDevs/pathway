@@ -27,9 +27,14 @@ export type ThreadHistoryDirection =
   | { readonly aroundMessageId: MessageId };
 
 export interface EnvironmentThreadHistory extends OrchestrationV2ThreadHistory {
+  /** A navigation request the user is waiting on. */
   readonly isLoading: boolean;
+  /** A silent adjacent-page fetch ahead of the viewport; clients show no loading state for it. */
+  readonly isPrefetching: boolean;
   readonly error: string | null;
   readonly request: (direction: ThreadHistoryDirection) => void;
+  /** Fetches the adjacent page without blocking; a later latest or around request supersedes it. */
+  readonly prefetch: (direction: "older" | "newer") => void;
   readonly retry: () => void;
 }
 

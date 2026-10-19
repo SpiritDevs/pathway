@@ -4,7 +4,7 @@ import { deriveMessagesTimelineRows } from "./MessagesTimeline.logic";
 import {
   deriveTimelineMinimapItems,
   resolveTimelineHistoryNavigation,
-  resolveTimelineHistoryScrollRequest,
+  resolveTimelineHistoryPrefetch,
 } from "./MessagesTimeline.history";
 
 function messageRows(messages: Array<{ id: string; role: "user" | "assistant"; text: string }>) {
@@ -143,60 +143,86 @@ describe("remote marker navigation", () => {
   });
 });
 
-describe("automatic history requests", () => {
+describe("history prefetch", () => {
+  // An 800px viewport prefetches within 2,000px (2.5 viewports) of either edge.
   const input = {
-    previousScroll: 140,
-    scroll: 100,
-    atEnd: false,
+    previousScroll: 2_100,
+    scroll: 1_900,
+    scrollLength: 800,
+    distanceToEnd: 20_000,
     liveFollowEnabled: false,
     userScrollDirection: "older" as const,
-    history: { hasOlder: true, hasNewer: true, isLoading: false, error: null },
+    history: {
+      hasOlder: true,
+      hasNewer: true,
+      isLoading: false,
+      isPrefetching: false,
+      error: null,
+    },
   };
 
-  it("loads older content when the user scrolls toward the top", () => {
-    expect(resolveTimelineHistoryScrollRequest(input)).toBe("older");
-  });
-
-  it("does not fetch on mount, programmatic positioning, layout correction, or while following", () => {
-    expect(resolveTimelineHistoryScrollRequest({ ...input, previousScroll: null })).toBeNull();
-    expect(resolveTimelineHistoryScrollRequest({ ...input, userScrollDirection: null })).toBeNull();
-    expect(resolveTimelineHistoryScrollRequest({ ...input, previousScroll: 90 })).toBeNull();
-    expect(resolveTimelineHistoryScrollRequest({ ...input, liveFollowEnabled: true })).toBeNull();
-  });
-
-  it("keeps errors available for explicit retry and does not overlap requests", () => {
+  it("prefetches older pages a few viewports before the top edge scrolls into view", () => {
+    expect(resolveTimelineHistoryPrefetch(input)).toBe("older");
     expect(
-      resolveTimelineHistoryScrollRequest({
-        ...input,
-        history: { ...input.history, error: "Disconnected" },
-      }),
-    ).toBeNull();
-    expect(
-      resolveTimelineHistoryScrollRequest({
-        ...input,
-        history: { ...input.history, isLoading: true },
-      }),
-    ).toBeNull();
-    expect(
-      resolveTimelineHistoryScrollRequest({
-        ...input,
-        history: { ...input.history, hasOlder: false },
-      }),
+      resolveTimelineHistoryPrefetch({ ...input, previousScroll: 2_300, scroll: 2_100 }),
     ).toBeNull();
   });
 
-  it("loads newer content at the end of a historical window only for downward navigation", () => {
-    const atEnd = { ...input, previousScroll: 100, scroll: 140, atEnd: true };
-    expect(resolveTimelineHistoryScrollRequest({ ...atEnd, userScrollDirection: "newer" })).toBe(
-      "newer",
-    );
-    expect(resolveTimelineHistoryScrollRequest(atEnd)).toBeNull();
+  it("prefetches newer pages a few viewports before the end of a historical window", () => {
+    const newer = {
+      ...input,
+      previousScroll: 1_000,
+      scroll: 1_200,
+      userScrollDirection: "newer" as const,
+    };
+    expect(resolveTimelineHistoryPrefetch({ ...newer, distanceToEnd: 1_900 })).toBe("newer");
+    expect(resolveTimelineHistoryPrefetch({ ...newer, distanceToEnd: 2_100 })).toBeNull();
     expect(
-      resolveTimelineHistoryScrollRequest({
-        ...atEnd,
-        userScrollDirection: "newer",
+      resolveTimelineHistoryPrefetch({
+        ...newer,
+        distanceToEnd: 0,
         history: { ...input.history, hasNewer: false },
       }),
     ).toBeNull();
+  });
+
+  it("only prefetches in the direction the user is moving", () => {
+    const nearBoth = { ...input, scroll: 500, distanceToEnd: 500 };
+    expect(
+      resolveTimelineHistoryPrefetch({ ...nearBoth, previousScroll: 600, userScrollDirection: "newer" }),
+    ).toBeNull();
+    expect(
+      resolveTimelineHistoryPrefetch({ ...nearBoth, previousScroll: 400, userScrollDirection: "older" }),
+    ).toBeNull();
+    expect(
+      resolveTimelineHistoryPrefetch({ ...nearBoth, previousScroll: 600, userScrollDirection: "either" }),
+    ).toBe("older");
+    expect(
+      resolveTimelineHistoryPrefetch({ ...nearBoth, previousScroll: 400, userScrollDirection: "either" }),
+    ).toBe("newer");
+  });
+
+  it("keeps a minimum runway before the viewport is measured", () => {
+    const unmeasured = { ...input, scrollLength: 0, previousScroll: 200 };
+    expect(resolveTimelineHistoryPrefetch({ ...unmeasured, scroll: 120 })).toBe("older");
+    expect(resolveTimelineHistoryPrefetch({ ...unmeasured, scroll: 150 })).toBeNull();
+  });
+
+  it("does not fetch on mount, programmatic positioning, layout correction, or while following", () => {
+    expect(resolveTimelineHistoryPrefetch({ ...input, previousScroll: null })).toBeNull();
+    expect(resolveTimelineHistoryPrefetch({ ...input, userScrollDirection: null })).toBeNull();
+    expect(resolveTimelineHistoryPrefetch({ ...input, previousScroll: 1_800 })).toBeNull();
+    expect(resolveTimelineHistoryPrefetch({ ...input, liveFollowEnabled: true })).toBeNull();
+  });
+
+  it("keeps errors available for explicit retry and does not overlap requests", () => {
+    for (const history of [
+      { ...input.history, error: "Disconnected" },
+      { ...input.history, isLoading: true },
+      { ...input.history, isPrefetching: true },
+      { ...input.history, hasOlder: false },
+    ]) {
+      expect(resolveTimelineHistoryPrefetch({ ...input, history })).toBeNull();
+    }
   });
 });
