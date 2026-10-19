@@ -903,7 +903,16 @@ final class PathwayAgentThreadModel {
     func installSnapshot(_ projection: JSONValue, sequence: Int = 0) {
         guard let object = projection.objectValue else { return }
         projectionCollections = object.compactMapValues(\.arrayValue)
-        items = (object["visibleTurnItems"]?.arrayValue ?? []).compactMap { $0.objectValue?["item"].flatMap(PathwayTimelineItem.init(json:)) }.sorted(by: Self.order)
+        // Compact projections send each item once in `turnItems` or `referencedTurnItems`.
+        let pooled = ((object["turnItems"]?.arrayValue ?? []) + (object["referencedTurnItems"]?.arrayValue ?? []))
+            .reduce(into: [String: JSONValue]()) { pool, item in
+                if let id = item.objectValue?["id"]?.stringValue { pool[id] = item }
+            }
+        items = (object["visibleTurnItems"]?.arrayValue ?? []).compactMap { reference in
+            let reference = reference.objectValue
+            return (reference?["item"] ?? reference?["sourceItemId"]?.stringValue.flatMap { pooled[$0] })
+                .flatMap(PathwayTimelineItem.init(json:))
+        }.sorted(by: Self.order)
         runs = (object["runs"]?.arrayValue ?? []).compactMap(PathwayThreadRun.init)
         Task { await reconcileQueuedEdit() }
         subagents = (object["subagents"]?.arrayValue ?? []).compactMap(PathwayThreadSubagent.init)

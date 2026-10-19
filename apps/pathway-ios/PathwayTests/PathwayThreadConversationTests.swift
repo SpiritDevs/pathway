@@ -31,6 +31,23 @@ struct PathwayThreadConversationTests {
         #expect(model.transcriptItems.count == (intent == "queued_turn" ? 0 : 1))
     }
 
+    @Test func compactSnapshotResolvesVisibleItemsFromBothPools() {
+        let model = makeModel { _, _ in .object([:]) }
+        func item(_ id: String, ordinal: Int) -> JSONValue {
+            .object(["id": .string(id), "type": .string("assistant_message"), "ordinal": .number(Double(ordinal)), "text": .string(id)])
+        }
+        func reference(_ id: String, position: Int) -> JSONValue {
+            .object(["position": .number(Double(position)), "visibility": .string("local"), "sourceThreadId": .string("thread-1"), "sourceItemId": .string(id)])
+        }
+        model.installSnapshot(.object([
+            "payloadFormat": .string("compact-v1"),
+            "turnItems": .array([item("local", ordinal: 2), item("hidden", ordinal: 3)]),
+            "referencedTurnItems": .array([item("inherited", ordinal: 1)]),
+            "visibleTurnItems": .array([reference("inherited", position: 0), reference("local", position: 1)])
+        ]), sequence: 1)
+        #expect(model.items.map(\.id) == ["inherited", "local"])
+    }
+
     @Test func editingQueuedMessageCancelsThenRestoresTheComposer() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
