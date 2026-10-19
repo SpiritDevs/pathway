@@ -1,10 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
@@ -217,27 +219,28 @@ it.effect("memoizes editor discovery and refreshes after the cache window", () =
   );
 });
 
-// A client that disconnects mid-scan interrupts the shared discovery effect on
-// the connection fiber. The cache must not retain that interrupt: doing so
-// replayed it to every later connect for the whole TTL, so `server.getConfig`
-// failed and no client could reconnect until the server restarted.
-it.effect("rescans after an interrupted discovery instead of caching the interrupt", () => {
+// Discovery scans park inside `stat` until `gate` opens. `firstPathStats`
+// counts visits to the first probed path, so a restarted scan shows up as a
+// second visit. Each launcher gets its own PATH so the process-wide command
+// resolution cache in @spiritdevs/shared/shell never answers for it.
+let gatedDiscoveryCount = 0;
+const gatedDiscovery = (gate: Deferred.Deferred<void>, entered: Deferred.Deferred<void>) => {
+  gatedDiscoveryCount += 1;
   const fileInfo = { type: "File" } as FileSystem.File.Info;
-  let blockFirstScan = true;
-  let scans = 0;
+  const counts = { firstPathStats: 0 };
+  let firstPath: string | null = null;
   const launcherLayer = ExternalLauncher.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
         FileSystem.layerNoop({
-          // The first scan parks inside `stat` so the interrupt lands while
-          // discovery is in flight, which is what a client disconnecting
-          // mid-connect does to the shared effect.
-          stat: () =>
+          stat: (path) =>
             Effect.gen(function* () {
-              scans += 1;
-              if (blockFirstScan) {
-                return yield* Effect.never;
+              firstPath ??= path;
+              if (path === firstPath) {
+                counts.firstPathStats += 1;
               }
+              yield* Deferred.succeed(entered, undefined);
+              yield* Deferred.await(gate);
               return fileInfo;
             }),
         }),
@@ -249,37 +252,91 @@ it.effect("rescans after an interrupted discovery instead of caching the interru
       ),
     ),
   );
-
-  return Effect.gen(function* () {
-    const launcher = yield* ExternalLauncher.ExternalLauncher;
-
-    const fiber = yield* Effect.forkChild(launcher.resolveAvailableEditors());
-    yield* Effect.yieldNow;
-    yield* Fiber.interrupt(fiber);
-
-    // The next connect must still get a real answer well inside the TTL.
-    blockFirstScan = false;
-    scans = 0;
-    const editors = yield* launcher.resolveAvailableEditors();
-    assert.equal(editors.includes("vscode"), true);
-    assert.isAbove(scans, 0);
-  }).pipe(
-    Effect.provide(
-      Layer.mergeAll(
-        launcherLayer,
-        Layer.succeed(HostProcessPlatform, "win32"),
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: {
-              PATH: "C:\\pathway-editor-discovery-interrupt-test",
-              PATHEXT: ".COM;.EXE;.BAT;.CMD",
-            },
-          }),
-        ),
-      ),
+  const layer = Layer.mergeAll(
+    launcherLayer,
+    Layer.succeed(HostProcessPlatform, "win32"),
+    ConfigProvider.layer(
+      ConfigProvider.fromEnv({
+        env: {
+          PATH: `C:\\pathway-editor-discovery-gated-${gatedDiscoveryCount}`,
+          PATHEXT: ".COM;.EXE;.BAT;.CMD",
+        },
+      }),
     ),
+    TestClock.layer(),
   );
-});
+  return { counts, layer };
+};
+
+it.effect("serves an editor snapshot without waiting for discovery, then publishes it", () =>
+  Effect.gen(function* () {
+    const gate = yield* Deferred.make<void>();
+    const entered = yield* Deferred.make<void>();
+    const { counts, layer } = gatedDiscovery(gate, entered);
+    return yield* Effect.gen(function* () {
+      const launcher = yield* ExternalLauncher.ExternalLauncher;
+
+      // Every caller gets the empty snapshot at once and shares one scan.
+      assert.deepEqual([...(yield* launcher.availableEditorsSnapshot)], []);
+      assert.deepEqual([...(yield* launcher.availableEditorsSnapshot)], []);
+      const discovered = yield* launcher.availableEditorsChanges.pipe(
+        Stream.filter((editors) => editors.length > 0),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+
+      yield* Deferred.succeed(gate, undefined);
+      const published = Option.getOrThrow(yield* Fiber.join(discovered));
+      assert.equal(published.includes("vscode"), true);
+      assert.deepEqual([...(yield* launcher.availableEditorsSnapshot)], [...published]);
+      assert.equal(counts.firstPathStats, 1);
+    }).pipe(Effect.provide(layer));
+  }),
+);
+
+it.effect("keeps the last snapshot while an expired one refreshes", () =>
+  Effect.gen(function* () {
+    const gate = yield* Deferred.make<void>();
+    const entered = yield* Deferred.make<void>();
+    const { counts, layer } = gatedDiscovery(gate, entered);
+    yield* Deferred.succeed(gate, undefined);
+    return yield* Effect.gen(function* () {
+      const launcher = yield* ExternalLauncher.ExternalLauncher;
+      const first = yield* launcher.resolveAvailableEditors();
+      assert.equal(first.includes("vscode"), true);
+
+      yield* TestClock.adjust("61 seconds");
+      const stale = yield* launcher.availableEditorsSnapshot;
+      assert.deepEqual([...stale], [...first]);
+      const refreshed = yield* launcher.resolveAvailableEditors();
+      assert.deepEqual([...refreshed], [...first]);
+      assert.equal(counts.firstPathStats, 2);
+    }).pipe(Effect.provide(layer));
+  }),
+);
+
+// A client that disconnects mid-connect must neither cancel the shared scan nor
+// leave a poisoned result behind: the next caller joins the same scan.
+it.effect("a caller interrupted mid-scan does not cancel or restart the shared scan", () =>
+  Effect.gen(function* () {
+    const gate = yield* Deferred.make<void>();
+    const entered = yield* Deferred.make<void>();
+    const { counts, layer } = gatedDiscovery(gate, entered);
+    return yield* Effect.gen(function* () {
+      const launcher = yield* ExternalLauncher.ExternalLauncher;
+
+      const abandoned = yield* Effect.forkChild(launcher.resolveAvailableEditors());
+      yield* Deferred.await(entered);
+      yield* Fiber.interrupt(abandoned);
+
+      const next = yield* Effect.forkChild(launcher.resolveAvailableEditors());
+      yield* Deferred.succeed(gate, undefined);
+      const editors = yield* Fiber.join(next);
+      assert.equal(editors.includes("vscode"), true);
+      assert.equal(counts.firstPathStats, 1);
+    }).pipe(Effect.provide(layer));
+  }),
+);
 
 it.effect("rejects unknown editors through the service API", () =>
   Effect.gen(function* () {

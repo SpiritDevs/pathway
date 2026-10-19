@@ -223,16 +223,6 @@ import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@spiritdevs/shared/relayClient";
 
-const EDITOR_DISCOVERY_TIMEOUT = Duration.seconds(5);
-
-export const resolveAvailableEditorsForConfig = <A, E, R>(
-  discovery: Effect.Effect<ReadonlyArray<A>, E, R>,
-) =>
-  discovery.pipe(
-    Effect.timeoutOption(EDITOR_DISCOVERY_TIMEOUT),
-    Effect.map(Option.getOrElse(() => [])),
-  );
-
 /**
  * Who a client-dispatched command is attributed to. A peer environment session is an agent host
  * acting through a connect grant, never a person at a client, so its commands are agent-authored.
@@ -1052,9 +1042,7 @@ const makeWsRpcLayer = (
           keybindings: keybindingsConfig.keybindings,
           issues: keybindingsConfig.issues,
           providers,
-          availableEditors: yield* resolveAvailableEditorsForConfig(
-            externalLauncher.resolveAvailableEditors(),
-          ),
+          availableEditors: yield* externalLauncher.availableEditorsSnapshot,
           observability: {
             logsDirectoryPath: config.logsDir,
             localTracingEnabled: true,
@@ -2875,16 +2863,33 @@ const makeWsRpcLayer = (
                 .refresh()
                 .pipe(Effect.ignoreCause({ log: true }), Effect.forkScoped);
 
-              const liveUpdates = Stream.merge(
-                keybindingsUpdates,
-                Stream.merge(providerStatuses, settingsUpdates),
+              const config = yield* loadServerConfig;
+              // Editor discovery finishes in the background. A changed list
+              // re-sends the whole config so older clients pick it up too.
+              const editorUpdates = Stream.concat(
+                Stream.make(config.availableEditors),
+                externalLauncher.availableEditorsChanges,
+              ).pipe(
+                Stream.changesWith(ExternalLauncher.sameEditors),
+                Stream.drop(1),
+                Stream.mapEffect(() => loadServerConfig),
+                Stream.map((config) => ({
+                  version: 1 as const,
+                  type: "snapshot" as const,
+                  config,
+                })),
+              );
+
+              const liveUpdates = Stream.mergeAll(
+                [keybindingsUpdates, providerStatuses, settingsUpdates, editorUpdates],
+                { concurrency: "unbounded" },
               );
 
               return Stream.concat(
                 Stream.make({
                   version: 1 as const,
                   type: "snapshot" as const,
-                  config: yield* loadServerConfig,
+                  config,
                 }),
                 liveUpdates,
               );

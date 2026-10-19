@@ -42,7 +42,6 @@ import { MembershipId } from "@spiritdevs/contracts/company";
 
 import {
   persistChatAttachments,
-  resolveAvailableEditorsForConfig,
   refreshLocalGitStatusAfterMutation,
   requireThreadResumeTarget,
   threadProjectionError,
@@ -215,23 +214,6 @@ it.each(["worktree" as const, null])(
       { commandId, projectId, defaultThreadEnvMode },
     );
   },
-);
-
-it.effect("does not block server config when editor discovery never resolves", () =>
-  Effect.gen(function* () {
-    const discoveryInterrupted = yield* Deferred.make<void>();
-    const responseFiber = yield* resolveAvailableEditorsForConfig(
-      Effect.never.pipe(
-        Effect.onInterrupt(() => Deferred.succeed(discoveryInterrupted, undefined)),
-      ),
-    ).pipe(Effect.forkChild);
-
-    yield* TestClock.adjust(Duration.seconds(5));
-
-    const availableEditors = yield* Fiber.join(responseFiber);
-    yield* Deferred.await(discoveryInterrupted);
-    assert.deepEqual(availableEditors, []);
-  }),
 );
 
 it.effect(
