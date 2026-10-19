@@ -160,7 +160,12 @@ export const browserApiCorsLayer = Layer.unwrap(
     return HttpRouter.cors({
       ...(devOrigin
         ? {
-            allowedOrigins: [devOrigin, ...DESKTOP_RENDERER_ORIGINS, ...config.devAllowedOrigins],
+            allowedOrigins: [
+              devOrigin,
+              "https://app.spiritdevs.com",
+              ...DESKTOP_RENDERER_ORIGINS,
+              ...config.devAllowedOrigins,
+            ],
             credentials: true,
           }
         : {}),
