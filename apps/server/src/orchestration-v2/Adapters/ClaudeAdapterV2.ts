@@ -84,6 +84,7 @@ import * as Stream from "effect/Stream";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { compileClaudeModelSelection } from "../../claudeModelOptions.ts";
 import { ServerConfig } from "../../config.ts";
+import { resolveClaudeSdkExecutablePath } from "../../provider/Drivers/ClaudeExecutable.ts";
 import { makeClaudeEnvironment } from "../../provider/Drivers/ClaudeHome.ts";
 import { discoverClaudeSkills } from "../../provider/Drivers/ClaudeSkills.ts";
 import {
@@ -610,11 +611,12 @@ export function makeClaudeAgentSdkProtocolLogger(input: {
 export const claudeAgentSdkQueryRunnerLiveLayer: Layer.Layer<
   ClaudeAgentSdkQueryRunner,
   never,
-  Crypto.Crypto | ProviderEventLoggers
+  Crypto.Crypto | FileSystem.FileSystem | ProviderEventLoggers
 > = Layer.effect(
   ClaudeAgentSdkQueryRunner,
   Effect.gen(function* () {
     const crypto = yield* Crypto.Crypto;
+    const fileSystem = yield* FileSystem.FileSystem;
     const { native: nativeEventLogger } = yield* ProviderEventLoggers;
 
     return ClaudeAgentSdkQueryRunner.of({
@@ -624,6 +626,29 @@ export const claudeAgentSdkQueryRunnerLiveLayer: Layer.Layer<
       open: Effect.fn("ClaudeAgentSdkQueryRunner.open")(function* (
         input: ClaudeAgentSdkQueryOpenInput,
       ) {
+        if (input.options.cwd !== undefined) {
+          const cwd = input.options.cwd;
+          const workspace = yield* fileSystem
+            .stat(cwd)
+            .pipe(
+              Effect.mapError((cause) =>
+                queryRunnerError(
+                  cause.reason._tag === "NotFound"
+                    ? new Error(
+                        `Claude workspace directory no longer exists at ${cwd}. Restore the worktree or select an existing workspace before retrying.`,
+                      )
+                    : cause,
+                  "workspace",
+                ),
+              ),
+            );
+          if (workspace.type !== "Directory") {
+            return yield* queryRunnerError(
+              new Error(`Claude workspace path is not a directory: ${cwd}.`),
+              "workspace",
+            );
+          }
+        }
         const protocolLogger = makeClaudeAgentSdkProtocolLogger({
           nativeEventLogger,
           threadId: input.threadId,
@@ -2399,6 +2424,13 @@ export function makeClaudeAdapterV2(
     planSelectionTransition: () => Effect.succeed(turnScopedSelectionTransition()),
     openSession: Effect.fn("ClaudeAdapterV2.openSession")(
       function* (input: ProviderAdapterV2OpenSessionInput) {
+        const settings = {
+          ...adapterOptions.settings,
+          binaryPath: yield* resolveClaudeSdkExecutablePath(
+            adapterOptions.settings.binaryPath,
+            adapterOptions.environment,
+          ),
+        };
         const sessionScope = yield* Effect.scope;
         const now = yield* DateTime.now;
         const session = providerSession({
@@ -5150,7 +5182,7 @@ export function makeClaudeAdapterV2(
                 ...(turnInput.runtimePolicy.additionalDirectories === undefined
                   ? {}
                   : { additionalDirectories: turnInput.runtimePolicy.additionalDirectories }),
-                settings: adapterOptions.settings,
+                settings,
                 environment: adapterOptions.environment,
                 tools: queryPolicy.tools ?? CLAUDE_CODE_PRESET_TOOLS,
                 ...mcpOverrides,
