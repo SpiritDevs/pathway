@@ -1,0 +1,101 @@
+# Agent Threads on iOS
+
+With Live Activities enabled in **Settings → Agent notifications**, the Lock Screen card
+shows up to three threads. Running turns show elapsed time beside the thread name. Completed
+turns show a green check and their final duration, and stay in the recent activity list for
+15 minutes. A thread awaiting your answer shows a blue **Question** label instead of a timer.
+Questions appear first, followed by the most recently updated threads, including completions.
+Tap a thread row to open that specific thread. The expanded Dynamic Island uses the same rows.
+Older environments that do not supply turn timing show the thread's status instead of a duration.
+
+The compact Dynamic Island shows the Pathway P and the number of running threads inside an
+activity ring. The smallest view shows just the count and ring. The ring animates when activity
+updates arrive; iOS limits Live Activity animations and pauses them on the Always-On display.
+When no threads are running, a pending question or approval keeps its attention icon visible.
+Once all work finishes, the Dynamic Island clears and the final card remains on the Lock Screen
+for 15 minutes, with green checks for completed threads and a red icon for failed threads.
+
+Pull down on Agent Threads to refresh cloud updates and reconnect active environments.
+Refresh finishes within 15 seconds and shows a result above the list. If an environment
+cannot be reached, the result names it and keeps your available threads visible. You can
+pull down again to retry. Git and pull request statuses update separately in the background.
+
+When starting a thread, tap the environment dropdown below the project name to choose where
+it will run. The menu lists the environments linked to that project and marks the selected
+environment with a checkmark. It remains available when the project has only one environment.
+
+The new-thread composer keeps the workspace choice and base branch above the message field.
+Tap **+** to open **Composer Options** for attachments, saved prompts, the agent and model,
+access settings, and temporary threads. The sheet can expand for more room. Paste images
+straight into the message field to attach them without replacing your text. Long drafts scroll
+inside the composer, keeping **+**, the model picker, and **Start** above the keyboard.
+The model picker shows the provider icon beside the model name in new and existing threads.
+
+Messages go straight to a connected environment. An idle agent starts immediately; a busy
+agent queues the message for its next turn. Offline messages remain saved for delivery,
+and newer messages wait behind any messages already waiting to reach the environment.
+
+Inside a thread, the main navigation collapses to a button beside the composer. It stays
+compact when opening a child thread or returning to its parent. Tap the button to expand it.
+
+When a thread connects or reconnects, a status bubble above the composer shows that messages
+are syncing. It temporarily replaces the file-change summary until the latest updates arrive.
+You can still scroll to the latest message while reconnecting.
+
+Active threads show the project above the thread title, with the branch and environment below it.
+The branch stays on the left; the environment name sits on the right beside the provider logo.
+The filter icon opens **Thread options**, with **Focus** and **Filters** submenus.
+Notifications and New Thread remain separate toolbar buttons.
+Choose a Focus or create one from the Focus submenu. When a specific Focus is selected,
+a separate target icon also opens the picker; choosing All threads hides that shortcut.
+Edit, reorder, or delete Focuses in **Settings → Agent Threads → Focus Views**.
+Focus icons match desktop in the picker, selected Focus shortcut, and settings list.
+The selected shortcut uses the Focus color. The Focus editor offers the same icon choices as desktop.
+The project icon appears beside its name when it can be loaded from the environment. Missing,
+unreachable, or unsupported images use a folder icon. Icons are shared across threads in the same
+project and cached to avoid repeated downloads.
+Pinned threads have a pin beside their last activity time. Working, attention, and error indicators
+appear alongside attached pull requests in the details row. Tap anywhere on a row to open the thread.
+
+The logo at the end of an active row identifies its AI provider. Codex, Claude, Cursor, Grok, and
+OpenCode show their provider logos; other configured providers show initials. Provider identity
+comes from the thread's environment, including when an instance has a custom name.
+
+Snoozed and settled threads stay in their collapsible sections with compact rows.
+
+Swipe right on an active thread to reveal **Pin** (or **Unpin**) and **Sleep**. Sleep lets you choose
+one hour, three hours, one day, or one week in a bottom sheet. Tap **Cancel** or swipe the sheet
+down to leave the thread awake. Swipe left to reveal **Settle**, or continue swiping
+all the way left to settle immediately. These actions sync through the thread's environment.
+
+To bring a thread back, expand **Snoozed** and swipe left for **Wake**, or expand **Settled** and
+swipe left for **Reopen**. If an action fails, the app shows an error and keeps the thread in place. If the environment
+does not confirm the action, check its connection and tap **Retry** in the error alert.
+
+You can paste a copied photo or screenshot from the attachment menu or directly into the message
+field. The field also accepts image paste suggestions from the iOS keyboard when offered. Images
+become attachments and leave your typed message intact. You can attach up to eight files; pasted
+images must be under 10 MB. If an image cannot be read or uploaded, the app shows an error.
+
+Image attachments appear as compact thumbnails with one corner button. Tap the cross to remove
+an image. If its upload fails, a retry icon replaces the cross. Tap it to see the failure reason,
+retry the upload, or cancel and remove the attachment using the alert.
+If an upload fails while sending or queuing a message, the alert shows the failure reason.
+Your text and attachments stay in the composer so you can retry.
+
+Queued threads have their own actions: swipe left or long-press to **Cancel** pending work.
+Canceled entries offer **Remove from list**, which remembers your choice on this device.
+If the entry is retried or changes elsewhere, it appears again. These actions are also
+available in the queued thread’s menu, even if its environment cannot be opened.
+
+Loaded image attachments stay cached on this device, so scrolling back or returning to a
+thread can show the preview while its environment reconnects. Images that have not loaded
+yet wait for reconnection and retry automatically.
+
+Agent Threads checks pull request status when you return to the list or foreground the app,
+and every 30 seconds while the list is visible. Eligible threads move to **Settled** when
+their linked pull requests are merged. Pinned threads, active work, temporary threads, and
+threads you explicitly reopened keep their existing settlement safeguards.
+
+To search threads, open **Thread options** and choose **Search**. The search field opens
+at the top with the keyboard ready. Tap **Cancel** to clear the search and hide the field.

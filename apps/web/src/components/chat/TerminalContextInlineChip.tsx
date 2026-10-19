@@ -1,4 +1,4 @@
-import { TerminalIcon } from "~/lib/icons";
+import { TerminalIcon } from "lucide-react";
 
 import { cn } from "~/lib/utils";
 import {
@@ -15,8 +15,7 @@ interface TerminalContextInlineChipProps {
 }
 
 export function TerminalContextInlineChip(props: TerminalContextInlineChipProps) {
-  const { label, tooltipText, expired: expiredProp } = props;
-  const expired = expiredProp ?? false;
+  const { label, tooltipText, expired = false } = props;
 
   return (
     <Tooltip>

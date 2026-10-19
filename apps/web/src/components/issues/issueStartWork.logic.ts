@@ -1,0 +1,325 @@
+/**
+ * Start work: the seed dispatched as a thread, its workflow destination, and its image context.
+ *
+ * Assigning an agent records intent and nothing else — the decision record is explicit that a
+ * stray kanban drag must not start three agents — so this composes text and hands it to the
+ * existing new-thread flow. The explicit Start work press dispatches that first turn immediately;
+ * assigning an agent by itself remains intent only.
+ *
+ * @module components/issues/issueStartWork.logic
+ */
+import type {
+  ChatAttachmentId,
+  Issue,
+  IssueComment,
+  IssueStatus,
+  IssueStatusId,
+  IssueTodo,
+  ModelSelection,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  ProjectId,
+} from "@spiritdevs/contracts";
+import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@spiritdevs/contracts";
+import { createModelSelection, resolveSelectableModel } from "@spiritdevs/shared/model";
+
+import { appendIssueContextsToPrompt, type IssueContextSelection } from "~/lib/issueContext";
+import type { ProviderInstanceEntry } from "~/providerInstances";
+import { resolveSelectableProviderInstanceEntry } from "~/providerInstances";
+import type { ModelEsque } from "../chat/providerIconUtils";
+import { isIssueVideoAttachmentUrl, issueAttachmentIds } from "./issueCommentAttachments";
+
+export type IssueStartWorkWorkspaceMode = "current_checkout" | "new_worktree";
+
+const ISSUE_START_WORK_WORKSPACE_MODE_LABELS = {
+  current_checkout: "Current checkout",
+  new_worktree: "New worktree",
+} as const satisfies Record<IssueStartWorkWorkspaceMode, string>;
+
+/** Shared by the workspace option and its closed trigger so their visible labels stay aligned. */
+export function issueStartWorkWorkspaceModeLabel(mode: IssueStartWorkWorkspaceMode): string {
+  return ISSUE_START_WORK_WORKSPACE_MODE_LABELS[mode];
+}
+
+export interface IssueStartWorkWorkspacePlan {
+  readonly envMode: "local" | "worktree";
+  /** The base branch shown on the draft before a new worktree is provisioned. */
+  readonly branch: string | null;
+  /** Null means the first turn runs in the project's current checkout. */
+  readonly prepareWorktreeBaseBranch: string | null;
+}
+
+/**
+ * Resolves the issue launcher's compact workspace choice into the two pieces the normal
+ * new-thread pipeline needs: draft context and, for an isolated task, first-turn worktree prep.
+ */
+export function resolveIssueStartWorkWorkspacePlan(
+  mode: IssueStartWorkWorkspaceMode,
+  baseBranch: string | null,
+): IssueStartWorkWorkspacePlan | null {
+  if (mode === "new_worktree") {
+    if (baseBranch === null) return null;
+    return {
+      envMode: "worktree",
+      branch: baseBranch,
+      prepareWorktreeBaseBranch: baseBranch,
+    };
+  }
+  return { envMode: "local", branch: null, prepareWorktreeBaseBranch: null };
+}
+
+// ── Model choice ──────────────────────────────────────────────────────
+
+/**
+ * The model shown beside Start work. Assignment constrains the driver; a compatible project
+ * default wins, then the provider's normal ready-instance/default-model order takes over.
+ */
+export function resolveIssueStartWorkModelSelection(input: {
+  readonly provider: ProviderDriverKind | null;
+  readonly projectDefault: ModelSelection | null;
+  readonly instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
+  readonly modelOptionsByInstance: ReadonlyMap<
+    ProviderInstanceId,
+    ReadonlyArray<ModelEsque & { readonly isDefault?: boolean }>
+  >;
+}): ModelSelection | null {
+  if (input.provider === null) return null;
+  const compatibleEntries = input.instanceEntries.filter(
+    (entry) => entry.driverKind === input.provider,
+  );
+  const preferredInstanceId = compatibleEntries.some(
+    (entry) => entry.instanceId === input.projectDefault?.instanceId,
+  )
+    ? input.projectDefault?.instanceId
+    : undefined;
+  const entry = resolveSelectableProviderInstanceEntry(compatibleEntries, preferredInstanceId);
+  if (entry === undefined) return null;
+
+  const usesProjectDefault = input.projectDefault?.instanceId === entry.instanceId;
+  const options = input.modelOptionsByInstance.get(entry.instanceId) ?? [];
+  const requestedModel = usesProjectDefault ? input.projectDefault.model : null;
+  const model =
+    resolveSelectableModel(entry.driverKind, requestedModel, options) ??
+    options.find((option) => option.isDefault)?.slug ??
+    options[0]?.slug ??
+    null;
+  if (model === null) return null;
+
+  return createModelSelection(
+    entry.instanceId,
+    model,
+    usesProjectDefault && input.projectDefault !== null && model === input.projectDefault.model
+      ? input.projectDefault.options
+      : undefined,
+  );
+}
+
+// ── Links back to the issue ────────────────────────────────────────────
+
+/** The tracker has no per-issue route: the sheet is `?issue=` over the list. */
+export function issueDetailPath(issueKey: string): string {
+  return `/issues?issue=${encodeURIComponent(issueKey)}`;
+}
+
+/** Absolute, because the thread may be read on another machine's screen than the one it runs on. */
+export function issueDetailUrl(origin: string, issueKey: string): string {
+  return `${origin.replace(/\/+$/, "")}${issueDetailPath(issueKey)}`;
+}
+
+// ── The seed prompt ────────────────────────────────────────────────────
+
+/** One line of the "Related" list: how it relates, what it is, and what it is called. */
+export interface IssueStartWorkRelation {
+  /** `Blocked by`, `Blocking`, `Sub-issue of`, `Parent of` — already read from the issue's end. */
+  readonly label: string;
+  readonly key: string;
+  readonly title: string;
+}
+
+export interface IssueStartWorkContext {
+  readonly issue: Issue;
+  readonly statusName: string | null;
+  readonly projectTitle: string | null;
+  readonly priorityLabel: string | null;
+  /** Configured workflow destination the agent should choose only after the work is actually done. */
+  readonly completionStatusName?: string | null;
+  readonly todos: ReadonlyArray<IssueTodo>;
+  readonly relations: ReadonlyArray<IssueStartWorkRelation>;
+  /** Absolute link back to the sheet, from {@link issueDetailUrl}. */
+  readonly issueUrl: string;
+}
+
+function metaLine(context: IssueStartWorkContext): string | null {
+  const parts: Array<string> = [];
+  if (context.statusName !== null) parts.push(`Status: ${context.statusName}`);
+  if (context.priorityLabel !== null) parts.push(`Priority: ${context.priorityLabel}`);
+  if (context.projectTitle !== null) parts.push(`Project: ${context.projectTitle}`);
+  if (context.issue.dueDate !== null) parts.push(`Due: ${context.issue.dueDate}`);
+  return parts.length === 0 ? null : parts.join(" · ");
+}
+
+/**
+ * Markdown, in the order a person reads an issue: what it is, where it lives, what it says, what
+ * it is made of, what it touches. Empty sections are dropped rather than printed empty — a
+ * "## Checklist" with nothing under it reads as a checklist the model failed to load.
+ */
+function buildIssueContextBlocks(context: IssueStartWorkContext): Array<string> {
+  const { issue } = context;
+  const blocks: Array<string> = [`# ${issue.key} — ${issue.title}`];
+
+  const meta = metaLine(context);
+  const header = meta === null ? context.issueUrl : `${context.issueUrl}\n${meta}`;
+  blocks.push(header);
+
+  const description = issue.description.trim();
+  if (description.length > 0) blocks.push(`## Description\n${description}`);
+
+  if (context.todos.length > 0) {
+    blocks.push(
+      `## Checklist\n${context.todos
+        .map((todo) => `- [${todo.done ? "x" : " "}] ${todo.text}`)
+        .join("\n")}`,
+    );
+  }
+
+  if (context.relations.length > 0) {
+    blocks.push(
+      `## Related\n${context.relations
+        .map((relation) => `- ${relation.label}: ${relation.key} — ${relation.title}`)
+        .join("\n")}`,
+    );
+  }
+
+  return blocks;
+}
+
+/** Adds the implementation instruction used by the explicit Start work press. */
+export function buildIssueStartWorkPrompt(context: IssueStartWorkContext): string {
+  const blocks = buildIssueContextBlocks(context);
+
+  const completionInstruction =
+    context.completionStatusName == null
+      ? ""
+      : ` When the implementation and its verification are genuinely finished, use \`issues_update\` to move it to ${context.completionStatusName}; that transition starts its configured audits.`;
+  blocks.push(
+    `Start by reading the task with Pathway MCP's \`issues_get\` tool and then inspect the code it points at. Keep the task current with Pathway MCP's \`issues_update\` and \`issues_comment\` tools as you go. When you verify visible behavior in Preview, attach a useful screenshot or short recording with \`issues_comment_evidence\` and explain what it proves. Use only the Pathway MCP task tools for this task; do not use Linear or another external task tracker.${completionInstruction}`,
+  );
+
+  return `${blocks.join("\n\n")}\n`;
+}
+
+/**
+ * Seeds a user-led discussion rather than an implementation turn. The first response links the
+ * materialized thread back to the issue; after that, issue edits follow the decisions made in the
+ * conversation instead of treating opening the draft as permission to change code or workflow.
+ */
+export function buildIssueTalkPrompt(context: IssueStartWorkContext): string {
+  const blocks = buildIssueContextBlocks(context);
+  blocks.push(
+    `I want to talk through ${context.issue.key} before deciding what to do. Start by reading it with Pathway MCP's \`issues_get\` tool and link this thread to it with \`issues_link_thread\`. Answer my questions and help me clarify the problem, scope, and next steps. Do not begin implementation unless I explicitly ask. As we reach useful conclusions, keep the task current with Pathway MCP's \`issues_update\` and \`issues_comment\` tools. Use only the Pathway MCP task tools for this task; do not use Linear or another external task tracker.`,
+  );
+
+  return `${blocks.join("\n\n")}\n`;
+}
+
+/** Compact issue references for a user-led discussion. Full records stay live behind issues_get. */
+export function buildIssuesTalkContexts(
+  issues: ReadonlyArray<Issue>,
+  origin: string,
+): IssueContextSelection[] {
+  return issues.map((issue) => ({
+    id: issue.id,
+    key: issue.key,
+    title: issue.title,
+    url: issueDetailUrl(origin, issue.key),
+  }));
+}
+
+/** Materialized agent prompt retained for send-time serialization and focused tests. */
+export function buildIssuesTalkPrompt(issues: ReadonlyArray<Issue>, origin: string): string {
+  return appendIssueContextsToPrompt("", buildIssuesTalkContexts(issues, origin));
+}
+
+/** Picks a workspace host without changing the project context carried by each issue. */
+export function issueTalkHostProjectId(
+  issues: ReadonlyArray<Issue>,
+  availableProjectIds: ReadonlyArray<ProjectId>,
+): ProjectId | null {
+  for (const issue of issues) {
+    if (issue.projectId !== null && availableProjectIds.includes(issue.projectId)) {
+      return issue.projectId;
+    }
+  }
+  return availableProjectIds[0] ?? null;
+}
+
+/** What the checklist and relations look like once the todo rows are ordered. */
+export function issueStartWorkTodos(todos: ReadonlyArray<IssueTodo>): ReadonlyArray<IssueTodo> {
+  return [...todos].sort(
+    (left, right) => left.position - right.position || left.id.localeCompare(right.id),
+  );
+}
+
+/**
+ * Start means active work. A configured transition wins; otherwise prefer the first active status,
+ * then Todo-like unstarted work. The latter keeps custom workflows usable when they have no
+ * explicit In Progress column.
+ */
+export function resolveIssueStartWorkStatusId(input: {
+  readonly configuredStatusId: string | null;
+  readonly statuses: ReadonlyArray<IssueStatus>;
+}): IssueStatusId | null {
+  if (input.configuredStatusId !== null) {
+    const configured = input.statuses.find((status) => status.id === input.configuredStatusId);
+    if (configured !== undefined) return configured.id;
+  }
+  return (
+    input.statuses.find((status) => status.category === "started")?.id ??
+    input.statuses.find((status) => status.category === "unstarted")?.id ??
+    null
+  );
+}
+
+/** Issue images become first-turn context, in comment order and within the provider send limit. */
+export function issueStartWorkAttachmentIds(
+  comments: ReadonlyArray<IssueComment>,
+): ReadonlyArray<ChatAttachmentId> {
+  return issueAttachmentIds(comments).slice(0, PROVIDER_SEND_TURN_MAX_ATTACHMENTS);
+}
+
+export interface IssueStartWorkImage {
+  readonly blob: Blob;
+  readonly sourceIndex: number;
+}
+
+interface IssueStartWorkImageResponse {
+  readonly ok: boolean;
+  readonly blob: () => Promise<Blob>;
+}
+
+/**
+ * Best-effort image context for a new issue thread.
+ *
+ * An attachment is supporting context, not a prerequisite for doing the work. A missing,
+ * unreadable, or mislabeled image is therefore omitted individually while the remaining images
+ * keep their issue order. Videos stay on the issue and never enter an image-only provider turn.
+ */
+export async function loadIssueStartWorkImages(
+  urls: ReadonlyArray<string>,
+  request: (url: string) => Promise<IssueStartWorkImageResponse> = fetch,
+): Promise<ReadonlyArray<IssueStartWorkImage>> {
+  const images: IssueStartWorkImage[] = [];
+  for (const [sourceIndex, url] of urls.entries()) {
+    if (isIssueVideoAttachmentUrl(url)) continue;
+    try {
+      const response = await request(url);
+      if (!response.ok) continue;
+      const blob = await response.blob();
+      if (!blob.type.startsWith("image/")) continue;
+      images.push({ blob, sourceIndex });
+    } catch {
+      // The issue still has enough context to create a thread without this attachment.
+    }
+  }
+  return images;
+}

@@ -1,0 +1,2037 @@
+/**
+ * The issue detail sheet — see `docs/internals/decisions/0006-issue-tracker.md`.
+ *
+ * It shares `RightPanelSheet`'s geometry (the same `useResizableWidth`, the same max-width clamp,
+ * the same popup classes) but not its `Sheet`, because it is deliberately **non-modal**: the
+ * decision record puts the detail in a sheet rather than a page so the list stays visible for
+ * triage, and a modal one would blur the list behind a backdrop and trap focus away from `j`/`k`.
+ * The viewport stays click-through so clicking another row can replace the open issue; any outside
+ * press also dismisses the current sheet.
+ *
+ * @module components/issues/IssueDetailSheet
+ */
+import { useAtomValue } from "@effect/atom-react";
+import { connectionStatusTitle } from "@spiritdevs/client-runtime/connection";
+import { scopeProjectRef } from "@spiritdevs/client-runtime/environment";
+import type { AtomCommandResult } from "@spiritdevs/client-runtime/state/runtime";
+import type {
+  ChatAttachmentId,
+  Issue,
+  IssueAssignee,
+  IssueComment,
+  IssueCommentAgentMentionInput,
+  IssueCommentId,
+  IssueCycleId,
+  IssueDate,
+  IssueEnrichmentRunId,
+  IssueId,
+  IssueLabelId,
+  IssueMilestoneId,
+  IssuePatch,
+  IssuePriority,
+  IssueRelationCreateInput,
+  IssueRelationId,
+  IssueStatusId,
+  IssueTodo,
+  IssueTodoId,
+  IssueTodoPatch,
+  ModelSelection,
+  ProjectId,
+  ProviderDriverKind,
+  ThreadId,
+  UploadChatAttachment,
+} from "@spiritdevs/contracts";
+import { useNavigate } from "@tanstack/react-router";
+import { AsyncResult } from "effect/unstable/reactivity";
+import {
+  ArrowUpRightIcon,
+  CheckIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  CopyIcon,
+  SearchXIcon,
+  Trash2Icon,
+  UnplugIcon,
+  WandSparklesIcon,
+  XIcon,
+} from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
+
+import { useReplicaIssueAttachmentCloud } from "~/cloud/issueAttachmentClient";
+import {
+  issueDomainEntityCompanyIdsAtom,
+  issueDomainEntityCompanyId,
+} from "~/cloud/issueDomainReadModel";
+import { useEnvironmentControl } from "~/cloud/useEnvironmentControl";
+import { type ComposerImageAttachment, useComposerDraftStore } from "~/composerDraftStore";
+import { useCommitOnBlur } from "~/hooks/useCommitOnBlur";
+import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
+import { useResizableWidth } from "~/hooks/useResizableWidth";
+import { useEnvironmentSettings, usePrimarySettings } from "~/hooks/useSettings";
+import { cn, newMessageId, randomUUID } from "~/lib/utils";
+import { getCustomModelOptionsByInstance } from "~/modelSelection";
+import {
+  applyProviderInstanceSettings,
+  deriveProviderInstanceEntries,
+  sortProviderInstanceEntries,
+} from "~/providerInstances";
+import {
+  RIGHT_PANEL_SHEET_CLASS_NAME,
+  RIGHT_PANEL_SHEET_VIEWPORT_CLASS_NAME,
+} from "~/rightPanelLayout";
+import { buildThreadRouteParams } from "~/threadRoutes";
+import { useProjects, useThreadShells } from "~/state/entities";
+import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
+import { useBranches } from "~/state/queries";
+import { useEnvironmentQuery } from "~/state/query";
+import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "~/state/server";
+import {
+  issueRelationDisplays,
+  useCancelIssueCommentAgentRun,
+  useCancelIssueEnrichment,
+  useCreateIssueComment,
+  useCreateIssueLabel,
+  useCreateIssueMilestone,
+  useCreateIssueRelation,
+  useCreateIssueTodo,
+  useDeleteIssue,
+  useDeleteIssueComment,
+  useDeleteIssueRelation,
+  useDeleteIssueTodo,
+  useIssue,
+  useIssueChildRollup,
+  useIssueCycles,
+  useIssueDetail,
+  useIssueEnrichmentRuns,
+  useIssueEvents,
+  useIssueLabels,
+  useLinkIssueThread,
+  useIssueMilestonesForProject,
+  useIssueStatuses,
+  useIssueThreadLinks,
+  useIssuesStore,
+  useIssuesStoreStatus,
+  useReorderIssueTodos,
+  useRestoreIssue,
+  useRetryIssueCommentAgentRun,
+  useStartIssueEnrichment,
+  useTriageAccept,
+  useUnlinkIssueThread,
+  useUpdateIssue,
+  useUpdateIssueComment,
+  useUpdateIssueTodo,
+} from "~/state/issues";
+import { threadEnvironment } from "~/state/threads";
+import { useAtomCommand } from "~/state/use-atom-command";
+import { vcsEnvironment } from "~/state/vcs";
+import { formatChatTimestampTooltip, formatRelativeTimeLabel } from "~/timestampFormat";
+import { useRightPanelSheetMaxWidth } from "../RightPanelSheet";
+import { PREVIEW_PANEL_MIN_WIDTH } from "../preview/PreviewPanelShell";
+import { RightPanelResizeHandle } from "../preview/RightPanelResizeHandle";
+import { Button } from "../ui/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
+import { ScrollArea } from "../ui/scroll-area";
+import { Sheet, SheetPopup, SheetTitle } from "../ui/sheet";
+import { Spinner } from "../ui/spinner";
+import { stackedThreadToast, toastManager } from "../ui/toast";
+import { Textarea } from "../ui/textarea";
+import { IssueActivityFeed } from "./IssueActivityFeed";
+import { readFileAsDataUrl } from "../ChatView.logic";
+import { IssueActionPanel } from "./IssueActionPanel";
+import { IssueAgentSection } from "./IssueAgentSection";
+import { IssueAttachments } from "./IssueAttachments";
+import { IssueComments } from "./IssueComments";
+import { IssueDescriptionEditor } from "./IssueDescriptionEditor";
+import { IssueDetailProperties, type IssueEnvironmentOption } from "./IssueDetailProperties";
+import { IssueDetailTabs, type IssueDetailTab } from "./IssueDetailTabs";
+import { IssueEnrichmentPanel } from "./IssueEnrichmentPanel";
+import { IssueImageViewer } from "./IssueImageViewer";
+import { IssueRelationsSection } from "./IssueRelationsSection";
+import { IssueSubIssues } from "./IssueSubIssues";
+import { IssueTodoList } from "./IssueTodoList";
+import { IssueDeleteMenu } from "./IssuePropertyMenus";
+import { IssueInvestigateProjectMenu } from "./IssueInvestigateProjectMenu";
+import { issueAttachmentIds } from "./issueCommentAttachments";
+import { isNewIssueAttachmentRecord } from "./newIssueAttachments";
+import { useIssueAttachmentUrls } from "./useIssueAttachmentUrls";
+import { useIssueImageAttachmentDrafts } from "./useIssueImageAttachmentDrafts";
+import {
+  issueProjectEnvironmentBinding,
+  issueProjectEnvironmentProjects,
+  resolveIssueEnvironmentProject,
+  useIssueProjectOptions,
+} from "./useIssueProjectOptions";
+import { reportIssueWriteFailure as reportFailure } from "./issueWriteFeedback";
+import {
+  issueAssigneePatch,
+  issueCommentUpdatePatch,
+  issueCyclePatch,
+  issueDescriptionPatch,
+  issueDueDatePatch,
+  issueLabelTogglePatch,
+  issueMilestonePatch,
+  issueSheetHistory,
+  issueParentPatch,
+  issuePriorityPatch,
+  issueProjectPatch,
+  issueStatusPatch,
+  issueTitlePatch,
+  moveIssueSheetHistory,
+  pushIssueSheetHistory,
+  resolveIssueDetailState,
+} from "./issueDetail.logic";
+import {
+  ISSUE_INVESTIGATE_BLOCK_REASONS,
+  activeIssueEnrichmentRun,
+  issueApplyDescriptionPatch,
+  issueApplyLabelPatch,
+  issueApplyPriorityPatch,
+  issueApplyTitlePatch,
+  issueInvestigateBlock,
+} from "./issueEnrichment.logic";
+import {
+  buildIssueStartWorkPrompt,
+  buildIssueTalkPrompt,
+  issueDetailUrl,
+  issueStartWorkAttachmentIds,
+  loadIssueStartWorkImages,
+  issueStartWorkTodos,
+  resolveIssueStartWorkModelSelection,
+  resolveIssueStartWorkStatusId,
+  resolveIssueStartWorkWorkspacePlan,
+  type IssueStartWorkRelation,
+  type IssueStartWorkWorkspaceMode,
+} from "./issueStartWork.logic";
+import { ISSUE_PRIORITY_LABELS } from "./issuesList.logic";
+
+export const ISSUE_DETAIL_SHEET_WIDTH_STORAGE_KEY = "pathway:issue-detail-sheet-width";
+/** Wide enough that the properties rail sits beside the body at the width it first opens. */
+export const ISSUE_DETAIL_SHEET_DEFAULT_WIDTH = 640;
+const ISSUE_DETAIL_PROPERTIES_WIDTH_STORAGE_KEY = "pathway:issue-detail-properties-width";
+const ISSUE_DETAIL_PROPERTIES_DEFAULT_WIDTH = 224;
+const ISSUE_DETAIL_PROPERTIES_MIN_WIDTH = 192;
+const ISSUE_DETAIL_PROPERTIES_MAX_WIDTH = 480;
+const ISSUE_DETAIL_PROPERTIES_KEYBOARD_STEP = 16;
+/** Main-column width plus the sheet padding and split-column gap. */
+const ISSUE_DETAIL_MAIN_COLUMN_RESERVE = 372;
+
+/**
+ * How long a `?issue=` that has not resolved is given before it is called a bad link. The stream
+ * has no snapshot variant, so the store reports `ready` on the first chunk of its opening replay
+ * and a deep link can outrun the row it names.
+ */
+const NOT_FOUND_GRACE_MS = 600;
+
+/** Stable empties so an unloaded tail does not remount the checklist and the thread on every read. */
+const EMPTY_TODOS: ReadonlyArray<IssueTodo> = Object.freeze([]);
+const EMPTY_COMMENTS: ReadonlyArray<IssueComment> = Object.freeze([]);
+const GROWING_TEXTAREA_CLASS_NAME =
+  "border-transparent bg-transparent shadow-none before:hidden hover:border-input [&_[data-slot=textarea]]:min-h-9 [&_[data-slot=textarea]]:resize-none [&_[data-slot=textarea]]:overflow-hidden max-sm:[&_[data-slot=textarea]]:min-h-9 dark:bg-transparent";
+
+export function IssueDetailSheet({
+  issueKey,
+  onClose,
+  onOpenInIssues,
+  onOpenIssueKey,
+  presentation = "sheet",
+  startWorkRequestProvider = null,
+  startWorkRequestProjectId = null,
+  onStartWorkRequestHandled,
+}: {
+  /** The `?issue=` value: an issue key such as `PAT-221`, or null when the sheet is shut. */
+  issueKey: string | null;
+  onClose: () => void;
+  /** Navigates out of an embedded sheet to the issue's canonical Issues view. */
+  onOpenInIssues?: (key: string) => void;
+  /** Reopens the sheet on an undone delete, which arrives after the sheet has already closed. */
+  onOpenIssueKey: (key: string) => void;
+  /** Inline fills a right-panel tab; sheet keeps the normal non-modal overlay behavior. */
+  presentation?: "sheet" | "inline";
+  /** A triage Start Task press waiting for the accepted assignment to reach this sheet. */
+  startWorkRequestProvider?: ProviderDriverKind | null;
+  startWorkRequestProjectId?: ProjectId | null;
+  onStartWorkRequestHandled?: () => void;
+}) {
+  const maxWidth = useRightPanelSheetMaxWidth();
+  const sheetSize = useResizableWidth({
+    storageKey: ISSUE_DETAIL_SHEET_WIDTH_STORAGE_KEY,
+    defaultWidth: ISSUE_DETAIL_SHEET_DEFAULT_WIDTH,
+    minWidth: PREVIEW_PANEL_MIN_WIDTH,
+    maxWidth,
+    edge: "left",
+  });
+  const propertiesMaxWidth = Math.max(
+    ISSUE_DETAIL_PROPERTIES_MIN_WIDTH,
+    Math.min(ISSUE_DETAIL_PROPERTIES_MAX_WIDTH, sheetSize.width - ISSUE_DETAIL_MAIN_COLUMN_RESERVE),
+  );
+  const propertiesSize = useResizableWidth({
+    storageKey: ISSUE_DETAIL_PROPERTIES_WIDTH_STORAGE_KEY,
+    defaultWidth: ISSUE_DETAIL_PROPERTIES_DEFAULT_WIDTH,
+    minWidth: ISSUE_DETAIL_PROPERTIES_MIN_WIDTH,
+    maxWidth: propertiesMaxWidth,
+    edge: "left",
+  });
+
+  const storeStatus = useIssuesStoreStatus();
+  const issue = useIssue(issueKey);
+  const [history, setHistory] = useState(() => issueSheetHistory(issueKey));
+  const pendingHistoryNavigation = useRef<{
+    readonly from: string | null;
+    readonly to: string;
+  } | null>(null);
+
+  // Route/list navigation is a new sheet context. In-sheet navigation updates the stack before it
+  // changes the key. Keep that update while the route catches up; any other selection resets it.
+  useEffect(() => {
+    const pending = pendingHistoryNavigation.current;
+    if (pending !== null) {
+      if (issueKey === pending.from) return;
+      pendingHistoryNavigation.current = null;
+      if (issueKey === pending.to) return;
+    }
+    if (history.entries[history.index] !== issueKey) setHistory(issueSheetHistory(issueKey));
+  }, [history.entries, history.index, issueKey]);
+
+  const openFromSheet = useCallback(
+    (key: string) => {
+      pendingHistoryNavigation.current = { from: issueKey, to: key };
+      setHistory((current) => pushIssueSheetHistory(current, key));
+      onOpenIssueKey(key);
+    },
+    [issueKey, onOpenIssueKey],
+  );
+  const moveThroughHistory = useCallback(
+    (offset: -1 | 1) => {
+      const next = moveIssueSheetHistory(history, offset);
+      const key = next.entries[next.index];
+      if (next === history || key === undefined) return;
+      pendingHistoryNavigation.current = { from: issueKey, to: key };
+      setHistory(next);
+      onOpenIssueKey(key);
+    },
+    [history, issueKey, onOpenIssueKey],
+  );
+  const historyMatchesIssue = history.entries[history.index] === issueKey;
+
+  // The grace period restarts on every key, so walking the list with `j` never trips it.
+  const [settled, setSettled] = useState(false);
+  useEffect(() => {
+    setSettled(false);
+    if (issueKey === null) return;
+    const timer = window.setTimeout(() => setSettled(true), NOT_FOUND_GRACE_MS);
+    return () => window.clearTimeout(timer);
+  }, [issueKey]);
+
+  const state = resolveIssueDetailState({ storeStatus, issue, settled });
+
+  const sheetStyle = {
+    "--issue-detail-properties-width": `${propertiesSize.width}px`,
+    "--right-panel-sheet-width": `${sheetSize.width}px`,
+    "--right-panel-sheet-max-width": `${maxWidth}px`,
+  } as CSSProperties;
+
+  const content =
+    issue === null ? (
+      <IssueDetailPlaceholder
+        issueKey={issueKey}
+        onClose={onClose}
+        showCloseButton={presentation === "sheet"}
+        state={state}
+      />
+    ) : (
+      <IssueDetailBody
+        issue={issue}
+        key={issue.id}
+        canGoBack={historyMatchesIssue && history.index > 0}
+        canGoForward={historyMatchesIssue && history.index < history.entries.length - 1}
+        onBack={() => moveThroughHistory(-1)}
+        onClose={onClose}
+        onOpenInIssues={onOpenInIssues}
+        onForward={() => moveThroughHistory(1)}
+        onOpenIssueKey={openFromSheet}
+        onStartWorkRequestHandled={onStartWorkRequestHandled}
+        propertiesMaxWidth={propertiesMaxWidth}
+        propertiesSize={propertiesSize}
+        showHeaderCloseButton={presentation === "sheet"}
+        startWorkRequestProvider={startWorkRequestProvider}
+        startWorkRequestProjectId={startWorkRequestProjectId}
+      />
+    );
+
+  if (presentation === "inline") {
+    return (
+      <div
+        className="@container/issue-detail flex min-h-0 flex-1 flex-col bg-background"
+        style={sheetStyle}
+      >
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <Sheet
+      modal={false}
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+      open={issueKey !== null}
+    >
+      <SheetPopup
+        className={cn(RIGHT_PANEL_SHEET_CLASS_NAME, "pointer-events-auto @container/issue-detail")}
+        // Focus stays where it was so the list keeps `j`/`k`; the sheet follows the cursor rather
+        // than capturing it.
+        finalFocus={false}
+        initialFocus={false}
+        keepMounted
+        showBackdrop={false}
+        showCloseButton={false}
+        side="right"
+        style={sheetStyle}
+        viewportClassName={cn(RIGHT_PANEL_SHEET_VIEWPORT_CLASS_NAME, "pointer-events-none")}
+      >
+        <RightPanelResizeHandle className="max-sm:hidden" handlers={sheetSize.handlers} />
+        <SheetTitle className="sr-only">{issue?.title ?? issueKey ?? "Task"}</SheetTitle>
+        {content}
+      </SheetPopup>
+    </Sheet>
+  );
+}
+
+function SheetHeaderBar({
+  title,
+  children,
+  titleAccessory,
+  onTitleClick,
+  titleActionLabel,
+  titleActionComplete = false,
+  onClose,
+  showCloseButton = true,
+}: {
+  title: string;
+  children?: ReactNode;
+  titleAccessory?: ReactNode;
+  onTitleClick?: () => void;
+  titleActionLabel?: string;
+  titleActionComplete?: boolean;
+  onClose: () => void;
+  showCloseButton?: boolean;
+}) {
+  return (
+    <div className="pointer-events-auto flex h-11 shrink-0 items-center gap-1 border-b border-border/50 px-2 ps-3 [-webkit-app-region:no-drag]">
+      <div className="flex min-w-0 flex-1 items-center gap-0.5">
+        {onTitleClick === undefined ? (
+          <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">{title}</span>
+        ) : (
+          <button
+            aria-label={titleActionLabel}
+            className="group/title flex min-w-0 items-center gap-1.5 rounded-sm text-start font-mono text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={onTitleClick}
+            title={titleActionLabel}
+            type="button"
+          >
+            <span className="truncate">{title}</span>
+            {titleActionComplete ? (
+              <CheckIcon aria-hidden="true" className="size-3 shrink-0 text-primary" />
+            ) : (
+              <CopyIcon
+                aria-hidden="true"
+                className="size-3 shrink-0 opacity-0 transition-opacity group-hover/title:opacity-70 group-focus-visible/title:opacity-70 pointer-coarse:opacity-70"
+              />
+            )}
+          </button>
+        )}
+        {titleAccessory}
+      </div>
+      {children}
+      {showCloseButton ? (
+        <Button
+          aria-label="Close task"
+          className="[-webkit-app-region:no-drag]"
+          onClick={onClose}
+          size="icon-xs"
+          variant="ghost"
+        >
+          <XIcon />
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+function IssueDetailPlaceholder({
+  issueKey,
+  onClose,
+  showCloseButton,
+  state,
+}: {
+  issueKey: string | null;
+  onClose: () => void;
+  showCloseButton: boolean;
+  state: ReturnType<typeof resolveIssueDetailState>;
+}) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <SheetHeaderBar onClose={onClose} showCloseButton={showCloseButton} title={issueKey ?? ""} />
+      {state === "loading" ? (
+        <div className="flex flex-1 items-center justify-center">
+          <Spinner className="size-4 text-muted-foreground" />
+        </div>
+      ) : (
+        <Empty className="flex-1">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              {state === "disconnected" ? <UnplugIcon /> : <SearchXIcon />}
+            </EmptyMedia>
+            <EmptyTitle>
+              {state === "disconnected" ? "No environment connected" : `${issueKey} not found`}
+            </EmptyTitle>
+            <EmptyDescription>
+              {state === "disconnected"
+                ? "The tracker lives on the machine you are connected to."
+                : "No task here carries that key. It may have been deleted, or the link may come from another machine's tracker."}
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      )}
+    </div>
+  );
+}
+
+function IssueDetailBody({
+  issue,
+  canGoBack,
+  canGoForward,
+  onBack,
+  onClose,
+  onOpenInIssues,
+  onOpenIssueKey,
+  onForward,
+  propertiesMaxWidth,
+  propertiesSize,
+  showHeaderCloseButton,
+  startWorkRequestProvider,
+  startWorkRequestProjectId,
+  onStartWorkRequestHandled,
+}: {
+  issue: Issue;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  onBack: () => void;
+  onClose: () => void;
+  onOpenInIssues: ((key: string) => void) | undefined;
+  onOpenIssueKey: (key: string) => void;
+  onForward: () => void;
+  propertiesMaxWidth: number;
+  propertiesSize: ReturnType<typeof useResizableWidth>;
+  showHeaderCloseButton: boolean;
+  startWorkRequestProvider: ProviderDriverKind | null;
+  startWorkRequestProjectId: ProjectId | null;
+  onStartWorkRequestHandled: (() => void) | undefined;
+}) {
+  const store = useIssuesStore();
+  const storeStatus = useIssuesStoreStatus();
+  const allStatuses = useIssueStatuses();
+  const allLabels = useIssueLabels();
+  const projects = useProjects();
+  const allIssueProjects = useIssueProjectOptions();
+  const allCycles = useIssueCycles();
+  const allMilestones = useIssueMilestonesForProject(issue.projectId);
+  const { events, refresh: refreshEvents } = useIssueEvents(issue.id);
+  const lastPullRequestEventRefresh = useRef(issue.pullRequest?.updatedAt ?? null);
+  useEffect(() => {
+    const updatedAt = issue.pullRequest?.updatedAt ?? null;
+    if (updatedAt === null || updatedAt === lastPullRequestEventRefresh.current) return;
+    lastPullRequestEventRefresh.current = updatedAt;
+    refreshEvents();
+  }, [issue.pullRequest?.updatedAt, refreshEvents]);
+  const { detail, isPending: detailPending } = useIssueDetail(issue.id);
+  const issueCompanyIds = useAtomValue(issueDomainEntityCompanyIdsAtom);
+  const companyId = issueDomainEntityCompanyId(issueCompanyIds, "issue", issue.id);
+  const statuses = allStatuses.filter(
+    (status) =>
+      issueDomainEntityCompanyId(issueCompanyIds, "issueStatus", status.id, companyId) ===
+      companyId,
+  );
+  const labels = allLabels.filter(
+    (label) =>
+      issueDomainEntityCompanyId(issueCompanyIds, "issueLabel", label.id, companyId) === companyId,
+  );
+  const cycles = allCycles.filter(
+    (cycle) =>
+      issueDomainEntityCompanyId(issueCompanyIds, "issueCycle", cycle.id, companyId) === companyId,
+  );
+  const milestones = allMilestones.filter(
+    (milestone) =>
+      issueDomainEntityCompanyId(issueCompanyIds, "issueMilestone", milestone.id, companyId) ===
+      companyId,
+  );
+  const issueProjects = allIssueProjects.filter(
+    (project) =>
+      project.companyId === companyId ||
+      (companyId !== null && project.companyIds.includes(companyId)),
+  );
+  const attachmentCloud = useReplicaIssueAttachmentCloud(companyId);
+  const attachmentDrafts = useIssueImageAttachmentDrafts(issue.id, attachmentCloud);
+  const childRollup = useIssueChildRollup(issue.id);
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const { presentationById } = useEnvironments();
+  const environmentControl = useEnvironmentControl();
+  const [defaultPhysicalProjectKey, setDefaultPhysicalProjectKey] = useState<string | null>(null);
+  const [launchPhysicalProjectKey, setLaunchPhysicalProjectKey] = useState<string | null>(null);
+  // Both agent tails are read whenever a sheet opens, like the change log and the detail beside
+  // them: the header has to know whether an investigation has ever run, and the rail has to list
+  // the threads. Two small reads on a local socket, patched live by the stream afterwards.
+  const {
+    runs: enrichmentRuns,
+    isPending: runsPending,
+    error: runsError,
+  } = useIssueEnrichmentRuns(issue.id);
+  const { links: threadLinks } = useIssueThreadLinks(issue.id);
+
+  const updateIssue = useUpdateIssue();
+  const deleteIssue = useDeleteIssue();
+  const restoreIssue = useRestoreIssue();
+  const createLabel = useCreateIssueLabel(companyId);
+  const createMilestone = useCreateIssueMilestone(companyId);
+  const createTodo = useCreateIssueTodo();
+  const updateTodo = useUpdateIssueTodo();
+  const deleteTodo = useDeleteIssueTodo();
+  const reorderTodos = useReorderIssueTodos();
+  const createRelation = useCreateIssueRelation();
+  const deleteRelation = useDeleteIssueRelation();
+  const createComment = useCreateIssueComment();
+  const updateComment = useUpdateIssueComment();
+  const deleteComment = useDeleteIssueComment();
+  const cancelCommentAgentRun = useCancelIssueCommentAgentRun();
+  const retryCommentAgentRun = useRetryIssueCommentAgentRun();
+  const startEnrichment = useStartIssueEnrichment();
+  const cancelEnrichment = useCancelIssueEnrichment();
+  const acceptTriage = useTriageAccept();
+  const linkThread = useLinkIssueThread();
+  const unlinkThread = useUnlinkIssueThread();
+  const { copyToClipboard: copyIssueKey, isCopied: issueKeyCopied } = useCopyToClipboard({
+    target: "task code",
+    onCopy: () => {
+      toastManager.add({ type: "success", title: "Task code copied", description: issue.key });
+    },
+    onError: (error) => {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to copy task code",
+          description: error.message,
+        }),
+      );
+    },
+  });
+
+  const write = useCallback(
+    (patch: IssuePatch | null) => {
+      if (patch === null) return;
+      void (async () => {
+        reportFailure("Failed to update the task", await updateIssue({ issueId: issue.id, patch }));
+      })();
+    },
+    [issue.id, updateIssue],
+  );
+
+  const commitTitle = useCallback(
+    (next: string) => write(issueTitlePatch(issue, next)),
+    [issue, write],
+  );
+  const titleProps = useCommitOnBlur<HTMLTextAreaElement>(issue.title, commitTitle);
+
+  const projectTitles = useMemo(
+    () =>
+      new Map<string, string>(
+        issueProjects.flatMap((project) =>
+          project.projectIds.map((projectId) => [projectId, project.title] as const),
+        ),
+      ),
+    [issueProjects],
+  );
+  const issueKeys = useMemo(() => {
+    const keys = new Map<string, string>();
+    for (const candidate of store.issuesById.values()) {
+      if (
+        issueDomainEntityCompanyId(issueCompanyIds, "issue", candidate.id, companyId) === companyId
+      ) {
+        keys.set(candidate.id, candidate.key);
+      }
+    }
+    return keys;
+  }, [companyId, issueCompanyIds, store]);
+
+  const status = statuses.find((candidate) => candidate.id === issue.statusId) ?? null;
+  const projectTitle =
+    issue.projectId === null ? null : (projectTitles.get(issue.projectId) ?? null);
+  const issueProject = useMemo(() => {
+    const issueProjectId = issue.projectId;
+    return issueProjectId === null
+      ? null
+      : (issueProjects.find(
+          (candidate) =>
+            candidate.id === issueProjectId || candidate.projectIds.includes(issueProjectId),
+        ) ?? null);
+  }, [issue.projectId, issueProjects]);
+  const defaultProject = useMemo(
+    () =>
+      resolveIssueEnvironmentProject({
+        issueProjectId: issue.projectId,
+        projects: issueProjects,
+        selectedPhysicalProjectKey: defaultPhysicalProjectKey,
+        preferredEnvironmentId: primaryEnvironmentId,
+      }),
+    [defaultPhysicalProjectKey, issue.projectId, issueProjects, primaryEnvironmentId],
+  );
+  const project = useMemo(
+    () =>
+      resolveIssueEnvironmentProject({
+        issueProjectId: issue.projectId,
+        projects: issueProjects,
+        selectedPhysicalProjectKey:
+          launchPhysicalProjectKey ?? defaultProject?.physicalProjectKey ?? null,
+        preferredEnvironmentId: primaryEnvironmentId,
+      }),
+    [
+      defaultProject?.physicalProjectKey,
+      issue.projectId,
+      issueProjects,
+      launchPhysicalProjectKey,
+      primaryEnvironmentId,
+    ],
+  );
+  const agentEnvironmentId = project?.environmentId ?? primaryEnvironmentId;
+  const primarySettings = usePrimarySettings();
+  const agentSettings = useEnvironmentSettings(agentEnvironmentId);
+  const timestampFormat = primarySettings.timestampFormat;
+  const agentServerConfig = useAtomValue(serverEnvironment.configValueAtom(agentEnvironmentId));
+  const serverProviders = agentServerConfig?.providers ?? EMPTY_SERVER_PROVIDERS;
+  const environmentOptions = useMemo<ReadonlyArray<IssueEnvironmentOption>>(
+    () =>
+      issueProject === null
+        ? []
+        : issueProjectEnvironmentProjects(issueProject).map((candidate) => {
+            const presentation = presentationById.get(candidate.environmentId);
+            return {
+              value: candidate.physicalProjectKey,
+              label:
+                candidate.environmentLabel ??
+                presentation?.entry.target.label ??
+                (candidate.environmentId === primaryEnvironmentId ? "This machine" : "Environment"),
+              status:
+                candidate.workspaceRoot === null
+                  ? "No directory"
+                  : presentation === undefined
+                    ? "Unavailable"
+                    : connectionStatusTitle(presentation.connection),
+              disabled:
+                candidate.workspaceRoot === null || presentation?.connection.phase !== "connected",
+            };
+          }),
+    [issueProject, presentationById, primaryEnvironmentId],
+  );
+  const [savingDefaultEnvironment, setSavingDefaultEnvironment] = useState(false);
+  const defaultEnvironmentOptions = useMemo(
+    () =>
+      environmentOptions.map((option) => ({
+        ...option,
+        disabled:
+          savingDefaultEnvironment ||
+          issueProject === null ||
+          issueProjectEnvironmentBinding(issueProject, option.value) === null,
+      })),
+    [environmentOptions, issueProject, savingDefaultEnvironment],
+  );
+  const handleDefaultEnvironment = useCallback(
+    (physicalProjectKey: string) => {
+      if (savingDefaultEnvironment || issueProject === null) return;
+      const binding = issueProjectEnvironmentBinding(issueProject, physicalProjectKey);
+      const cloudProject = issueProject.companyProject;
+      if (binding === null || cloudProject === null || companyId === null) {
+        toastManager.add({
+          type: "error",
+          title: "Could not save the default environment",
+          description: "This project is not connected to that environment.",
+        });
+        return;
+      }
+      if (environmentControl === null) {
+        toastManager.add({
+          type: "error",
+          title: "Could not save the default environment",
+          description: "Sign in to update company project defaults.",
+        });
+        return;
+      }
+      const previous = defaultProject?.physicalProjectKey ?? null;
+      setDefaultPhysicalProjectKey(physicalProjectKey);
+      setSavingDefaultEnvironment(true);
+      void environmentControl
+        .setPreferredEnvironmentBinding({
+          companyId,
+          cloudProjectId: cloudProject.id,
+          bindingId: binding.id,
+        })
+        .catch((error) => {
+          setDefaultPhysicalProjectKey(previous);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not save the default environment",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        })
+        .finally(() => setSavingDefaultEnvironment(false));
+    },
+    [
+      companyId,
+      defaultProject?.physicalProjectKey,
+      environmentControl,
+      issueProject,
+      savingDefaultEnvironment,
+    ],
+  );
+  const selectedEnvironmentOption =
+    environmentOptions.find((option) => option.value === project?.physicalProjectKey) ?? null;
+  const selectedEnvironmentPresentation =
+    project === null ? undefined : presentationById.get(project.environmentId);
+  const agentEnvironmentBlockReason =
+    project !== null && selectedEnvironmentPresentation?.connection.phase !== "connected"
+      ? `${selectedEnvironmentOption?.label ?? "The selected environment"} is ${
+          selectedEnvironmentOption?.status.toLowerCase() ?? "unavailable"
+        }.`
+      : null;
+
+  const statusById = useMemo(
+    () => new Map(statuses.map((candidate) => [candidate.id, candidate])),
+    [statuses],
+  );
+  const parent = issue.parentId === null ? null : (store.issuesById.get(issue.parentId) ?? null);
+  const childIssues = useMemo(() => {
+    const found: Array<Issue> = [];
+    for (const childId of childRollup.childIds) {
+      const child = store.issuesById.get(childId);
+      if (child !== undefined) found.push(child);
+    }
+    return found;
+  }, [childRollup, store]);
+  const relationDisplays = useMemo(
+    () => (detail === null ? [] : issueRelationDisplays(detail.relations)),
+    [detail],
+  );
+  const startWorkAttachmentIds = useMemo(
+    () => issueStartWorkAttachmentIds(detail?.comments ?? EMPTY_COMMENTS),
+    [detail?.comments],
+  );
+  const { attachments: startWorkAttachments } = useIssueAttachmentUrls({
+    attachmentIds: startWorkAttachmentIds,
+    cloud: attachmentCloud,
+    environmentId: agentEnvironmentId,
+    issueId: issue.id,
+  });
+  const startWorkAttachmentUrls = startWorkAttachments.map((attachment) =>
+    attachment === null ? null : attachment.url,
+  );
+  const startWorkAttachmentsReady = startWorkAttachmentUrls.every((url) => url !== null);
+
+  const openIssue = useCallback((target: Issue) => onOpenIssueKey(target.key), [onOpenIssueKey]);
+
+  const [subIssueOpen, setSubIssueOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<IssueDetailTab>("details");
+  const [showTodos, setShowTodos] = useState(false);
+  const [todoFocusRequest, setTodoFocusRequest] = useState(0);
+  const [showRelations, setShowRelations] = useState(false);
+  const [relationOpenRequest, setRelationOpenRequest] = useState(0);
+  const [investigationRequested, setInvestigationRequested] = useState(false);
+  /** The image the in-app viewer is opened on; `null` keeps it closed. */
+  const [viewedAttachmentId, setViewedAttachmentId] = useState<ChatAttachmentId | null>(null);
+
+  /**
+   * Every tail write reports the same way, and none of them is optimistic: the stream echo is what
+   * moves the checklist, so a refused press has to say so or it reads as a press that never landed.
+   */
+  const runWrite = useCallback(
+    (title: string, run: () => Promise<AtomCommandResult<unknown, unknown>>) => {
+      void (async () => {
+        reportFailure(title, await run());
+      })();
+    },
+    [],
+  );
+
+  /**
+   * Not `runWrite`: unlinking appends a change-log row to both ends (`logRelation`, with
+   * `removed: true`), but `issues.relationDelete` names only the relation, so the shared
+   * input-keyed refresh in `state/issues.ts` has no issue id to invalidate. Creating does — its
+   * input carries both — which is why only this side needs saying. This sheet is one of the two
+   * feeds that just gained a row, and it is the only one on screen.
+   */
+  const handleDeleteRelation = useCallback(
+    (relationId: IssueRelationId) => {
+      void (async () => {
+        const failed = reportFailure(
+          "Failed to unlink the tasks",
+          await deleteRelation({ relationId }),
+        );
+        if (failed) return;
+        refreshEvents();
+      })();
+    },
+    [deleteRelation, refreshEvents],
+  );
+
+  const handleCreateMilestone = useCallback(
+    async (input: { readonly name: string; readonly targetDate: IssueDate | null }) => {
+      if (issue.projectId === null) return null;
+      const created = await createMilestone({
+        projectId: issue.projectId,
+        name: input.name,
+        ...(input.targetDate === null ? {} : { targetDate: input.targetDate }),
+      });
+      if (reportFailure("Failed to create the milestone", created)) return null;
+      if (!AsyncResult.isSuccess(created)) return null;
+      return created.value.milestone.id;
+    },
+    [createMilestone, issue.projectId],
+  );
+
+  const handleCreateLabel = useCallback(
+    async (input: { readonly name: string; readonly color: string }) => {
+      const created = await createLabel(input);
+      if (reportFailure("Failed to create the label", created)) return false;
+      if (!AsyncResult.isSuccess(created)) return false;
+      // Newly created labels are not applied implicitly — the same press that made one should not
+      // silently edit the issue too — except here, where making one from inside the issue is the
+      // only reason to be in this popover.
+      const labelId = created.value.label.id;
+      reportFailure(
+        "Failed to apply the label",
+        await updateIssue({
+          issueId: issue.id,
+          patch: { labelIds: [...issue.labelIds, labelId] },
+        }),
+      );
+      return true;
+    },
+    [createLabel, issue.id, issue.labelIds, updateIssue],
+  );
+
+  const handleDelete = useCallback(() => {
+    const issueId: IssueId = issue.id;
+    const key = issue.key;
+    void (async () => {
+      const result = await deleteIssue({ issueId });
+      if (reportFailure("Failed to delete the task", result)) return;
+      // The row survives the delete as a tombstone, but the sheet reads a soft-deleted issue as
+      // not-found: closing is what it would otherwise be sitting in front of.
+      onClose();
+      const toastId = toastManager.add(
+        stackedThreadToast({
+          type: "success",
+          title: `${key} deleted`,
+          description: "The change log keeps it, so this can be undone.",
+          actionProps: {
+            children: "Undo",
+            onClick: () => {
+              void (async () => {
+                toastManager.close(toastId);
+                const restored = await restoreIssue({ issueId });
+                if (reportFailure("Failed to restore the task", restored)) return;
+                onOpenIssueKey(key);
+              })();
+            },
+          },
+        }),
+      );
+    })();
+  }, [deleteIssue, issue.id, issue.key, onClose, onOpenIssueKey, restoreIssue]);
+
+  // ── Agents ───────────────────────────────────────────────────────────
+
+  const navigate = useNavigate();
+  const threadShells = useThreadShells();
+  const openNewThread = useNewThreadHandler();
+  const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
+  const [startingWork, setStartingWork] = useState(false);
+
+  const startWorkGitStatus = useEnvironmentQuery(
+    project?.workspaceRoot
+      ? vcsEnvironment.status({
+          environmentId: project.environmentId,
+          input: { cwd: project.workspaceRoot },
+        })
+      : null,
+  );
+  const currentProjectBranch =
+    startWorkGitStatus.data?.isRepo === true ? startWorkGitStatus.data.refName : null;
+  const startWorkBranches = useBranches({
+    environmentId: project?.environmentId ?? null,
+    cwd: project?.workspaceRoot ?? null,
+  });
+  const startWorkBranchRefs = startWorkBranches.data?.refs ?? [];
+  const newWorktreeBlockReason =
+    project?.workspaceRoot == null
+      ? "Choose a project with a connected workspace before creating a branch."
+      : startWorkGitStatus.error !== null
+        ? "The project's Git status is unavailable."
+        : startWorkGitStatus.data !== null && startWorkGitStatus.data.isRepo !== true
+          ? "This project is not a Git repository."
+          : startWorkBranches.error;
+
+  const startWorkProvider = issue.assignee?.kind === "agent" ? issue.assignee.provider : null;
+  /** Every configured instance. Start work narrows this to the assignee; a mention does not. */
+  const providerInstanceEntries = useMemo(
+    () =>
+      sortProviderInstanceEntries(
+        applyProviderInstanceSettings(
+          deriveProviderInstanceEntries(serverProviders),
+          agentSettings,
+        ),
+      ),
+    [agentSettings, serverProviders],
+  );
+  const startWorkInstanceEntries = useMemo(() => {
+    if (startWorkProvider === null) return [];
+    return providerInstanceEntries.filter((entry) => entry.driverKind === startWorkProvider);
+  }, [providerInstanceEntries, startWorkProvider]);
+  const startWorkModelOptionsByInstance = useMemo(
+    () => getCustomModelOptionsByInstance(agentSettings, serverProviders),
+    [agentSettings, serverProviders],
+  );
+  const initialStartWorkModelSelection = useMemo<ModelSelection | null>(() => {
+    return resolveIssueStartWorkModelSelection({
+      provider: startWorkProvider,
+      projectDefault: issue.workModelSelection ?? project?.defaultModelSelection ?? null,
+      instanceEntries: startWorkInstanceEntries,
+      modelOptionsByInstance: startWorkModelOptionsByInstance,
+    });
+  }, [
+    project?.defaultModelSelection,
+    issue.workModelSelection,
+    startWorkInstanceEntries,
+    startWorkModelOptionsByInstance,
+    startWorkProvider,
+  ]);
+
+  const activeRun = activeIssueEnrichmentRun(enrichmentRuns);
+  const investigating =
+    (investigationRequested && enrichmentRuns.length === 0) || activeRun !== null;
+  const investigateBlock = issueInvestigateBlock({
+    connected: storeStatus !== "disconnected",
+    deleted: issue.deletedAt !== null,
+    projectId: issue.projectId,
+    workspaceRoot: project?.workspaceRoot,
+    hasRunInFlight: investigating,
+  });
+
+  const investigationProjects = useMemo(
+    () =>
+      projects.filter(
+        (candidate) =>
+          candidate.environmentId === primaryEnvironmentId && candidate.workspaceRoot != null,
+      ),
+    [primaryEnvironmentId, projects],
+  );
+  const investigateMenuBlock =
+    investigationProjects.length === 0
+      ? "Connect a workspace to a project before investigating."
+      : investigateBlock === "no-project" || investigateBlock === "rootless-project"
+        ? null
+        : investigateBlock === null
+          ? null
+          : ISSUE_INVESTIGATE_BLOCK_REASONS[investigateBlock];
+
+  const handleInvestigate = useCallback(
+    (projectId: ProjectId) => {
+      setActiveTab("investigation");
+      setInvestigationRequested(true);
+      void (async () => {
+        if (issue.projectId !== projectId) {
+          const assignmentFailed = reportFailure(
+            "Failed to assign the task to the project",
+            await updateIssue({ issueId: issue.id, patch: { projectId } }),
+          );
+          if (assignmentFailed) {
+            setInvestigationRequested(false);
+            return;
+          }
+        }
+        const failed = reportFailure(
+          "Failed to start the investigation",
+          await startEnrichment({ issueId: issue.id }),
+        );
+        if (failed) setInvestigationRequested(false);
+      })();
+    },
+    [issue.id, issue.projectId, startEnrichment, updateIssue],
+  );
+
+  const handleAddTodo = useCallback(() => {
+    setActiveTab("details");
+    setShowTodos(true);
+    setTodoFocusRequest((current) => current + 1);
+  }, []);
+
+  const handleAddSubIssue = useCallback(() => {
+    setActiveTab("details");
+    setSubIssueOpen(true);
+  }, []);
+
+  const handleAddRelation = useCallback(() => {
+    setActiveTab("details");
+    setShowRelations(true);
+    setRelationOpenRequest((current) => current + 1);
+  }, []);
+
+  const handleCreateComment = useCallback(
+    (
+      body: string,
+      attachmentIds: ReadonlyArray<ChatAttachmentId>,
+      agentMention?: IssueCommentAgentMentionInput,
+    ) =>
+      runWrite("Failed to post the comment", () =>
+        createComment({
+          issueId: issue.id,
+          body,
+          ...(attachmentIds.length === 0 ? {} : { attachmentIds }),
+          ...(agentMention === undefined ? {} : { agentMention }),
+        }),
+      ),
+    [createComment, issue.id, runWrite],
+  );
+
+  /** No overlay on either: the server republishes the comment and the run rides it back. */
+  const handleCancelCommentAgentRun = useCallback(
+    (commentId: IssueCommentId) => {
+      void (async () => {
+        reportFailure("Failed to cancel the agent run", await cancelCommentAgentRun({ commentId }));
+      })();
+    },
+    [cancelCommentAgentRun],
+  );
+
+  const handleRetryCommentAgentRun = useCallback(
+    (commentId: IssueCommentId) => {
+      void (async () => {
+        reportFailure("Failed to retry the agent run", await retryCommentAgentRun({ commentId }));
+      })();
+    },
+    [retryCommentAgentRun],
+  );
+
+  const handleCancelRun = useCallback(
+    (runId: IssueEnrichmentRunId) => {
+      void (async () => {
+        reportFailure("Failed to cancel the investigation", await cancelEnrichment({ runId }));
+      })();
+    },
+    [cancelEnrichment],
+  );
+
+  const threadsById = useMemo(() => {
+    const byId = new Map<ThreadId, (typeof threadShells)[number]>();
+    for (const shell of threadShells) {
+      byId.set(shell.id, shell);
+    }
+    return byId;
+  }, [threadShells]);
+
+  const handleOpenThread = useCallback(
+    (threadId: ThreadId) => {
+      const environmentId = threadsById.get(threadId)?.environmentId ?? project?.environmentId;
+      if (environmentId === undefined) return;
+      void navigate({
+        to: "/threads/$environmentId/$threadId",
+        params: buildThreadRouteParams({ environmentId, threadId }),
+      });
+    },
+    [navigate, project?.environmentId, threadsById],
+  );
+
+  const handleUnlinkThread = useCallback(
+    (threadId: ThreadId) => {
+      void (async () => {
+        reportFailure(
+          "Failed to unlink the thread",
+          await unlinkThread({ issueId: issue.id, threadId }),
+        );
+      })();
+    },
+    [issue.id, unlinkThread],
+  );
+
+  /** Opens the local draft and assembles the same issue context for both launch actions. */
+  const prepareIssueThreadDraft = useCallback(
+    async (
+      workspaceMode: IssueStartWorkWorkspaceMode,
+      baseBranch: string | null,
+      purpose: "start-work" | "talk" = "start-work",
+      /** Narrows the draft to one image — the viewer starts a thread about a single attachment. */
+      imageUrls: ReadonlyArray<string> | null = null,
+    ) => {
+      if (project === null || project.workspaceRoot === null || !startWorkAttachmentsReady) {
+        throw new Error("The task thread could not be prepared.");
+      }
+      if (agentEnvironmentBlockReason !== null) {
+        throw new Error(`${agentEnvironmentBlockReason} Connect it before preparing task work.`);
+      }
+      const workspacePlan = resolveIssueStartWorkWorkspacePlan(workspaceMode, baseBranch);
+      if (workspacePlan === null) {
+        throw new Error(newWorktreeBlockReason ?? "A base branch is required.");
+      }
+      const relations: Array<IssueStartWorkRelation> = [];
+      if (parent !== null) {
+        relations.push({ label: "Subtask of", key: parent.key, title: parent.title });
+      }
+      for (const display of relationDisplays) {
+        const counterpart = store.issuesById.get(display.issueId);
+        if (counterpart === undefined) continue;
+        relations.push({
+          label: display.label,
+          key: counterpart.key,
+          title: counterpart.title,
+        });
+      }
+      const promptContext = {
+        issue,
+        statusName: status?.name ?? null,
+        completionStatusName:
+          statuses.find(
+            (candidate) =>
+              candidate.id ===
+              primarySettings.issueAutomation.statusTransitions.workFinishedStatusId,
+          )?.name ??
+          statuses.find((candidate) => candidate.category === "review")?.name ??
+          null,
+        projectTitle,
+        priorityLabel: issue.priority === "none" ? null : ISSUE_PRIORITY_LABELS[issue.priority],
+        todos: issueStartWorkTodos(detail?.todos ?? EMPTY_TODOS),
+        relations,
+        issueUrl: issueDetailUrl(window.location.origin, issue.key),
+      };
+      const prompt =
+        purpose === "talk"
+          ? buildIssueTalkPrompt(promptContext)
+          : buildIssueStartWorkPrompt(promptContext);
+      const selectedUrls = imageUrls ?? startWorkAttachmentUrls;
+      if (selectedUrls.some((url) => url === null)) {
+        throw new Error("The task images are still loading. Try again.");
+      }
+      const loadedImages = await loadIssueStartWorkImages(
+        selectedUrls.filter((url): url is string => url !== null),
+      );
+      const files = loadedImages.map(
+        ({ blob, sourceIndex }) =>
+          new File([blob], `${issue.key}-attachment-${sourceIndex + 1}`, { type: blob.type }),
+      );
+
+      const opened = await openNewThread(scopeProjectRef(project.environmentId, project.id), {
+        branch: workspacePlan.branch,
+        worktreePath: null,
+        envMode: workspacePlan.envMode,
+        startFromOrigin:
+          workspaceMode === "new_worktree"
+            ? startWorkBranchRefs.find((ref) => ref.name === baseBranch)?.isRemote === true
+              ? false
+              : agentSettings.newWorktreesStartFromOrigin
+            : false,
+        // An issue launch is a task boundary. It must never consume an unrelated empty draft.
+        forceNew: true,
+      });
+      if (opened === null) return null;
+      const session = useComposerDraftStore.getState().getDraftSession(opened.draftId);
+      if (session === null) throw new Error("The new thread draft could not be prepared.");
+
+      return {
+        files,
+        opened,
+        projectWorkspaceRoot: project.workspaceRoot,
+        prompt,
+        session,
+        workspacePlan,
+      };
+    },
+    [
+      detail,
+      issue,
+      newWorktreeBlockReason,
+      openNewThread,
+      parent,
+      project,
+      projectTitle,
+      relationDisplays,
+      agentSettings.newWorktreesStartFromOrigin,
+      primarySettings.issueAutomation.statusTransitions.workFinishedStatusId,
+      agentEnvironmentBlockReason,
+      startWorkAttachmentsReady,
+      startWorkAttachmentUrls,
+      startWorkBranchRefs,
+      status,
+      statuses,
+      store,
+    ],
+  );
+
+  /** The primary press persists the thread and dispatches its first turn immediately. */
+  const handleStartWork = useCallback(
+    (
+      modelSelection: ModelSelection,
+      workspaceMode: IssueStartWorkWorkspaceMode = "current_checkout",
+      baseBranch: string | null = null,
+    ) => {
+      if (startingWork) return;
+      setStartingWork(true);
+      void (async () => {
+        try {
+          const prepared = await prepareIssueThreadDraft(workspaceMode, baseBranch);
+          if (prepared === null) return;
+          const { files, projectWorkspaceRoot, prompt, session, workspacePlan } = prepared;
+          const attachments: Array<UploadChatAttachment> = await Promise.all(
+            files.map(async (file) => ({
+              type: "image" as const,
+              name: file.name,
+              mimeType: file.type,
+              sizeBytes: file.size,
+              dataUrl: await readFileAsDataUrl(file),
+            })),
+          );
+
+          const createdAt = new Date().toISOString();
+          const started = await startThreadTurn({
+            environmentId: session.environmentId,
+            input: {
+              threadId: session.threadId,
+              message: {
+                messageId: newMessageId(),
+                role: "user",
+                text: prompt,
+                attachments,
+              },
+              modelSelection,
+              titleSeed: issue.title,
+              runtimeMode: session.runtimeMode,
+              interactionMode: session.interactionMode,
+              bootstrap: {
+                createThread: {
+                  projectId: session.projectId,
+                  title: issue.title,
+                  modelSelection,
+                  runtimeMode: session.runtimeMode,
+                  interactionMode: session.interactionMode,
+                  branch: session.branch,
+                  worktreePath: session.worktreePath,
+                  createdAt: session.createdAt,
+                },
+                ...(workspacePlan.prepareWorktreeBaseBranch === null
+                  ? {}
+                  : {
+                      prepareWorktree: {
+                        projectCwd: projectWorkspaceRoot,
+                        baseBranch: workspacePlan.prepareWorktreeBaseBranch,
+                        ...(session.startFromOrigin ? { startFromOrigin: true } : {}),
+                      },
+                      runSetupScript: true,
+                    }),
+              },
+              createdAt,
+            },
+          });
+          if (reportFailure("Failed to start work", started)) return;
+
+          const targetStatusId = resolveIssueStartWorkStatusId({
+            configuredStatusId:
+              primarySettings.issueAutomation.statusTransitions.workStartedStatusId,
+            statuses,
+          });
+          if (targetStatusId !== null && (issue.triage || issue.statusId !== targetStatusId)) {
+            const transitioned = issue.triage
+              ? await acceptTriage({
+                  issueId: issue.id,
+                  statusId: targetStatusId,
+                  projectId: issue.projectId,
+                  priority: issue.priority,
+                  runEnrichment: false,
+                })
+              : await updateIssue({ issueId: issue.id, patch: { statusId: targetStatusId } });
+            reportFailure("Work started, but the task status could not be updated", transitioned);
+          }
+
+          reportFailure(
+            "Work started, but the thread could not be linked to its task",
+            await linkThread({
+              issueId: issue.id,
+              threadId: session.threadId,
+              origin: "start-work",
+            }),
+          );
+          setLaunchPhysicalProjectKey(null);
+        } catch (error) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to start work",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        } finally {
+          setStartingWork(false);
+        }
+      })();
+    },
+    [
+      acceptTriage,
+      issue,
+      linkThread,
+      prepareIssueThreadDraft,
+      primarySettings.issueAutomation.statusTransitions.workStartedStatusId,
+      startingWork,
+      startThreadTurn,
+      statuses,
+      updateIssue,
+    ],
+  );
+
+  /** The menu action fills the local draft without submitting it or creating a server thread. */
+  const handleCreatePendingThread = useCallback(
+    (
+      modelSelection: ModelSelection,
+      workspaceMode: IssueStartWorkWorkspaceMode = "current_checkout",
+      baseBranch: string | null = null,
+    ) => {
+      if (startingWork) return;
+      setStartingWork(true);
+      void (async () => {
+        try {
+          const prepared = await prepareIssueThreadDraft(workspaceMode, baseBranch);
+          if (prepared === null) return;
+          const draftStore = useComposerDraftStore.getState();
+          draftStore.setPrompt(prepared.opened.draftId, prepared.prompt);
+          draftStore.setModelSelection(prepared.opened.draftId, modelSelection, {
+            replaceOptions: true,
+          });
+          draftStore.addImages(
+            prepared.opened.draftId,
+            prepared.files.map(
+              (file) =>
+                ({
+                  type: "image",
+                  id: randomUUID(),
+                  name: file.name,
+                  mimeType: file.type,
+                  sizeBytes: file.size,
+                  previewUrl: URL.createObjectURL(file),
+                  file,
+                }) satisfies ComposerImageAttachment,
+            ),
+          );
+          setLaunchPhysicalProjectKey(null);
+        } catch (error) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to create pending thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        } finally {
+          setStartingWork(false);
+        }
+      })();
+    },
+    [prepareIssueThreadDraft, startingWork],
+  );
+
+  /**
+   * Opens a current-checkout draft so the user's first message can steer the discussion.
+   * `imageUrls` narrows the attached images; `null` carries every image on the issue.
+   */
+  const openIssueDiscussionDraft = useCallback(
+    (imageUrls: ReadonlyArray<string> | null) => {
+      if (startingWork) return;
+      setStartingWork(true);
+      void (async () => {
+        try {
+          const prepared = await prepareIssueThreadDraft(
+            "current_checkout",
+            null,
+            "talk",
+            imageUrls,
+          );
+          if (prepared === null) return;
+          const draftStore = useComposerDraftStore.getState();
+          draftStore.setPrompt(prepared.opened.draftId, prepared.prompt);
+          draftStore.addImages(
+            prepared.opened.draftId,
+            prepared.files.map(
+              (file) =>
+                ({
+                  type: "image",
+                  id: randomUUID(),
+                  name: file.name,
+                  mimeType: file.type,
+                  sizeBytes: file.size,
+                  previewUrl: URL.createObjectURL(file),
+                  file,
+                }) satisfies ComposerImageAttachment,
+            ),
+          );
+        } catch (error) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to create task discussion",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        } finally {
+          setStartingWork(false);
+        }
+      })();
+    },
+    [prepareIssueThreadDraft, startingWork],
+  );
+
+  const handleTalkAboutIssue = useCallback(
+    () => openIssueDiscussionDraft(null),
+    [openIssueDiscussionDraft],
+  );
+
+  const handleStartThreadWithImage = useCallback(
+    (src: string) => openIssueDiscussionDraft([src]),
+    [openIssueDiscussionDraft],
+  );
+
+  useEffect(() => {
+    if (
+      startWorkRequestProvider === null ||
+      detailPending ||
+      startingWork ||
+      !startWorkAttachmentsReady
+    ) {
+      return;
+    }
+    if (
+      issue.triage ||
+      issue.assignee?.kind !== "agent" ||
+      issue.assignee.provider !== startWorkRequestProvider ||
+      issue.projectId !== startWorkRequestProjectId
+    ) {
+      // The accept result and its stream echo can arrive on adjacent ticks. Wait until the issue
+      // reflects the assignment the Start Task press just committed.
+      return;
+    }
+    onStartWorkRequestHandled?.();
+    if (
+      project === null ||
+      agentEnvironmentBlockReason !== null ||
+      initialStartWorkModelSelection === null
+    ) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Task accepted, but work could not start",
+          description:
+            project === null
+              ? "The selected project has no connected workspace."
+              : agentEnvironmentBlockReason !== null
+                ? agentEnvironmentBlockReason
+                : `No available ${startWorkRequestProvider} model can start this work.`,
+        }),
+      );
+      return;
+    }
+    handleStartWork(initialStartWorkModelSelection);
+  }, [
+    agentEnvironmentBlockReason,
+    detailPending,
+    handleStartWork,
+    initialStartWorkModelSelection,
+    issue.assignee,
+    issue.triage,
+    onStartWorkRequestHandled,
+    project,
+    startWorkAttachmentsReady,
+    startWorkRequestProvider,
+    startWorkRequestProjectId,
+    startingWork,
+  ]);
+
+  const issuesByKey = useMemo(() => {
+    const byKey = new Map<string, Issue>();
+    for (const candidate of store.issuesById.values()) byKey.set(candidate.key, candidate);
+    return byKey;
+  }, [store]);
+  const todos = detail?.todos ?? EMPTY_TODOS;
+  const comments = detail?.comments ?? EMPTY_COMMENTS;
+  const discussionComments = useMemo(
+    () => comments.filter((comment) => !isNewIssueAttachmentRecord(comment)),
+    [comments],
+  );
+  // The viewer spans every image on the issue, so the shelf and a comment's images open the
+  // same gallery and the arrows keep working across both.
+  const galleryAttachmentIds = useMemo(() => issueAttachmentIds(comments), [comments]);
+  const talkAboutIssueBlockReason =
+    project?.workspaceRoot == null
+      ? "Assign this task to a project with a connected workspace before starting a discussion."
+      : agentEnvironmentBlockReason !== null
+        ? agentEnvironmentBlockReason
+        : storeStatus === "disconnected"
+          ? ISSUE_INVESTIGATE_BLOCK_REASONS.disconnected
+          : !startWorkAttachmentsReady
+            ? "Task images are still loading."
+            : startingWork
+              ? "Another task thread is being prepared."
+              : null;
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <SheetHeaderBar
+        onClose={onClose}
+        showCloseButton={showHeaderCloseButton}
+        onTitleClick={() => copyIssueKey(issue.key, undefined)}
+        title={issue.key}
+        titleActionComplete={issueKeyCopied}
+        titleActionLabel={issueKeyCopied ? `${issue.key} copied` : `Copy task code ${issue.key}`}
+        titleAccessory={
+          <div className="flex shrink-0 items-center">
+            <Button
+              aria-label="Go to previous task"
+              disabled={!canGoBack}
+              onClick={onBack}
+              size="icon-xs"
+              title="Previous task"
+              variant="ghost"
+            >
+              <ChevronLeftIcon />
+            </Button>
+            <Button
+              aria-label="Go to next task"
+              disabled={!canGoForward}
+              onClick={onForward}
+              size="icon-xs"
+              title="Next task"
+              variant="ghost"
+            >
+              <ChevronRightIcon />
+            </Button>
+          </div>
+        }
+      >
+        {!runsPending && enrichmentRuns.length === 0 && !investigating ? (
+          <IssueInvestigateProjectMenu
+            currentProjectId={issue.projectId}
+            disabledReason={investigateMenuBlock}
+            onSelect={handleInvestigate}
+            projects={investigationProjects}
+          >
+            <WandSparklesIcon />
+            Investigate
+          </IssueInvestigateProjectMenu>
+        ) : null}
+        <IssueDeleteMenu
+          count={1}
+          onConfirm={handleDelete}
+          trigger={
+            <Button
+              aria-label={`Delete ${issue.key}`}
+              className="text-muted-foreground hover:text-destructive-foreground"
+              size="icon-xs"
+              variant="ghost"
+            >
+              <Trash2Icon />
+            </Button>
+          }
+        />
+        {onOpenInIssues === undefined ? null : (
+          <Button
+            aria-label={`Open ${issue.key} in Tasks`}
+            onClick={() => onOpenInIssues(issue.key)}
+            size="icon-xs"
+            title={`Open ${issue.key} in Tasks`}
+            variant="ghost"
+          >
+            <ArrowUpRightIcon />
+          </Button>
+        )}
+      </SheetHeaderBar>
+
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <ScrollArea className="min-h-0 flex-1" scrollFade>
+          <div className="flex flex-col gap-4 p-4 @xl/issue-detail:flex-row @xl/issue-detail:gap-5">
+            <div className="flex min-w-0 flex-1 flex-col gap-4">
+              <Textarea
+                aria-label="Task title"
+                className={cn(GROWING_TEXTAREA_CLASS_NAME, "text-[15px] font-medium")}
+                rows={1}
+                {...titleProps}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && event.shiftKey) return;
+                  titleProps.onKeyDown(event);
+                }}
+              />
+
+              <IssueDescriptionEditor
+                onCommit={(description) => write(issueDescriptionPatch(issue, description))}
+                onPasteImages={attachmentDrafts.addFiles}
+                value={issue.description}
+              />
+
+              <IssueAttachments
+                cloud={attachmentCloud}
+                comments={comments}
+                drafts={attachmentDrafts}
+                issueId={issue.id}
+                onCreateComment={handleCreateComment}
+                onOpenImage={setViewedAttachmentId}
+                onRemoveAttachment={(commentId, attachmentId) => {
+                  const comment = comments.find((candidate) => candidate.id === commentId);
+                  if (comment === undefined) return;
+                  runWrite("Failed to remove the image", () =>
+                    updateComment({
+                      commentId,
+                      patch: {
+                        attachmentIds: comment.attachmentIds.filter(
+                          (candidate) => candidate !== attachmentId,
+                        ),
+                      },
+                    }),
+                  );
+                }}
+              />
+
+              <IssueDetailTabs
+                activityCount={events.length}
+                commentCount={discussionComments.length}
+                investigating={investigating}
+                investigationCount={enrichmentRuns.length}
+                onChange={setActiveTab}
+                value={activeTab}
+              />
+
+              {activeTab === "details" ? (
+                <div
+                  aria-labelledby="issue-details-tab"
+                  className="flex flex-col gap-4"
+                  id="issue-details-panel"
+                  role="tabpanel"
+                >
+                  <IssueSubIssues
+                    composerOpen={subIssueOpen}
+                    labels={labels}
+                    onComposerOpenChange={setSubIssueOpen}
+                    onOpenIssue={openIssue}
+                    parent={issue}
+                    rollup={childRollup}
+                    statusById={statusById}
+                    statuses={statuses}
+                    subIssues={childIssues}
+                  />
+
+                  {todos.length > 0 || showTodos ? (
+                    <IssueTodoList
+                      focusRequest={todoFocusRequest}
+                      onCreate={(text) =>
+                        runWrite("Failed to add the todo", () =>
+                          createTodo({ issueId: issue.id, text }),
+                        )
+                      }
+                      onDelete={(todoId: IssueTodoId) =>
+                        runWrite("Failed to delete the todo", () => deleteTodo({ todoId }))
+                      }
+                      onDismiss={todos.length === 0 ? () => setShowTodos(false) : undefined}
+                      onReorder={(todoIds: ReadonlyArray<IssueTodoId>) =>
+                        runWrite("Failed to reorder the todos", () =>
+                          reorderTodos({ issueId: issue.id, todoIds }),
+                        )
+                      }
+                      onUpdate={(todoId: IssueTodoId, patch: IssueTodoPatch) =>
+                        runWrite("Failed to update the todo", () => updateTodo({ todoId, patch }))
+                      }
+                      todos={todos}
+                    />
+                  ) : null}
+
+                  {relationDisplays.length > 0 || showRelations ? (
+                    <IssueRelationsSection
+                      displays={relationDisplays}
+                      issue={issue}
+                      issuesById={store.issuesById}
+                      onCreate={(input: IssueRelationCreateInput) =>
+                        runWrite("Failed to link the tasks", () => createRelation(input))
+                      }
+                      onDelete={handleDeleteRelation}
+                      onDismiss={
+                        relationDisplays.length === 0 ? () => setShowRelations(false) : undefined
+                      }
+                      onOpenIssue={openIssue}
+                      openRequest={relationOpenRequest}
+                      statusById={statusById}
+                    />
+                  ) : null}
+                </div>
+              ) : activeTab === "activity" ? (
+                <div
+                  aria-labelledby="issue-activity-tab"
+                  className="flex flex-col gap-4"
+                  id="issue-activity-panel"
+                  role="tabpanel"
+                >
+                  <IssueActivityFeed
+                    events={events}
+                    issueKeys={issueKeys}
+                    projectTitles={projectTitles}
+                  />
+                </div>
+              ) : activeTab === "comments" ? (
+                <div aria-labelledby="issue-comments-tab" id="issue-comments-panel" role="tabpanel">
+                  <IssueComments
+                    cloud={attachmentCloud}
+                    comments={discussionComments}
+                    instanceEntries={providerInstanceEntries}
+                    isPending={detailPending}
+                    issueId={issue.id}
+                    modelOptionsByInstance={startWorkModelOptionsByInstance}
+                    onCancelAgentRun={handleCancelCommentAgentRun}
+                    onCreate={handleCreateComment}
+                    onOpenImage={setViewedAttachmentId}
+                    onRetryAgentRun={handleRetryCommentAgentRun}
+                    onDelete={(commentId: IssueCommentId) =>
+                      runWrite("Failed to delete the comment", () => deleteComment({ commentId }))
+                    }
+                    onEdit={(comment, body) => {
+                      const patch = issueCommentUpdatePatch(comment, body);
+                      if (patch === null) return;
+                      runWrite("Failed to edit the comment", () =>
+                        updateComment({ commentId: comment.id, patch }),
+                      );
+                    }}
+                  />
+                </div>
+              ) : (
+                <div
+                  aria-labelledby="issue-investigation-tab"
+                  className="flex min-h-64 flex-col"
+                  id="issue-investigation-panel"
+                  role="tabpanel"
+                >
+                  <div className="flex items-start gap-3 border-b border-border/50 pb-3">
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-sm font-medium text-foreground">
+                        Repository investigation
+                      </h3>
+                      <p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
+                        Read-only analysis. Finished runs are also left in Comments.
+                      </p>
+                    </div>
+                    <IssueInvestigateProjectMenu
+                      currentProjectId={issue.projectId}
+                      disabledReason={investigateMenuBlock}
+                      onSelect={handleInvestigate}
+                      projects={investigationProjects}
+                    >
+                      {!investigating ? <WandSparklesIcon /> : <Spinner className="size-3.5" />}
+                      {!investigating
+                        ? enrichmentRuns.length === 0
+                          ? "Investigate"
+                          : "Investigate again"
+                        : "Investigating"}
+                    </IssueInvestigateProjectMenu>
+                  </div>
+                  <IssueEnrichmentPanel
+                    error={runsError}
+                    isPending={runsPending}
+                    issue={issue}
+                    issuesByKey={issuesByKey}
+                    labels={labels}
+                    onApplyDescription={(description) =>
+                      write(issueApplyDescriptionPatch(issue, description))
+                    }
+                    onApplyLabel={(labelId) => write(issueApplyLabelPatch(issue, labelId))}
+                    onApplyPriority={(priority) => write(issueApplyPriorityPatch(issue, priority))}
+                    onApplyTitle={(title) => write(issueApplyTitlePatch(issue, title))}
+                    onCancel={handleCancelRun}
+                    onOpenIssueKey={onOpenIssueKey}
+                    runs={enrichmentRuns}
+                  />
+                </div>
+              )}
+            </div>
+
+            <aside className="relative flex shrink-0 flex-col gap-3 border-t border-border/50 pt-3 @xl/issue-detail:w-[var(--issue-detail-properties-width)] @xl/issue-detail:border-t-0 @xl/issue-detail:border-s @xl/issue-detail:pt-0 @xl/issue-detail:ps-4">
+              <IssuePropertiesResizeHandle maxWidth={propertiesMaxWidth} size={propertiesSize} />
+              <IssueDetailProperties
+                companyId={companyId}
+                cycles={cycles}
+                environmentOptions={defaultEnvironmentOptions}
+                environmentValue={defaultProject?.physicalProjectKey ?? null}
+                issue={issue}
+                issues={store.issuesById}
+                labels={labels}
+                milestones={milestones}
+                onAssignee={(assignee: IssueAssignee | null) =>
+                  write(issueAssigneePatch(issue, assignee))
+                }
+                onCreateLabel={handleCreateLabel}
+                onCreateMilestone={handleCreateMilestone}
+                onCycle={(cycleId: IssueCycleId | null) => write(issueCyclePatch(issue, cycleId))}
+                onDueDate={(value: string) => write(issueDueDatePatch(issue, value))}
+                onEnvironment={handleDefaultEnvironment}
+                onMilestone={(milestoneId: IssueMilestoneId | null) =>
+                  write(issueMilestonePatch(issue, milestoneId))
+                }
+                onParent={(parentId: IssueId | null) => write(issueParentPatch(issue, parentId))}
+                onPriority={(priority: IssuePriority) => write(issuePriorityPatch(issue, priority))}
+                onProject={(projectId: ProjectId | null) =>
+                  write(issueProjectPatch(issue, projectId))
+                }
+                onStatus={(statusId: IssueStatusId) => write(issueStatusPatch(issue, statusId))}
+                onToggleLabel={(labelId: IssueLabelId) =>
+                  write(issueLabelTogglePatch(issue, labelId))
+                }
+                parent={parent}
+                projects={issueProjects}
+                projectTitle={projectTitle}
+                status={status}
+                statusById={statusById}
+                statuses={statuses}
+              />
+
+              <IssueAgentSection
+                key={project?.physicalProjectKey ?? "no-project"}
+                environmentOptions={environmentOptions}
+                environmentValue={project?.physicalProjectKey ?? null}
+                initialModelSelection={initialStartWorkModelSelection}
+                instanceEntries={startWorkInstanceEntries}
+                issue={issue}
+                links={threadLinks}
+                modelOptionsByInstance={startWorkModelOptionsByInstance}
+                currentBranch={currentProjectBranch}
+                branchRefs={startWorkBranchRefs}
+                branchesPending={startWorkBranches.isPending && startWorkBranches.data === null}
+                newWorktreeBlockReason={newWorktreeBlockReason}
+                onCreatePendingThread={handleCreatePendingThread}
+                onEnvironment={setLaunchPhysicalProjectKey}
+                onOpenThread={handleOpenThread}
+                onStartWork={handleStartWork}
+                onUnlinkThread={handleUnlinkThread}
+                starting={startingWork}
+                startWorkBlockReason={
+                  project?.workspaceRoot == null
+                    ? ISSUE_INVESTIGATE_BLOCK_REASONS["no-project"]
+                    : agentEnvironmentBlockReason !== null
+                      ? agentEnvironmentBlockReason
+                      : storeStatus === "disconnected"
+                        ? ISSUE_INVESTIGATE_BLOCK_REASONS.disconnected
+                        : !startWorkAttachmentsReady
+                          ? "Task images are still loading."
+                          : null
+                }
+                threadsById={threadsById}
+              />
+
+              <dl className="flex flex-col gap-1 border-t border-border/50 pt-3 text-[11px] text-muted-foreground">
+                <div className="flex items-center gap-1.5">
+                  <dt className="w-14 shrink-0">Key</dt>
+                  <dd className="font-mono">{issue.key}</dd>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <dt className="w-14 shrink-0">Created</dt>
+                  <dd title={formatChatTimestampTooltip(issue.createdAt, timestampFormat)}>
+                    {formatRelativeTimeLabel(issue.createdAt)}
+                  </dd>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <dt className="w-14 shrink-0">Updated</dt>
+                  <dd title={formatChatTimestampTooltip(issue.updatedAt, timestampFormat)}>
+                    {formatRelativeTimeLabel(issue.updatedAt)}
+                  </dd>
+                </div>
+              </dl>
+
+              <IssueActionPanel
+                onAddRelation={handleAddRelation}
+                onAddSubIssue={handleAddSubIssue}
+                onAddTodo={handleAddTodo}
+                onTalkAboutIssue={handleTalkAboutIssue}
+                talkAboutIssueBlockReason={talkAboutIssueBlockReason}
+              />
+            </aside>
+          </div>
+        </ScrollArea>
+      </div>
+      {viewedAttachmentId === null ||
+      (attachmentCloud === null && agentEnvironmentId === null) ? null : (
+        <IssueImageViewer
+          attachmentIds={galleryAttachmentIds}
+          cloud={attachmentCloud}
+          environmentId={agentEnvironmentId}
+          issueId={issue.id}
+          onClose={() => setViewedAttachmentId(null)}
+          onComment={(body, attachmentId) => handleCreateComment(body, [attachmentId])}
+          onStartThread={handleStartThreadWithImage}
+          selectedAttachmentId={viewedAttachmentId}
+          startThreadDisabled={talkAboutIssueBlockReason !== null}
+        />
+      )}
+    </div>
+  );
+}
+
+function IssuePropertiesResizeHandle({
+  maxWidth,
+  size,
+}: {
+  maxWidth: number;
+  size: ReturnType<typeof useResizableWidth>;
+}) {
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const nextWidth =
+      event.key === "ArrowLeft"
+        ? size.width + ISSUE_DETAIL_PROPERTIES_KEYBOARD_STEP
+        : event.key === "ArrowRight"
+          ? size.width - ISSUE_DETAIL_PROPERTIES_KEYBOARD_STEP
+          : event.key === "Home"
+            ? ISSUE_DETAIL_PROPERTIES_MIN_WIDTH
+            : event.key === "End"
+              ? maxWidth
+              : null;
+    if (nextWidth === null) return;
+    event.preventDefault();
+    size.resizeTo(nextWidth);
+  };
+
+  return (
+    <div
+      aria-label="Resize task properties"
+      aria-orientation="vertical"
+      aria-valuemax={maxWidth}
+      aria-valuemin={ISSUE_DETAIL_PROPERTIES_MIN_WIDTH}
+      aria-valuenow={size.width}
+      className="group absolute inset-y-0 -left-2 z-20 hidden w-4 cursor-col-resize touch-none select-none outline-none @xl/issue-detail:block focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+      onDoubleClick={() => size.resizeTo(ISSUE_DETAIL_PROPERTIES_DEFAULT_WIDTH)}
+      onKeyDown={onKeyDown}
+      role="separator"
+      tabIndex={0}
+      title="Drag to resize task properties"
+      {...size.handlers}
+    >
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-y-0 start-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-border group-focus-visible:bg-primary/60 group-active:bg-primary/60"
+      />
+    </div>
+  );
+}

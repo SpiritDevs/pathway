@@ -1,0 +1,3 @@
+# Native iOS thread timeline prioritizes conversation over work events
+
+The native iOS Agent Thread timeline renders the complete Pathway orchestration projection without copying T3's visual design. User and agent messages are primary, streamed Markdown updates in place, and attachments remain associated with their messages. Approvals and user-input requests expand automatically because they require action; reasoning, tool calls, command output, file changes, subagent activity, and source-control events remain chronological but use compact expandable work cards. Diff summaries stay visible with full patches available on demand, while errors and interruptions remain inline where they occurred.

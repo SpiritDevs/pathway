@@ -1,0 +1,280 @@
+import type {
+  RelayClientEnvironmentRecord,
+  RelayEnvironmentLinkProofPayload,
+  RelayEnvironmentLinkRequest,
+  RelayManagedEndpoint,
+} from "@spiritdevs/contracts/relay";
+import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+
+import { api } from "@spiritdevs/backend/convexApi";
+import { RelayConvexClient } from "../db.ts";
+
+export interface RelayLinkedEnvironmentRecord extends RelayClientEnvironmentRecord {
+  readonly environmentPublicKey: string;
+}
+
+export interface AgentAwarenessDeliveryUserRecord {
+  readonly userId: string;
+  readonly notificationsEnabled: boolean;
+  readonly liveActivitiesEnabled: boolean;
+}
+
+export class EnvironmentLinkUpsertPersistenceError extends Schema.TaggedErrorClass<EnvironmentLinkUpsertPersistenceError>()(
+  "EnvironmentLinkUpsertPersistenceError",
+  {
+    userId: Schema.String,
+    environmentId: Schema.String,
+    deviceId: Schema.optionalKey(Schema.String),
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return `Failed to persist environment link for user '${this.userId}', environment '${this.environmentId}'`;
+  }
+}
+
+export class EnvironmentLinkUserListPersistenceError extends Schema.TaggedErrorClass<EnvironmentLinkUserListPersistenceError>()(
+  "EnvironmentLinkUserListPersistenceError",
+  {
+    operation: Schema.Literals(["list-users", "list-delivery-users"]),
+    environmentId: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return `Environment link user query '${this.operation}' failed for environment '${this.environmentId}'`;
+  }
+}
+
+export class EnvironmentPublicKeyListPersistenceError extends Schema.TaggedErrorClass<EnvironmentPublicKeyListPersistenceError>()(
+  "EnvironmentPublicKeyListPersistenceError",
+  {
+    environmentId: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return `Failed to list public keys for environment '${this.environmentId}'`;
+  }
+}
+
+export class EnvironmentLinkListPersistenceError extends Schema.TaggedErrorClass<EnvironmentLinkListPersistenceError>()(
+  "EnvironmentLinkListPersistenceError",
+  {
+    userId: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return `Failed to list environment links for user '${this.userId}'`;
+  }
+}
+
+export class EnvironmentLinkLookupPersistenceError extends Schema.TaggedErrorClass<EnvironmentLinkLookupPersistenceError>()(
+  "EnvironmentLinkLookupPersistenceError",
+  {
+    userId: Schema.String,
+    environmentId: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return `Failed to look up environment link for user '${this.userId}', environment '${this.environmentId}'`;
+  }
+}
+
+export class EnvironmentLinkRevokePersistenceError extends Schema.TaggedErrorClass<EnvironmentLinkRevokePersistenceError>()(
+  "EnvironmentLinkRevokePersistenceError",
+  {
+    userId: Schema.String,
+    environmentId: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return `Failed to revoke environment link for user '${this.userId}', environment '${this.environmentId}'`;
+  }
+}
+
+export class EnvironmentLinks extends Context.Service<
+  EnvironmentLinks,
+  {
+    readonly upsert: (input: {
+      readonly userId: string;
+      readonly request: RelayEnvironmentLinkRequest;
+      readonly proof: RelayEnvironmentLinkProofPayload;
+      readonly endpoint: RelayManagedEndpoint;
+    }) => Effect.Effect<void, EnvironmentLinkUpsertPersistenceError>;
+    readonly listUsersForEnvironment: (input: {
+      readonly environmentId: string;
+    }) => Effect.Effect<ReadonlyArray<string>, EnvironmentLinkUserListPersistenceError>;
+    readonly listDeliveryUsersForEnvironment: (input: {
+      readonly environmentId: string;
+      readonly environmentPublicKey: string;
+      readonly conversationCompanyId?: string;
+    }) => Effect.Effect<
+      ReadonlyArray<AgentAwarenessDeliveryUserRecord>,
+      EnvironmentLinkUserListPersistenceError
+    >;
+    readonly listPublicKeysForEnvironment: (input: {
+      readonly environmentId: string;
+    }) => Effect.Effect<ReadonlyArray<string>, EnvironmentPublicKeyListPersistenceError>;
+    readonly listForUser: (input: {
+      readonly userId: string;
+    }) => Effect.Effect<
+      ReadonlyArray<RelayClientEnvironmentRecord>,
+      EnvironmentLinkListPersistenceError
+    >;
+    readonly getForUser: (input: {
+      readonly userId: string;
+      readonly environmentId: string;
+    }) => Effect.Effect<RelayLinkedEnvironmentRecord | null, EnvironmentLinkLookupPersistenceError>;
+    readonly revokeForUser: (input: {
+      readonly userId: string;
+      readonly environmentId: string;
+    }) => Effect.Effect<boolean, EnvironmentLinkRevokePersistenceError>;
+  }
+>()("pathway-relay/environments/EnvironmentLinks") {}
+
+const make = Effect.gen(function* () {
+  const client = yield* RelayConvexClient;
+
+  return EnvironmentLinks.of({
+    upsert: Effect.fn("relay.environment_links.upsert")(function* (input) {
+      yield* Effect.annotateCurrentSpan({
+        "relay.environment_id": input.proof.environmentId,
+      });
+      const now = DateTime.formatIso(yield* DateTime.now);
+      const { request, proof, endpoint } = input;
+      const environmentId = proof.environmentId;
+      yield* client
+        .mutation(api.relayPersistence.upsertEnvironmentLink, {
+          userId: input.userId,
+          environmentId,
+          environmentLabel: proof.descriptor.label,
+          environmentPublicKey: proof.environmentPublicKey,
+          endpointHttpBaseUrl: endpoint.httpBaseUrl,
+          endpointWsBaseUrl: endpoint.wsBaseUrl,
+          endpointProviderKind: endpoint.providerKind,
+          notificationsEnabled: request.notificationsEnabled,
+          liveActivitiesEnabled: request.liveActivitiesEnabled,
+          managedTunnelsEnabled: request.managedTunnelsEnabled,
+          createdByDeviceId: request.deviceId ?? null,
+          now,
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new EnvironmentLinkUpsertPersistenceError({
+                userId: input.userId,
+                environmentId,
+                ...(request.deviceId === undefined ? {} : { deviceId: request.deviceId }),
+                cause,
+              }),
+          ),
+        );
+    }),
+
+    listUsersForEnvironment: Effect.fn("relay.environment_links.list_users_for_environment")(
+      function* (input) {
+        yield* Effect.annotateCurrentSpan({ "relay.environment_id": input.environmentId });
+        return yield* client.query(api.relayPersistence.listUsersForEnvironment, input).pipe(
+          Effect.mapError(
+            (cause) =>
+              new EnvironmentLinkUserListPersistenceError({
+                operation: "list-users",
+                environmentId: input.environmentId,
+                cause,
+              }),
+          ),
+        );
+      },
+    ),
+
+    listDeliveryUsersForEnvironment: Effect.fn(
+      "relay.environment_links.list_delivery_users_for_environment",
+    )(function* (input) {
+      yield* Effect.annotateCurrentSpan({ "relay.environment_id": input.environmentId });
+      return yield* client.query(api.relayPersistence.listDeliveryUsersForEnvironment, input).pipe(
+        Effect.mapError(
+          (cause) =>
+            new EnvironmentLinkUserListPersistenceError({
+              operation: "list-delivery-users",
+              environmentId: input.environmentId,
+              cause,
+            }),
+        ),
+      );
+    }),
+
+    listPublicKeysForEnvironment: Effect.fn(
+      "relay.environment_links.list_public_keys_for_environment",
+    )(function* (input) {
+      yield* Effect.annotateCurrentSpan({ "relay.environment_id": input.environmentId });
+      return yield* client.query(api.relayPersistence.listPublicKeysForEnvironment, input).pipe(
+        Effect.mapError(
+          (cause) =>
+            new EnvironmentPublicKeyListPersistenceError({
+              environmentId: input.environmentId,
+              cause,
+            }),
+        ),
+      );
+    }),
+
+    listForUser: Effect.fn("relay.environment_links.list_for_user")(function* (input) {
+      return yield* client.query(api.relayPersistence.listEnvironmentLinksForUser, input).pipe(
+        Effect.map((rows) => rows as unknown as ReadonlyArray<RelayClientEnvironmentRecord>),
+        Effect.mapError(
+          (cause) =>
+            new EnvironmentLinkListPersistenceError({
+              userId: input.userId,
+              cause,
+            }),
+        ),
+      );
+    }),
+
+    getForUser: Effect.fn("relay.environment_links.get_for_user")(function* (input) {
+      yield* Effect.annotateCurrentSpan({
+        "relay.environment_id": input.environmentId,
+      });
+      return yield* client.query(api.relayPersistence.getEnvironmentLinkForUser, input).pipe(
+        Effect.map((row) => row as unknown as RelayLinkedEnvironmentRecord | null),
+        Effect.mapError(
+          (cause) =>
+            new EnvironmentLinkLookupPersistenceError({
+              userId: input.userId,
+              environmentId: input.environmentId,
+              cause,
+            }),
+        ),
+      );
+    }),
+
+    revokeForUser: Effect.fn("relay.environment_links.revoke_for_user")(function* (input) {
+      yield* Effect.annotateCurrentSpan({
+        "relay.environment_id": input.environmentId,
+      });
+      const revokedAt = DateTime.formatIso(yield* DateTime.now);
+      return yield* client
+        .mutation(api.relayPersistence.revokeEnvironmentLink, { ...input, now: revokedAt })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new EnvironmentLinkRevokePersistenceError({
+                userId: input.userId,
+                environmentId: input.environmentId,
+                cause,
+              }),
+          ),
+        );
+    }),
+  });
+});
+
+export const layer = Layer.effect(EnvironmentLinks, make);

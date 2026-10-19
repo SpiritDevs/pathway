@@ -1,22 +1,37 @@
-// FILE: ComputerSetupRequiredCard.tsx
-// Purpose: Shows the current desktop permission state and an explicit setup action.
-// Layer: Chat transcript UI
+// Transcript card that shows the desktop's current permission state and an
+// explicit setup action, raised when an agent reached for Computer and the
+// desktop was not ready.
 
-import { useQuery } from "@tanstack/react-query";
-import { useProvisionComputer } from "~/hooks/useProvisionComputer";
-import { useRefreshOnWindowReturn } from "~/hooks/useRefreshOnWindowReturn";
-import {
-  computerStatusQueryOptions,
-  COMPUTER_STATUS_VISIBLE_REFETCH_INTERVAL_MS,
-} from "~/lib/serverReactQuery";
-import { computerStatusNeedsSetup, resolveComputerAvailabilityView } from "../ComputerPanel.logic";
 import type {
   ComputerBuildSignature,
   ComputerPermission,
   ComputerStatusResult,
-} from "@synara/contracts";
-import { computerStaleGrantAdvice, listComputerPermissions } from "@synara/shared/computerGrants";
+  EnvironmentId,
+} from "@spiritdevs/contracts";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@spiritdevs/client-runtime/state/runtime";
+import {
+  computerStaleGrantAdvice,
+  listComputerPermissions,
+} from "@spiritdevs/shared/computerGrants";
+import { useNavigate } from "@tanstack/react-router";
+import { useCallback, useEffect, useState } from "react";
 
+import {
+  computerEnvironmentFence,
+  useCachedComputerStatus,
+  useComputerStateStore,
+} from "~/computerStateStore";
+import { useComputerStatusRefresh } from "~/hooks/useComputerStatusRefresh";
+import { useProvisionComputer } from "~/hooks/useProvisionComputer";
+import {
+  computerStatusNeedsSetup,
+  resolveComputerAvailabilityView,
+} from "~/lib/computerProvisioning";
+import { computerEnvironment } from "~/state/computer";
+import { useAtomCommand } from "~/state/use-atom-command";
 import { ComputerActionCard } from "./ComputerActionCard";
 
 export function ComputerSetupRequiredCard({
@@ -27,45 +42,43 @@ export function ComputerSetupRequiredCard({
   status,
   statusError,
   isPending = false,
-  textFontSizePx,
-  metaFontSizePx,
   onSetUp,
   onRecheck,
+  onOpenSettings,
 }: {
   /**
    * The grants the OS is withholding. Naming them is most of this card's value:
-   * "a permission Synara needs" sends the user hunting through Privacy &
+   * "a permission Pathway needs" sends the user hunting through Privacy &
    * Security, while "Accessibility" tells them exactly which switch to find.
    * Empty when the backend refused without naming one.
    */
-  readonly missing?: readonly ComputerPermission[];
+  readonly missing?: readonly ComputerPermission[] | undefined;
   /**
-   * How this Synara is signed. On a locally built copy the missing grant may be
+   * How this Pathway is signed. On a locally built copy the missing grant may be
    * one macOS still lists as given — pinned to a binary a rebuild replaced —
    * which is the difference between "grant it" and "the switch lies to you".
    */
-  readonly buildSignature?: ComputerBuildSignature;
+  readonly buildSignature?: ComputerBuildSignature | undefined;
   /**
-   * The app macOS files this Synara's grants against, as the server reported it.
-   * The stale-grant advice names it in a `tccutil reset`, and there is no safe
-   * default: the `.dev` and `.canary` flavors are separate bundle identifiers,
-   * so guessing the released one hands the user a command that revokes a
-   * different Synara's working permissions. Absent means the advice omits the
-   * command entirely.
+   * The app macOS files this Pathway's grants against, as the server reported
+   * it. The stale-grant advice names it in a `tccutil reset`, and there is no
+   * safe default: dev and release builds are separate bundle identifiers, so a
+   * guess could revoke a different Pathway's working permissions. Absent means
+   * the advice omits the command entirely.
    */
-  readonly bundleId?: string;
+  readonly bundleId?: string | undefined;
   // Live setup state, derived from the desktop's current availability rather
   // than remembered from a button press: once the grants land — including when
   // the user simply allows the dialog macOS already showed — the card flips to a
   // confirmation instead of offering a button that would do nothing.
   readonly computerControlReady?: boolean;
-  readonly status?: ComputerStatusResult;
-  readonly statusError?: string;
+  readonly status?: ComputerStatusResult | undefined;
+  readonly statusError?: string | undefined;
   readonly isPending?: boolean;
-  readonly textFontSizePx?: number;
-  readonly metaFontSizePx?: number;
-  readonly onSetUp?: () => void;
-  readonly onRecheck?: () => void;
+  readonly onSetUp?: (() => void) | undefined;
+  readonly onRecheck?: (() => void) | undefined;
+  /** Opens Settings → Computer. */
+  readonly onOpenSettings?: (() => void) | undefined;
 }) {
   const ready =
     !statusError &&
@@ -99,13 +112,16 @@ export function ComputerSetupRequiredCard({
     : ready
       ? "Send a message and the agent will pick up where it left off."
       : missingLabels
-        ? "Choose Set up to request missing permissions or open System Settings. Allow access for this Synara app, then return here to recheck."
+        ? "Choose Set up to request missing permissions or open System Settings. Allow access for this Pathway app, then return here to recheck."
         : (availabilityView?.description ??
           "Choose Set up to check permissions and prepare computer control.");
+  // "Checking" ends by itself once the server knows its desktop; Set up would
+  // only race that detection.
   const canSetUp =
     !ready &&
     !statusError &&
     availability?.kind !== "unsupported-platform" &&
+    availability?.kind !== "checking" &&
     status?.provisionable !== false;
   // Only ever non-null on a locally built copy with a grant outstanding: on a
   // signed build the switch in System Settings means what it says, and the
@@ -118,8 +134,6 @@ export function ComputerSetupRequiredCard({
     <ComputerActionCard
       tone={statusError ? "error" : ready ? "success" : "warning"}
       title={title}
-      textFontSizePx={textFontSizePx}
-      metaFontSizePx={metaFontSizePx}
       action={
         onSetUp && canSetUp
           ? { label: isPending ? "Setting up…" : "Set up", disabled: isPending, onClick: onSetUp }
@@ -130,46 +144,91 @@ export function ComputerSetupRequiredCard({
     >
       <p>{description}</p>
       {staleGrantAdvice ? <p>{staleGrantAdvice}</p> : null}
+      {onOpenSettings && !ready ? (
+        <p>
+          <button
+            type="button"
+            className="font-medium text-foreground underline-offset-4 hover:underline"
+            onClick={onOpenSettings}
+          >
+            Open Computer settings
+          </button>
+        </p>
+      ) : null}
     </ComputerActionCard>
   );
 }
 
-/** The desktop is shared, so setup status is independent of the selected chat. */
-export function ConnectedComputerSetupRequiredCard(
-  props: Parameters<typeof ComputerSetupRequiredCard>[0],
-) {
-  const statusQuery = useQuery({
-    ...computerStatusQueryOptions(),
-    refetchInterval: COMPUTER_STATUS_VISIBLE_REFETCH_INTERVAL_MS,
+type ConnectedProps = Pick<
+  Parameters<typeof ComputerSetupRequiredCard>[0],
+  "missing" | "buildSignature" | "bundleId" | "onOpenSettings"
+> & { readonly environmentId: EnvironmentId };
+
+/**
+ * The desktop is shared by every chat on the environment, so the card reads
+ * the environment's live status rather than the notice's snapshot.
+ */
+export function ConnectedComputerSetupRequiredCard({ environmentId, ...props }: ConnectedProps) {
+  const navigate = useNavigate();
+  const openSettings = useCallback(() => {
+    void navigate({ to: "/settings/computer" });
+  }, [navigate]);
+  const status = useCachedComputerStatus(environmentId);
+  const refreshStatus = useAtomCommand(computerEnvironment.refreshStatus, {
+    reportFailure: false,
   });
-  const status = statusQuery.data;
-  useRefreshOnWindowReturn(() => statusQuery.refetch({ cancelRefetch: false }));
+  const [statusError, setStatusError] = useState<string | undefined>(undefined);
+  const recheck = useCallback(() => {
+    const isCurrent = computerEnvironmentFence(environmentId);
+    void refreshStatus({ environmentId, input: {} }).then((outcome) => {
+      if (!isCurrent()) return;
+      if (outcome._tag === "Success") {
+        useComputerStateStore.getState().setStatus(environmentId, outcome.value);
+        setStatusError(undefined);
+        return;
+      }
+      if (isAtomCommandInterrupted(outcome)) return;
+      const error = squashAtomCommandFailure(outcome);
+      setStatusError(
+        error instanceof Error && error.message
+          ? error.message
+          : "Could not check computer access. Try again.",
+      );
+    });
+  }, [environmentId, refreshStatus]);
+  const hasStatus = status !== undefined;
+  // Read once when no other surface has asked yet; after that the 10-second
+  // refresh and pushed status events keep it current.
+  useEffect(() => {
+    if (!hasStatus) recheck();
+  }, [hasStatus, recheck]);
+  const ready =
+    status !== undefined &&
+    status.availability.kind === "available" &&
+    status.health.status === "connected" &&
+    !computerStatusNeedsSetup(status);
+  useComputerStatusRefresh({
+    refreshStatus: recheck,
+    paused: ready || statusError !== undefined,
+  });
   const missing = status
     ? status.availability.kind === "permission-required"
       ? status.availability.missing
       : []
     : props.missing;
-  const setup = useProvisionComputer({
+  const setup = useProvisionComputer(environmentId, {
     ...(missing ? { missing } : {}),
     notify: true,
   });
   return (
-    <div className="space-y-2">
-      <ComputerSetupRequiredCard
-        {...props}
-        {...(status ? { status } : {})}
-        {...(statusQuery.isError
-          ? {
-              statusError:
-                statusQuery.error instanceof Error && statusQuery.error.message
-                  ? statusQuery.error.message
-                  : "Could not check computer access. Try again.",
-            }
-          : {})}
-        isPending={setup.isPending}
-        onSetUp={setup.provision}
-        onRecheck={() => void statusQuery.refetch()}
-      />
-    </div>
+    <ComputerSetupRequiredCard
+      onOpenSettings={openSettings}
+      {...props}
+      status={status}
+      statusError={statusError}
+      isPending={setup.isPending}
+      onSetUp={setup.provision}
+      onRecheck={recheck}
+    />
   );
 }

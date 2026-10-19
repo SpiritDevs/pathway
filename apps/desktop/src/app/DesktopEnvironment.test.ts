@@ -1,0 +1,261 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { assert, describe, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+
+import * as DesktopEnvironment from "./DesktopEnvironment.ts";
+import * as DesktopConfig from "./DesktopConfig.ts";
+
+const defaultInput = {
+  dirname: "/repo/apps/desktop/dist-electron",
+  homeDirectory: "/Users/alice",
+  platform: "darwin",
+  processArch: "arm64",
+  appVersion: "0.0.22",
+  appPath: "/Applications/Pathway.app/Contents/Resources/app.asar",
+  isPackaged: false,
+  resourcesPath: "/Applications/Pathway.app/Contents/Resources",
+  runningUnderArm64Translation: false,
+} satisfies DesktopEnvironment.MakeDesktopEnvironmentInput;
+
+const makeEnvironmentLayer = (
+  overrides: Partial<DesktopEnvironment.MakeDesktopEnvironmentInput> = {},
+  env: Record<string, string | undefined> = {},
+) =>
+  DesktopEnvironment.layer({
+    ...defaultInput,
+    ...overrides,
+  }).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, DesktopConfig.layerTest(env))));
+
+const makeEnvironment = (
+  overrides: Partial<DesktopEnvironment.MakeDesktopEnvironmentInput> = {},
+  env: Record<string, string | undefined> = {},
+) =>
+  DesktopEnvironment.DesktopEnvironment.pipe(Effect.provide(makeEnvironmentLayer(overrides, env)));
+
+describe("DesktopEnvironment", () => {
+  it.effect("derives state paths and development identity inside Effect", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment(
+        {},
+        {
+          PATHWAY_HOME: " /tmp/pathway ",
+          PATHWAY_COMMIT_HASH: " 0123456789abcdef ",
+          PATHWAY_PORT: "4949",
+          VITE_DEV_SERVER_URL: "http://localhost:5173",
+          PATHWAY_DEV_REMOTE_PATHWAY_SERVER_ENTRY_PATH: " /remote/server.mjs ",
+          PATHWAY_OTLP_TRACES_URL: " http://127.0.0.1:4318/v1/traces ",
+          PATHWAY_OTLP_EXPORT_INTERVAL_MS: "2500",
+        },
+      );
+
+      assert.equal(environment.isDevelopment, true);
+      assert.equal(environment.appDataDirectory, "/Users/alice/Library/Application Support");
+      assert.equal(environment.baseDir, "/tmp/pathway");
+      assert.equal(environment.stateDir, "/tmp/pathway/userdata");
+      assert.equal(environment.hostEnvironmentIdPath, "/tmp/pathway/desktop-environment-id");
+      assert.equal(environment.desktopSettingsPath, "/tmp/pathway/userdata/desktop-settings.json");
+      assert.equal(environment.clientSettingsPath, "/tmp/pathway/userdata/client-settings.json");
+      assert.equal(
+        environment.savedEnvironmentRegistryPath,
+        "/tmp/pathway/userdata/saved-environments.json",
+      );
+      assert.equal(environment.serverSettingsPath, "/tmp/pathway/userdata/settings.json");
+      assert.equal(environment.logDir, "/tmp/pathway/userdata/logs");
+      assert.equal(environment.browserArtifactsDir, "/tmp/pathway/userdata/browser-artifacts");
+      assert.equal(environment.rootDir, "/repo");
+      assert.equal(environment.appRoot, "/repo");
+      assert.equal(environment.backendEntryPath, "/repo/apps/server/dist/bin.mjs");
+      assert.equal(environment.backendCwd, "/repo");
+      assert.isUndefined(environment.bundledRendererDirectory);
+      assert.equal(environment.appUserModelId, "com.spiritdevs.pathway.dev");
+      assert.equal(environment.linuxWmClass, "pathway-dev");
+      assert.equal(environment.linuxDesktopEntryName, "com.spiritdevs.Pathway.Development.desktop");
+      assert.deepEqual(
+        Option.map(environment.devServerUrl, (url) => url.href),
+        Option.some("http://localhost:5173/"),
+      );
+      assert.deepEqual(
+        environment.devRemotePathwayServerEntryPath,
+        Option.some("/remote/server.mjs"),
+      );
+      assert.deepEqual(environment.configuredBackendPort, Option.some(4949));
+      assert.deepEqual(environment.commitHashOverride, Option.some("0123456789abcdef"));
+      assert.deepEqual(environment.otlpTracesUrl, Option.some("http://127.0.0.1:4318/v1/traces"));
+      assert.equal(environment.otlpExportIntervalMs, 2500);
+    }),
+  );
+
+  it.effect("stores production state under userdata in an explicit home", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment(
+        {},
+        {
+          PATHWAY_HOME: "/tmp/pathway",
+        },
+      );
+
+      assert.equal(environment.isDevelopment, false);
+      assert.equal(environment.stateDir, "/tmp/pathway/userdata");
+      assert.equal(environment.logDir, "/tmp/pathway/userdata/logs");
+      assert.equal(environment.browserArtifactsDir, "/tmp/pathway/userdata/browser-artifacts");
+      assert.equal(environment.serverSettingsPath, "/tmp/pathway/userdata/settings.json");
+      assert.equal(environment.userDataDirName, "pathway");
+      assert.equal(environment.legacyUserDataDirName, "Pathway (Alpha)");
+    }),
+  );
+
+  it.effect("uses worktree backend paths when the native development app reports packaged", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment(
+        { isPackaged: true, appPath: "/repo/apps/desktop/dist-electron" },
+        { VITE_DEV_SERVER_URL: "http://localhost:5173" },
+      );
+
+      assert.equal(environment.isPackaged, true);
+      assert.equal(environment.isDevelopment, true);
+      assert.equal(environment.appRoot, "/repo");
+      assert.equal(environment.backendEntryPath, "/repo/apps/server/dist/bin.mjs");
+      assert.equal(environment.backendCwd, "/repo");
+      assert.isUndefined(environment.bundledRendererDirectory);
+    }),
+  );
+
+  it.effect("uses bundled backend paths in a packaged release", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment({ isPackaged: true });
+
+      assert.equal(environment.isDevelopment, false);
+      assert.equal(environment.appRoot, defaultInput.appPath);
+      assert.equal(
+        environment.backendEntryPath,
+        "/Applications/Pathway.app/Contents/Resources/app.asar/apps/server/dist/bin.mjs",
+      );
+      assert.equal(environment.backendCwd, "/Users/alice");
+      assert.equal(
+        environment.bundledRendererDirectory,
+        "/Applications/Pathway.app/Contents/Resources/app.asar/apps/server/dist/client",
+      );
+    }),
+  );
+
+  it.effect("uses the stable desktop entry as the packaged Linux portal identity", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment({
+        platform: "linux",
+        isPackaged: true,
+        appPath: "/tmp/.mount_pathway/resources/app.asar",
+        resourcesPath: "/tmp/.mount_pathway/resources",
+      });
+
+      assert.equal(environment.linuxDesktopEntryName, "com.spiritdevs.Pathway.desktop");
+    }),
+  );
+
+  it.effect("isolates every OS-facing name and default state in the cua flavor", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment({ isPackaged: true, flavor: "cua" });
+
+      assert.equal(environment.flavor, "cua");
+      assert.equal(environment.desktopScheme, "pathway-cua");
+      assert.equal(environment.baseDir, "/Users/alice/.pathway-cua");
+      assert.equal(environment.stateDir, "/Users/alice/.pathway-cua/userdata");
+      assert.equal(environment.userDataDirName, "pathway-cua");
+      assert.equal(environment.legacyUserDataDirName, "pathway-cua");
+      assert.equal(environment.displayName, "Pathway Cua");
+      assert.equal(environment.appUserModelId, "com.spiritdevs.pathway.cua");
+      assert.equal(environment.linuxWmClass, "pathway-cua");
+      assert.equal(environment.linuxDesktopEntryName, "com.spiritdevs.Pathway.Cua.desktop");
+    }),
+  );
+
+  it.effect("keeps the cua flavor in its own home whatever PATHWAY_HOME says", () =>
+    Effect.gen(function* () {
+      for (const pathwayHome of [
+        "/Users/alice/.pathway",
+        "~/.pathway",
+        "~\\.pathway",
+        ".pathway",
+        "/Users/alice/.PATHWAY",
+        "/tmp/cua-home",
+      ]) {
+        const environment = yield* makeEnvironment(
+          { isPackaged: true, flavor: "cua" },
+          { PATHWAY_HOME: pathwayHome },
+        );
+        assert.equal(environment.baseDir, "/Users/alice/.pathway-cua", pathwayHome);
+        assert.equal(environment.stateDir, "/Users/alice/.pathway-cua/userdata", pathwayHome);
+      }
+    }),
+  );
+
+  it.effect("lets production adopt PATHWAY_HOME=~/.pathway", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment(
+        { isPackaged: true },
+        { PATHWAY_HOME: "/Users/alice/.pathway" },
+      );
+
+      assert.equal(environment.baseDir, "/Users/alice/.pathway");
+    }),
+  );
+
+  it.effect("keeps production names when no flavor is packaged", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment({ isPackaged: true });
+
+      assert.equal(environment.flavor, "production");
+      assert.equal(environment.desktopScheme, "pathway");
+      assert.equal(environment.baseDir, "/Users/alice/.pathway");
+      assert.equal(environment.displayName, "Pathway (Alpha)");
+    }),
+  );
+
+  it.effect("keeps implicit development state separate from production state", () =>
+    Effect.gen(function* () {
+      const development = yield* makeEnvironment(
+        {},
+        { VITE_DEV_SERVER_URL: "http://localhost:5173" },
+      );
+      const production = yield* makeEnvironment();
+
+      assert.equal(development.stateDir, "/Users/alice/.pathway/dev");
+      assert.equal(production.stateDir, "/Users/alice/.pathway/userdata");
+    }),
+  );
+
+  it.effect("uses a configured app user model id override", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment(
+        {},
+        {
+          PATHWAY_DESKTOP_APP_USER_MODEL_ID: " com.spiritdevs.pathway.dev.local ",
+          VITE_DEV_SERVER_URL: "http://localhost:5173",
+        },
+      );
+
+      assert.equal(environment.appUserModelId, "com.spiritdevs.pathway.dev.local");
+    }),
+  );
+
+  it.effect("resolves picker defaults without nullish sentinels", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment();
+
+      assert.deepEqual(environment.resolvePickFolderDefaultPath(null), Option.none());
+      assert.deepEqual(
+        environment.resolvePickFolderDefaultPath({ initialPath: " " }),
+        Option.none(),
+      );
+      assert.deepEqual(
+        environment.resolvePickFolderDefaultPath({ initialPath: "~" }),
+        Option.some("/Users/alice"),
+      );
+      assert.deepEqual(
+        environment.resolvePickFolderDefaultPath({ initialPath: "~/project" }),
+        Option.some("/Users/alice/project"),
+      );
+    }),
+  );
+});

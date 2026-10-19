@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 
-import { IsoDateTime, NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas";
+import { IsoDateTime, NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 // ── WebSocket surface ────────────────────────────────────────────────
 
@@ -119,8 +119,8 @@ export const COMPUTER_SEMANTIC_ACTION_MAX_LENGTH = 256;
 export const COMPUTER_SELECT_TEXT_RANGE_MAX = 4 * 1024 * 1024;
 
 /**
- * Thread-activity kind appended by the agent gateway when a computer tool call
- * failed because the OS has not granted Synara the privacy permissions the
+ * Thread-activity kind appended by the Computer MCP toolkit when a computer tool call
+ * failed because the OS has not granted Pathway the privacy permissions the
  * desktop backend needs. The web app keys its actionable "set up computer
  * control" chat card off this kind, so the user can grant them from the chat
  * instead of hunting through Settings.
@@ -180,11 +180,9 @@ export const COMPUTER_MAC_BACKEND = "mac";
  * The human's emergency release: it takes the desktop back from the agent and
  * latches until it is pressed again, which hands control back.
  *
- * Must match `releaseShortcut()` in the KWin plugin
- * (`apps/server/native/computer-use-kwin/synaracomputeruseplugin.cpp`), which
- * registers it with KGlobalAccel, and the same chord the Hyprland plugin
- * (`apps/server/native/computer-use-hyprland/synarahyprlandplugin.cpp`) binds
- * through its keybind hook. It is a compositor shortcut and exists only where
+ * Must match `releaseShortcut()` in the KWin compositor plugin, which registers
+ * it with KGlobalAccel, and the same chord the Hyprland plugin binds through
+ * its keybind hook. It is a compositor shortcut and exists only where
  * a plugin binds it: no surface may advertise it unless
  * `ComputerAvailability.backend` is a backend in
  * `COMPUTER_RELEASE_HOTKEY_BACKENDS`.
@@ -213,7 +211,7 @@ export type ComputerWindowId = typeof ComputerWindowId.Type;
  * Named rather than described so every surface says the same words: the chat's
  * setup card, the settings panel, and the tool result the agent reads all key
  * off these identifiers, and their user-facing labels live in one place
- * (`@synara/shared/computerGrants`). There is no fourth surface — the
+ * (`@spiritdevs/shared/computerGrants`). There is no fourth surface — the
  * Electron-side permission preflight that used to be one was deleted, because
  * the prompt has to come from the process that actually needs the grant.
  *
@@ -233,7 +231,7 @@ export type ComputerPermission = typeof ComputerPermission.Type;
  *
  * macOS pins an ad-hoc signature's TCC grant to the binary's cdhash, so every
  * local rebuild silently invalidates it while System Settings keeps showing the
- * app switched on — the user sees "Synara: on" and the helper still reports the
+ * app switched on — the user sees "Pathway: on" and the helper still reports the
  * permission missing. A Developer ID signature keys on identifier plus team and
  * survives rebuilds, so that advice must never be shown for one.
  */
@@ -241,20 +239,20 @@ export const ComputerBuildSignature = Schema.Literals(["adhoc", "signed", "unkno
 export type ComputerBuildSignature = typeof ComputerBuildSignature.Type;
 
 /**
- * The payload the agent gateway attaches to a
+ * The payload the Computer MCP toolkit attaches to a
  * `COMPUTER_SETUP_REQUIRED_ACTIVITY_KIND` activity, and the chat card reads back.
  *
  * `buildSignature` is optional because only a backend with a permission model
  * reports one: it is what lets the card explain the case where System Settings
- * already shows Synara switched on (an ad-hoc build's grant is pinned to a
+ * already shows Pathway switched on (an ad-hoc build's grant is pinned to a
  * cdhash a rebuild replaced) instead of leaving the user staring at a switch
  * that looks correct.
  *
  * `bundleId` is the identifier of the app the grant is *filed against* — the
  * desktop shell that started this server, which on a `.dev` or `.canary` build
- * is not the released Synara. It rides along because the card's recovery advice
+ * is not the released Pathway. It rides along because the card's recovery advice
  * names it in a `tccutil reset` command, and a command naming the wrong app
- * revokes a different Synara's grants while fixing nothing. Optional for the
+ * revokes a different Pathway's grants while fixing nothing. Optional for the
  * same reason it cannot be guessed: a server started outside the desktop shell
  * has no responsible app, and the card must then omit the command entirely.
  */
@@ -301,6 +299,23 @@ export const ComputerAvailability = Schema.Union([
   }),
   Schema.Struct({
     kind: Schema.Literal("backend-unavailable"),
+    message: TrimmedNonEmptyString.check(Schema.isMaxLength(COMPUTER_MESSAGE_MAX_LENGTH)),
+  }),
+  /**
+   * The server is still finding out which desktop it drives. Startup does not
+   * wait on that question — a wedged session bus could stall it for tens of
+   * seconds — so for that window the answer is "not yet", which is neither a
+   * failure to report nor a setup to offer; it ends by itself.
+   *
+   * Decoding is strict, so a client built before this member cannot decode an
+   * availability carrying it. That was accepted rather than bumping the WS
+   * protocol revision: only a Linux server emits it, only while its first
+   * detection outlives the startup budget, and the web client ships with the
+   * server it talks to. A later member that a server sends in steady state
+   * needs the revision bump (see wsCompatibility.ts).
+   */
+  Schema.Struct({
+    kind: Schema.Literal("checking"),
     message: TrimmedNonEmptyString.check(Schema.isMaxLength(COMPUTER_MESSAGE_MAX_LENGTH)),
   }),
 ]);
@@ -358,6 +373,14 @@ export const ComputerHealth = Schema.Struct({
    * and absent is not the same claim as `false`.
    */
   backgroundInputDegraded: Schema.optional(Schema.Boolean),
+  /**
+   * `unavailable` by choice rather than by fault: the backend let its desktop
+   * or its connection go on purpose (an idle shutdown or release, a desktop
+   * that is not running right now) and the next real use brings it back.
+   * Optional, and set only by a backend that makes that distinction; absent
+   * is not the same claim as `false`.
+   */
+  dormant: Schema.optional(Schema.Boolean),
 });
 export type ComputerHealth = typeof ComputerHealth.Type;
 
@@ -806,7 +829,7 @@ export type ComputerAccessibilityTreeApp = typeof ComputerAccessibilityTreeApp.T
  * learn.
  */
 export const ComputerAccessibilityTreeWindow = Schema.Struct({
-  /** The Synara id (`cua:<pid>:<wid>`) the other computer tools take. */
+  /** The Pathway id (`cua:<pid>:<wid>`) the other computer tools take. */
   id: ComputerWindowId,
   pid: Schema.Int.check(Schema.isGreaterThan(0)),
   appName: Schema.optional(Schema.String.check(Schema.isMaxLength(COMPUTER_LABEL_MAX_LENGTH))),
@@ -824,7 +847,7 @@ export type ComputerAccessibilityTreeWindow = typeof ComputerAccessibilityTreeWi
  * The driver read is desktop-wide and takes no arguments, so the bounding the
  * result promises lives in the row caps rather than in driver parameters.
  * `windowId`, when given, scopes the answer to the app that owns that exact
- * window — Synara-side filtering on top of the same desktop snapshot.
+ * window — Pathway-side filtering on top of the same desktop snapshot.
  */
 export const ComputerAccessibilityTreeResult = Schema.Struct({
   computerId: ComputerId,
@@ -923,6 +946,15 @@ export const ComputerLaunchAppResult = Schema.Struct({
    * that passed a flatpak app id or a .desktop id learns what actually ran.
    */
   resolvedCommand: Schema.optional(Schema.String.check(Schema.isMaxLength(4_096))),
+  /**
+   * The application identity the launch resolved to — a desktop entry id such
+   * as `org.kde.kate`, or a flatpak app id — spelled the way this backend's
+   * windows report `appName`. Present only when the backend can name it; its
+   * presence also says `pid` may belong to a launcher that handed off (flatpak,
+   * `gio launch`, a single-instance app), so window readiness accepts a window
+   * of this app when none carries the pid.
+   */
+  appId: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(512))),
   window: Schema.NullOr(ComputerWindow),
 });
 export type ComputerLaunchAppResult = typeof ComputerLaunchAppResult.Type;
@@ -1254,15 +1286,27 @@ export const ComputerActionEvent = Schema.Struct({
 });
 export type ComputerActionEvent = typeof ComputerActionEvent.Type;
 
+/**
+ * The image format of one preview frame. Model-facing screenshots are always
+ * PNG; the live preview may carry JPEG, which a backend encodes an order of
+ * magnitude faster and ships at a fraction of the size. Absent means PNG.
+ */
+export const ComputerFrameMimeType = Schema.Literals(["image/png", "image/jpeg"]);
+export type ComputerFrameMimeType = typeof ComputerFrameMimeType.Type;
+
+export const ComputerFrameHeader = Schema.Struct({
+  computerId: ComputerId,
+  sequence: NonNegativeInt,
+  timestampMs: Schema.Finite,
+  keyframe: Schema.Boolean,
+  codecConfig: Schema.Boolean,
+  mimeType: Schema.optional(ComputerFrameMimeType),
+});
+export type ComputerFrameHeader = typeof ComputerFrameHeader.Type;
+
 export const ComputerFrameEvent = Schema.Struct({
   type: Schema.Literal("computer.frame"),
-  header: Schema.Struct({
-    computerId: ComputerId,
-    sequence: NonNegativeInt,
-    timestampMs: Schema.Finite,
-    keyframe: Schema.Boolean,
-    codecConfig: Schema.Boolean,
-  }),
+  header: ComputerFrameHeader,
 });
 export type ComputerFrameEvent = typeof ComputerFrameEvent.Type;
 
@@ -1304,20 +1348,31 @@ export const COMPUTER_FRAME_MAGIC = 0x5343;
 export const COMPUTER_FRAME_VERSION = 1;
 export const COMPUTER_FRAME_MAX_COMPUTER_ID_BYTES = 255;
 
-export const ComputerFrameHeader = Schema.Struct({
-  computerId: ComputerId,
-  sequence: NonNegativeInt,
-  timestampMs: Schema.Finite,
-  keyframe: Schema.Boolean,
-  codecConfig: Schema.Boolean,
-});
-export type ComputerFrameHeader = typeof ComputerFrameHeader.Type;
-
 export const ComputerFrameDecodeErrorReason = Schema.Literals([
   "too-short",
   "bad-magic",
   "unsupported-version",
   "truncated-computer-id",
   "invalid-computer-id",
+  /** The frame names an image format this build cannot display. */
+  "unsupported-format",
 ]);
 export type ComputerFrameDecodeErrorReason = typeof ComputerFrameDecodeErrorReason.Type;
+
+// ── Turn opt-in and RPC errors ───────────────────────────────────────
+
+/**
+ * How a turn was opted into Computer control: not at all, by an explicit
+ * `/computer-use` request, or by the chat-level toggle.
+ */
+export const ComputerControlMode = Schema.Literals(["off", "request", "chat"]);
+export type ComputerControlMode = typeof ComputerControlMode.Type;
+
+/** A Computer RPC failure. `code` is a stable machine-readable reason. */
+export class ComputerError extends Schema.TaggedErrorClass<ComputerError>()("ComputerError", {
+  message: Schema.String,
+  cause: Schema.optional(Schema.Defect()),
+  code: Schema.optional(Schema.String),
+  retryable: Schema.optional(Schema.Boolean),
+  retryAfterMs: Schema.optional(Schema.Number),
+}) {}

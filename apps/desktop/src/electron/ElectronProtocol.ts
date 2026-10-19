@@ -1,0 +1,424 @@
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as NodeTimersPromises from "node:timers/promises";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as NodeURL from "node:url";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+
+import * as Electron from "electron";
+import { PATHWAY_CUA_DESKTOP_IDENTITY } from "@spiritdevs/shared/desktopFlavor";
+import { isDevProxiedPath } from "@spiritdevs/shared/devProxy";
+
+export const DESKTOP_HOST = "app";
+export const DESKTOP_PRODUCTION_SCHEME = "pathway";
+export const DESKTOP_DEVELOPMENT_SCHEME = "pathway-dev";
+
+/**
+ * Clerk's Electron SDK marks these as native requests, but Chromium still adds
+ * Origin for requests initiated by our custom-scheme renderer. Clerk rejects
+ * that non-HTTP origin, including on the authorization preflight, so let the
+ * native request through without it and restore CORS on the response locally.
+ */
+export function prepareDesktopClerkRequestHeaders(
+  requestHeaders: Record<string, string>,
+  desktopOrigin: string,
+): Record<string, string> {
+  const names = Object.keys(requestHeaders);
+  const originNames = names.filter((name) => name.toLowerCase() === "origin");
+  if (originNames.length === 0) return requestHeaders;
+  if (!originNames.some((name) => requestHeaders[name] === desktopOrigin)) return requestHeaders;
+
+  const prepared = { ...requestHeaders };
+  for (const name of originNames) {
+    delete prepared[name];
+  }
+  return prepared;
+}
+
+export function prepareDesktopClerkResponseHeaders(
+  responseHeaders: Record<string, string[]>,
+  cors: {
+    readonly origin: string;
+    readonly requestedHeaders?: string;
+    readonly requestedMethod?: string;
+  },
+): Record<string, string[]> {
+  const prepared = { ...responseHeaders };
+  for (const name of Object.keys(prepared)) {
+    if (
+      name.toLowerCase() === "access-control-allow-origin" ||
+      (cors.requestedHeaders !== undefined &&
+        name.toLowerCase() === "access-control-allow-headers") ||
+      (cors.requestedMethod !== undefined && name.toLowerCase() === "access-control-allow-methods")
+    ) {
+      delete prepared[name];
+    }
+  }
+  prepared["Access-Control-Allow-Origin"] = [cors.origin];
+  if (cors.requestedHeaders !== undefined) {
+    prepared["Access-Control-Allow-Headers"] = [cors.requestedHeaders];
+  }
+  if (cors.requestedMethod !== undefined) {
+    prepared["Access-Control-Allow-Methods"] = [cors.requestedMethod];
+  }
+  return prepared;
+}
+
+function readHeader(requestHeaders: Record<string, string>, expectedName: string) {
+  const entry = Object.entries(requestHeaders).find(
+    ([name]) => name.toLowerCase() === expectedName,
+  );
+  return entry?.[1];
+}
+
+export function getDesktopUrl(scheme: string): string {
+  return `${scheme}://${DESKTOP_HOST}/`;
+}
+
+export class ElectronProtocolRegistrationError extends Schema.TaggedErrorClass<ElectronProtocolRegistrationError>()(
+  "ElectronProtocolRegistrationError",
+  {
+    scheme: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return `Failed to register Electron protocol scheme "${this.scheme}".`;
+  }
+}
+
+export class ElectronProtocolUnregistrationError extends Schema.TaggedErrorClass<ElectronProtocolUnregistrationError>()(
+  "ElectronProtocolUnregistrationError",
+  {
+    scheme: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return `Failed to unregister Electron protocol scheme "${this.scheme}".`;
+  }
+}
+
+export interface DesktopProtocolRegistrationInput {
+  readonly scheme: string;
+  readonly targetOrigin: URL;
+  readonly backendOrigin: URL;
+  readonly clerkFrontendApiHostname: string | undefined;
+  readonly bundledRendererDirectory?: string;
+}
+
+export class ElectronProtocol extends Context.Service<
+  ElectronProtocol,
+  {
+    readonly registerDesktopProtocol: (
+      input: DesktopProtocolRegistrationInput,
+    ) => Effect.Effect<void, ElectronProtocolRegistrationError, Scope.Scope>;
+  }
+>()("@spiritdevs/desktop/electron/ElectronProtocol") {}
+
+export function makeDesktopContentSecurityPolicy(input: DesktopProtocolRegistrationInput): string {
+  const clerkOrigin = input.clerkFrontendApiHostname
+    ? `https://${input.clerkFrontendApiHostname}`
+    : undefined;
+  const scriptSources = [
+    "'self'",
+    "'unsafe-inline'",
+    "'wasm-unsafe-eval'",
+    ...(clerkOrigin ? [clerkOrigin] : []),
+    "https://challenges.cloudflare.com",
+  ];
+
+  // The renderer connects directly to user-configured environments in addition to
+  // the build-configured Clerk, relay, and OTLP endpoints. Those environment
+  // origins are not known when this response policy is created, so restrict
+  // connections by the network schemes the client supports instead of by host.
+  const connectSources = ["'self'", "http:", "https:", "ws:", "wss:"];
+
+  return [
+    "default-src 'self'",
+    `script-src ${scriptSources.join(" ")}`,
+    `connect-src ${connectSources.join(" ")}`,
+    `img-src 'self' ${input.scheme}: blob: data: http: https:`,
+    "style-src 'self' 'unsafe-inline'",
+    `font-src 'self' ${input.scheme}: data:`,
+    "worker-src 'self' blob:",
+    "frame-src 'self' https://challenges.cloudflare.com",
+    "form-action 'self'",
+  ].join("; ");
+}
+
+function withContentSecurityPolicy(response: Response, policy: string): Response {
+  const headers = new Headers(response.headers);
+  headers.set("Content-Security-Policy", policy);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+/**
+ * Must run synchronously during process bootstrap, before Electron emits `ready`.
+ */
+export function registerDesktopSchemePrivilegesSync(): void {
+  Electron.protocol.registerSchemesAsPrivileged(
+    [
+      DESKTOP_PRODUCTION_SCHEME,
+      DESKTOP_DEVELOPMENT_SCHEME,
+      PATHWAY_CUA_DESKTOP_IDENTITY.scheme,
+    ].map((scheme) => ({
+      scheme,
+      privileges: {
+        standard: true,
+        secure: true,
+        supportFetchAPI: true,
+        corsEnabled: true,
+      },
+    })),
+  );
+}
+
+const registerDesktopSchemePrivileges = Effect.sync(registerDesktopSchemePrivilegesSync).pipe(
+  Effect.withSpan("desktop.electron.protocol.registerSchemePrivileges"),
+);
+
+export const layerSchemePrivileges = Layer.effectDiscard(registerDesktopSchemePrivileges);
+
+async function proxyRequest(
+  request: Request,
+  targetOrigin: URL,
+  contentSecurityPolicy: string,
+): Promise<Response> {
+  const requestUrl = new URL(request.url);
+  if (requestUrl.host !== DESKTOP_HOST) {
+    return new Response(null, { status: 404 });
+  }
+
+  const targetUrl = new URL(`${requestUrl.pathname}${requestUrl.search}`, targetOrigin);
+  const headers = new Headers(request.headers);
+  const headersToRemove: string[] = [];
+  for (const name of headers.keys()) {
+    if (
+      name === "host" ||
+      name === "origin" ||
+      name === "referer" ||
+      name === "connection" ||
+      name === "content-length" ||
+      name === "accept-encoding" ||
+      name === "upgrade-insecure-requests" ||
+      name.startsWith("sec-fetch-")
+    ) {
+      headersToRemove.push(name);
+    }
+  }
+  for (const name of headersToRemove) {
+    headers.delete(name);
+  }
+  const init: RequestInit = {
+    method: request.method,
+    headers,
+  };
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    init.body = request.body;
+    (init as RequestInit & { duplex: "half" }).duplex = "half";
+  }
+  const response =
+    request.method === "GET" || request.method === "HEAD"
+      ? await fetchWithTransientRetry(targetUrl.toString(), init)
+      : await Electron.net.fetch(targetUrl.toString(), init);
+  return withContentSecurityPolicy(response, contentSecurityPolicy);
+}
+
+const TRANSIENT_FETCH_RETRY_DELAYS_MS = [0, 50, 150] as const;
+
+async function serveBundledRenderer(
+  request: Request,
+  directory: string,
+  contentSecurityPolicy: string,
+  fileSystem: FileSystem.FileSystem,
+  path: Path.Path,
+): Promise<Response> {
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    return new Response(null, { status: 405, headers: { Allow: "GET, HEAD" } });
+  }
+
+  let pathname: string;
+  try {
+    pathname = decodeURIComponent(new URL(request.url).pathname);
+  } catch {
+    return new Response(null, { status: 400 });
+  }
+  const root = path.resolve(directory);
+  let filePath = path.resolve(root, `.${pathname}`);
+  const relativePath = path.relative(root, filePath);
+  if (
+    pathname.includes("\0") ||
+    pathname.includes("\\") ||
+    relativePath === ".." ||
+    relativePath.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relativePath)
+  ) {
+    return new Response(null, { status: 400 });
+  }
+
+  // Client routes use the same SPA entry on navigation and reload. Missing
+  // assets stay 404s so a missing script never receives HTML as JavaScript.
+  if (pathname === "/" || !path.extname(filePath)) {
+    filePath = path.join(root, "index.html");
+  }
+  const info = await Effect.runPromise(
+    fileSystem.stat(filePath).pipe(Effect.orElseSucceed(() => undefined)),
+  );
+  if (info?.type !== "File") return new Response(null, { status: 404 });
+
+  // Electron's file loader understands ASAR paths and supplies MIME types and
+  // streaming without copying every asset through the backend and main process.
+  const response = await Electron.net.fetch(NodeURL.pathToFileURL(filePath).href, {
+    method: request.method,
+  });
+  return withContentSecurityPolicy(response, contentSecurityPolicy);
+}
+
+async function fetchWithTransientRetry(url: string, init: RequestInit): Promise<Response> {
+  let lastError: unknown;
+
+  for (const delayMs of TRANSIENT_FETCH_RETRY_DELAYS_MS) {
+    if (delayMs > 0) {
+      await NodeTimersPromises.setTimeout(delayMs);
+    }
+
+    try {
+      return await Electron.net.fetch(url, init);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError;
+}
+
+export const make = Effect.gen(function* () {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const registered = yield* Ref.make(false);
+
+  const registerDesktopProtocol = Effect.fn("desktop.electron.protocol.registerDesktopProtocol")(
+    function* (input: DesktopProtocolRegistrationInput) {
+      if (yield* Ref.get(registered)) return;
+
+      const contentSecurityPolicy = makeDesktopContentSecurityPolicy(input);
+      const desktopOrigin = `${input.scheme}://${DESKTOP_HOST}`;
+      const nativeClerkRequestCors = new Map<
+        number,
+        {
+          readonly origin: string;
+          readonly requestedHeaders?: string;
+          readonly requestedMethod?: string;
+        }
+      >();
+
+      yield* Effect.acquireRelease(
+        Effect.try({
+          try: () => {
+            Electron.protocol.handle(input.scheme, async (request) => {
+              const url = new URL(request.url);
+              if (url.host !== DESKTOP_HOST) return new Response(null, { status: 404 });
+              if (input.bundledRendererDirectory && !isDevProxiedPath(url.pathname)) {
+                return serveBundledRenderer(
+                  request,
+                  input.bundledRendererDirectory,
+                  contentSecurityPolicy,
+                  fileSystem,
+                  path,
+                );
+              }
+              return proxyRequest(
+                request,
+                input.bundledRendererDirectory ? input.backendOrigin : input.targetOrigin,
+                contentSecurityPolicy,
+              );
+            });
+            if (input.clerkFrontendApiHostname) {
+              const clerkUrls = { urls: [`https://${input.clerkFrontendApiHostname}/*`] };
+              Electron.session.defaultSession.webRequest.onBeforeSendHeaders(
+                clerkUrls,
+                (details, callback) => {
+                  const preparedHeaders = prepareDesktopClerkRequestHeaders(
+                    details.requestHeaders,
+                    desktopOrigin,
+                  );
+                  if (preparedHeaders !== details.requestHeaders) {
+                    const requestedHeaders = readHeader(
+                      details.requestHeaders,
+                      "access-control-request-headers",
+                    );
+                    const requestedMethod = readHeader(
+                      details.requestHeaders,
+                      "access-control-request-method",
+                    );
+                    nativeClerkRequestCors.set(details.id, {
+                      origin: desktopOrigin,
+                      ...(requestedHeaders === undefined ? {} : { requestedHeaders }),
+                      ...(requestedMethod === undefined ? {} : { requestedMethod }),
+                    });
+                  }
+                  callback({
+                    requestHeaders: preparedHeaders,
+                  });
+                },
+              );
+              Electron.session.defaultSession.webRequest.onHeadersReceived(
+                clerkUrls,
+                (details, callback) => {
+                  const cors = nativeClerkRequestCors.get(details.id);
+                  if (cors && details.responseHeaders) {
+                    callback({
+                      responseHeaders: prepareDesktopClerkResponseHeaders(
+                        details.responseHeaders,
+                        cors,
+                      ),
+                    });
+                    return;
+                  }
+                  callback({});
+                },
+              );
+              Electron.session.defaultSession.webRequest.onErrorOccurred(clerkUrls, (details) => {
+                nativeClerkRequestCors.delete(details.id);
+              });
+              Electron.session.defaultSession.webRequest.onCompleted(clerkUrls, (details) => {
+                nativeClerkRequestCors.delete(details.id);
+              });
+            }
+          },
+          catch: (cause) => new ElectronProtocolRegistrationError({ scheme: input.scheme, cause }),
+        }).pipe(Effect.andThen(Ref.set(registered, true))),
+        () =>
+          Effect.try({
+            try: () => {
+              Electron.protocol.unhandle(input.scheme);
+              if (input.clerkFrontendApiHostname) {
+                Electron.session.defaultSession.webRequest.onBeforeSendHeaders(null);
+                Electron.session.defaultSession.webRequest.onCompleted(null);
+                Electron.session.defaultSession.webRequest.onHeadersReceived(null);
+                Electron.session.defaultSession.webRequest.onErrorOccurred(null);
+              }
+            },
+            catch: (cause) =>
+              new ElectronProtocolUnregistrationError({
+                scheme: input.scheme,
+                cause,
+              }),
+          }).pipe(Effect.andThen(Ref.set(registered, false)), Effect.orDie),
+      );
+    },
+  );
+
+  return ElectronProtocol.of({ registerDesktopProtocol });
+});
+
+export const layer = Layer.effect(ElectronProtocol, make);

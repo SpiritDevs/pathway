@@ -3,11 +3,13 @@
 //          asked is "click what", and the answer must not be the raw wire call.
 // Layer: Web UI logic tests
 
-import type { ComputerWindow } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import { COMPUTER_BROWSER_TOOL_NAMES, type ComputerWindow } from "@spiritdevs/contracts";
+import { describe, expect, it } from "vite-plus/test";
 
 import {
   COMPUTER_TOOL_TITLES,
+  computerApprovalEventPresentation,
+  computerToolCallHeading,
   computerToolName,
   describeComputerToolCall,
   isComputerToolName,
@@ -23,58 +25,18 @@ const SAFARI: ComputerWindow = {
 } as unknown as ComputerWindow;
 
 describe("computerToolName", () => {
-  it("covers native desktop and browser tools advertised by the gateway", () => {
-    expect(Object.keys(COMPUTER_TOOL_TITLES)).toEqual([
-      "computer_screenshot",
-      "computer_get_state",
-      "computer_get_screen_size",
-      "computer_list_windows",
-      "computer_list_apps",
-      "computer_verify_state",
-      "computer_zoom",
-      "computer_get_accessibility_tree",
-      "computer_get_cursor_position",
-      "computer_help",
-      "computer_click",
-      "computer_move_cursor",
-      "computer_drag",
-      "computer_scroll",
-      "computer_type_text",
-      "computer_press_key",
-      "computer_set_value",
-      "computer_select_text",
-      "computer_perform_action",
-      "computer_launch_app",
-      "computer_activate_window",
-      "computer_set_window_frame",
-      "computer_invoke_menu",
-      "computer_kill_app",
-      "computer_set_window_minimized",
-      "computer_set_app_visibility",
-      "computer_wait",
-      "computer_read_clipboard",
-      "computer_write_clipboard",
-      "computer_paste",
-      "computer_run",
-      "computer_inspect",
-      "computer_spaces",
-      "computer_browser_state",
-      "computer_browser_prepare",
-      "computer_browser_navigate",
-      "computer_browser_click",
-      "computer_browser_type",
-      "computer_browser_dialog",
-      "computer_browser_upload",
-      "computer_browser_download",
-      "computer_browser_pointer",
-      "computer_browser_press",
-    ]);
+  it("titles every browser tool the gateway can advertise", () => {
+    for (const name of COMPUTER_BROWSER_TOOL_NAMES) {
+      expect(COMPUTER_TOOL_TITLES).toHaveProperty(name);
+    }
   });
 
   it("recovers the gateway tool through whatever wrapping a provider applied", () => {
-    expect(computerToolName("mcp__synara__computer_click")).toBe("computer_click");
+    expect(computerToolName("mcp__pathway__computer_click")).toBe("computer_click");
     expect(computerToolName("computer_click")).toBe("computer_click");
-    expect(computerToolName("MCP__Synara__Computer_Type_Text")).toBe("computer_type_text");
+    expect(computerToolName("MCP__Pathway__Computer_Type_Text")).toBe("computer_type_text");
+    expect(computerToolName("pathway.computer_click")).toBe("computer_click");
+    expect(computerToolName("pathway_computer_click")).toBe("computer_click");
     expect(computerToolName("browser_click")).toBeNull();
     expect(computerToolName(undefined)).toBeNull();
   });
@@ -87,7 +49,7 @@ describe("computerToolName", () => {
 describe("describeComputerToolCall", () => {
   it("says verb, coordinate and window instead of the raw call", () => {
     const described = describeComputerToolCall({
-      toolName: "mcp__synara__computer_click",
+      toolName: "mcp__pathway__computer_click",
       args: { x: 812, y: 344, window_id: "win-7" },
       windows: [SAFARI],
     });
@@ -352,7 +314,7 @@ describe("describeComputerToolCall", () => {
     ["press", { ref: "e123" }, "Press Enter in the browser"],
   ])("describes browser %s without exposing private payloads", (name, args, expected) => {
     const result = describeComputerToolCall({
-      toolName: `mcp__synara__computer_browser_${name}`,
+      toolName: `mcp__pathway__computer_browser_${name}`,
       args,
     });
     expect(result?.summary).toBe(expected);
@@ -405,7 +367,7 @@ describe("describeComputerToolCall", () => {
   ])("describes Space %s consistently through direct and inspect routes", (operation, summary) => {
     const args = { operation, space_id: 42, window_id: "win-7" };
     const direct = describeComputerToolCall({
-      toolName: "mcp__synara__computer_spaces",
+      toolName: "mcp__pathway__computer_spaces",
       args,
       windows: [SAFARI],
     });
@@ -442,4 +404,76 @@ describe("describeComputerToolCall", () => {
       ).toBe("Check a desktop Space operation");
     },
   );
+});
+
+describe("computerToolCallHeading", () => {
+  const click = { toolName: "mcp__pathway__computer_screenshot", input: {} };
+
+  it("replaces a generic or tool-name title with the described action", () => {
+    const summary = describeComputerToolCall({ toolName: click.toolName, args: {} })!.summary;
+    expect(computerToolCallHeading({ ...click, title: null })).toBe(summary);
+    expect(computerToolCallHeading({ ...click, title: "Dynamic tool call" })).toBe(summary);
+    expect(computerToolCallHeading({ ...click, title: "MCP tool call completed" })).toBe(summary);
+    expect(computerToolCallHeading({ ...click, title: "pathway.computer_screenshot" })).toBe(
+      summary,
+    );
+  });
+
+  it("keeps a meaningful provider title, and ignores other tools", () => {
+    expect(computerToolCallHeading({ ...click, title: "Capture the login form" })).toBeNull();
+    expect(
+      computerToolCallHeading({ toolName: "read_file", title: null, input: { path: "a" } }),
+    ).toBeNull();
+  });
+});
+
+describe("computerApprovalEventPresentation", () => {
+  it("labels task consent by outcome, like Synara", () => {
+    const task = { requestKind: "computer", prompt: "Allow Computer for this task" } as const;
+    expect(computerApprovalEventPresentation({ ...task, status: "waiting" })).toEqual({
+      label: "Computer task approval requested",
+      detail: null,
+    });
+    expect(computerApprovalEventPresentation({ ...task, status: "completed" })?.label).toBe(
+      "Computer task approved",
+    );
+    expect(computerApprovalEventPresentation({ ...task, status: "cancelled" })?.label).toBe(
+      "Computer task declined",
+    );
+    expect(computerApprovalEventPresentation({ ...task, status: "interrupted" })?.label).toBe(
+      "Computer task approval cancelled",
+    );
+  });
+
+  it("describes a supervised call instead of printing the wire call", () => {
+    const presentation = computerApprovalEventPresentation({
+      requestKind: "computer",
+      prompt: "Computer action needs approval: computer_screenshot {}",
+      status: "completed",
+    });
+    expect(presentation).toEqual({
+      label: "Computer approved",
+      detail: describeComputerToolCall({ toolName: "computer_screenshot", args: {} })!.summary,
+    });
+  });
+
+  it("keeps the prompt for app consent and leaves other approvals alone", () => {
+    expect(
+      computerApprovalEventPresentation({
+        requestKind: "computer",
+        prompt: "Allow Computer to use Safari in this task",
+        status: "pending",
+      }),
+    ).toEqual({
+      label: "Computer approval requested",
+      detail: "Allow Computer to use Safari in this task",
+    });
+    expect(
+      computerApprovalEventPresentation({
+        requestKind: "command",
+        prompt: "ls",
+        status: "pending",
+      }),
+    ).toBeNull();
+  });
 });

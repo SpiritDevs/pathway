@@ -1,24 +1,23 @@
-import type { ComputerId } from "@synara/contracts";
 import {
   COMPUTER_FRAME_RESYNC_MESSAGE,
-  COMPUTER_FRAME_WS_COMPUTER_ID_PARAM,
-  COMPUTER_FRAME_WS_PATH,
   decodeComputerFrame,
   type ComputerFrame,
-} from "@synara/shared/computerFrame";
+} from "@spiritdevs/shared/computerFrame";
 
 import {
   createBinaryFrameSource,
+  type FrameSourceClose,
   type FrameSourceResetReason,
   type WebSocketLike,
 } from "./binaryFrameSource";
 
 export interface ComputerFrameSourceHandlers {
   readonly onFrame: (frame: ComputerFrame) => void;
-  readonly onReset: (reason: ComputerFrameSourceResetReason) => void;
+  readonly onReset: (reason: ComputerFrameSourceResetReason, close?: FrameSourceClose) => void;
 }
 
 export type ComputerFrameSourceResetReason = FrameSourceResetReason;
+export type ComputerFrameSourceClose = FrameSourceClose;
 
 export const COMPUTER_FRAME_RESYNC_COOLDOWN_MS = 1_000;
 
@@ -28,10 +27,14 @@ export interface ComputerFrameSource {
 }
 
 export interface ComputerFrameSourceOptions {
-  readonly computerId: ComputerId;
+  /**
+   * Resolved by `resolveComputerFrameSocketUrl` for the environment's prepared
+   * connection. Remote URLs carry a short-lived ticket; the stream reuses
+   * one URL across reconnects until its ticket nears expiry.
+   */
+  readonly url: string;
   readonly handlers: ComputerFrameSourceHandlers;
   readonly createSocket?: (url: string) => WebSocketLike;
-  readonly explicitUrl?: string | null;
   readonly now?: () => number;
   readonly resyncCooldownMs?: number;
 }
@@ -42,14 +45,11 @@ export function createComputerFrameSource(
   options: ComputerFrameSourceOptions,
 ): ComputerFrameSource {
   return createBinaryFrameSource({
-    streamId: options.computerId,
-    streamIdParam: COMPUTER_FRAME_WS_COMPUTER_ID_PARAM,
-    wsPath: COMPUTER_FRAME_WS_PATH,
+    url: options.url,
     resyncMessage: COMPUTER_FRAME_RESYNC_MESSAGE,
     handlers: options.handlers,
     decode: decodeComputerFrame,
     ...(options.createSocket !== undefined ? { createSocket: options.createSocket } : {}),
-    ...(options.explicitUrl !== undefined ? { explicitUrl: options.explicitUrl } : {}),
     ...(options.now !== undefined ? { now: options.now } : {}),
     resyncCooldownMs: options.resyncCooldownMs ?? COMPUTER_FRAME_RESYNC_COOLDOWN_MS,
   });

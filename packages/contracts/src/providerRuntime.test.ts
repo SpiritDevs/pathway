@@ -1,19 +1,31 @@
-import { describe, expect, it } from "vitest";
-import { Schema } from "effect";
+import { describe, expect, it } from "vite-plus/test";
+import * as Schema from "effect/Schema";
 
-import { ProviderRuntimeEvent, type ProviderRuntimeEventType } from "./providerRuntime";
+import { classifyTaskAgentKind, ProviderRuntimeEvent } from "./providerRuntime.ts";
 
 const decodeRuntimeEvent = Schema.decodeUnknownSync(ProviderRuntimeEvent);
 
 describe("ProviderRuntimeEvent", () => {
-  it("includes turn.steered in the exported event type", () => {
-    const eventType: ProviderRuntimeEventType = "turn.steered";
-    expect(eventType).toBe("turn.steered");
+  it("accepts fork-provided driver kinds as branded slugs", () => {
+    const parsed = decodeRuntimeEvent({
+      type: "session.started",
+      eventId: "event-ollama-session",
+      provider: "ollama",
+      providerInstanceId: "ollama_local",
+      createdAt: "2026-02-28T00:00:00.000Z",
+      threadId: "thread-1",
+      payload: {
+        message: "started",
+      },
+    });
+
+    expect(parsed.provider).toBe("ollama");
+    expect(parsed.providerInstanceId).toBe("ollama_local");
   });
 
-  it("decodes turn.tasks.updated for task-list rendering", () => {
+  it("decodes turn.plan.updated for plan rendering", () => {
     const parsed = decodeRuntimeEvent({
-      type: "turn.tasks.updated",
+      type: "turn.plan.updated",
       eventId: "event-1",
       provider: "claudeAgent",
       sessionId: "runtime-session-1",
@@ -22,19 +34,19 @@ describe("ProviderRuntimeEvent", () => {
       turnId: "turn-1",
       payload: {
         explanation: "Implement schema updates",
-        tasks: [
-          { task: "Define event union", status: "completed" },
-          { task: "Wire adapter mapping", status: "inProgress" },
+        plan: [
+          { step: "Define event union", status: "completed" },
+          { step: "Wire adapter mapping", status: "inProgress" },
         ],
       },
     });
 
-    expect(parsed.type).toBe("turn.tasks.updated");
-    if (parsed.type !== "turn.tasks.updated") {
-      throw new Error("expected turn.tasks.updated");
+    expect(parsed.type).toBe("turn.plan.updated");
+    if (parsed.type !== "turn.plan.updated") {
+      throw new Error("expected turn.plan.updated");
     }
-    expect(parsed.payload.tasks).toHaveLength(2);
-    expect(parsed.payload.tasks[1]?.status).toBe("inProgress");
+    expect(parsed.payload.plan).toHaveLength(2);
+    expect(parsed.payload.plan[1]?.status).toBe("inProgress");
   });
 
   it("decodes proposed-plan completion events", () => {
@@ -55,35 +67,6 @@ describe("ProviderRuntimeEvent", () => {
       throw new Error("expected turn.proposed.completed");
     }
     expect(parsed.payload.planMarkdown).toBe("# Ship it");
-  });
-
-  it("decodes canonical hook completion diagnostics", () => {
-    const parsed = decodeRuntimeEvent({
-      type: "hook.completed",
-      eventId: "event-hook-1",
-      provider: "codex",
-      createdAt: "2026-02-28T00:00:00.000Z",
-      threadId: "thread-1",
-      turnId: "turn-1",
-      payload: {
-        hookId: "hook-run-1",
-        hookName: "/Users/example/.codex/hooks.json",
-        hookEvent: "preToolUse",
-        outcome: "cancelled",
-        status: "blocked",
-        statusMessage: "Destructive command blocked.",
-        durationMs: 12,
-        data: { handlerType: "command" },
-      },
-    });
-
-    expect(parsed.type).toBe("hook.completed");
-    if (parsed.type !== "hook.completed") {
-      throw new Error("expected hook.completed");
-    }
-    expect(parsed.payload.status).toBe("blocked");
-    expect(parsed.payload.hookEvent).toBe("preToolUse");
-    expect(parsed.payload.durationMs).toBe(12);
   });
 
   it("decodes user-input.requested with structured questions", () => {
@@ -184,7 +167,6 @@ describe("ProviderRuntimeEvent", () => {
       payload: {
         usage: {
           usedTokens: 31251,
-          usedPercent: 15.6255,
           maxTokens: 200000,
           toolUses: 25,
           durationMs: 43567,
@@ -198,34 +180,24 @@ describe("ProviderRuntimeEvent", () => {
     }
     expect(parsed.payload.usage.maxTokens).toBe(200000);
     expect(parsed.payload.usage.usedTokens).toBe(31251);
-    expect(parsed.payload.usage.usedPercent).toBe(15.6255);
+  });
+});
+
+describe("classifyTaskAgentKind", () => {
+  it("classifies agent-flavored, watch-loop, and inert types", () => {
+    expect(classifyTaskAgentKind({ taskType: "local_agent" })).toBe("agent");
+    expect(classifyTaskAgentKind({ taskType: "local_workflow" })).toBe("agent");
+    expect(classifyTaskAgentKind({ taskType: undefined })).toBe("agent");
+    expect(classifyTaskAgentKind({ taskType: "brand_new_agent_type" })).toBe("agent");
+    expect(classifyTaskAgentKind({ taskType: "local_bash" })).toBe("background");
+    expect(classifyTaskAgentKind({ taskType: "monitor" })).toBe("background");
+    expect(classifyTaskAgentKind({ taskType: "plan" })).toBe("background");
   });
 
-  it("decodes item.completed with raw (untrimmed) tool output in detail", () => {
-    // Tool output legitimately carries leading/trailing whitespace; the durable
-    // journal must not reject it (previously quarantined with
-    // "Expected a string with no leading or trailing whitespace").
-    const rawOutput = "COMMAND   PID  USER   FD   TYPE\nbun.exe 33263 zachz   10u  IPv4\ndone\n";
-    const parsed = decodeRuntimeEvent({
-      type: "item.completed",
-      eventId: "event-tool-1",
-      provider: "pi",
-      sessionId: "runtime-session-4",
-      createdAt: "2026-02-28T00:00:05.000Z",
-      threadId: "thread-1",
-      turnId: "turn-1",
-      payload: {
-        itemType: "command_execution",
-        status: "completed",
-        title: "bash",
-        detail: rawOutput,
-      },
-    });
-
-    expect(parsed.type).toBe("item.completed");
-    if (parsed.type !== "item.completed") {
-      throw new Error("expected item.completed");
-    }
-    expect(parsed.payload.detail).toBe(rawOutput);
+  it("agent-owned tasks are background unless themselves agent-flavored", () => {
+    expect(classifyTaskAgentKind({ taskType: "local_bash", agentId: "owner" })).toBe("background");
+    expect(classifyTaskAgentKind({ taskType: undefined, agentId: "owner" })).toBe("background");
+    // Nested agent: outlives its parent, stays in the roster.
+    expect(classifyTaskAgentKind({ taskType: "local_agent", agentId: "owner" })).toBe("agent");
   });
 });

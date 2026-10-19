@@ -1,4 +1,11 @@
-import { createHash } from "node:crypto";
+// @effect-diagnostics nodeBuiltinImport:off - SHA-256 digests identify audit files and records; effect has no cryptographic hash.
+/**
+ * Paged, projected reads of the local Computer audit log for the activity
+ * history RPC.
+ *
+ * @module computer/computerAuditHistory
+ */
+import * as NodeCrypto from "node:crypto";
 
 import {
   COMPUTER_AUDIT_HISTORY_MAX_LIMIT,
@@ -6,9 +13,20 @@ import {
   type ComputerAuditHistoryEntry,
   type ComputerGetAuditHistoryInput,
   type ComputerGetAuditHistoryResult,
-} from "@synara/contracts";
-import { Schema } from "effect";
-import { computerAuditTailLines, readComputerAuditFileTail } from "./computerAuditFile.ts";
+} from "@spiritdevs/contracts";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import type * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+
+import {
+  ComputerAuditHistoryError,
+  computerAuditTailLines,
+  readComputerAuditFileTail,
+} from "./computerAuditFile.ts";
+
+export { ComputerAuditHistoryError } from "./computerAuditFile.ts";
 
 /** One request never reads arbitrary paths or scans an unbounded legacy log. */
 export const COMPUTER_AUDIT_HISTORY_MAX_BYTES = 2 * 1024 * 1024;
@@ -30,18 +48,21 @@ interface PositionedEntry {
 }
 
 function digest(value: string | Buffer): string {
-  return createHash("sha256").update(value).digest("hex");
+  return NodeCrypto.createHash("sha256").update(value).digest("hex");
 }
 
 function cursorFor(position: AuditPosition): string {
   return Buffer.from(JSON.stringify(position)).toString("base64url");
 }
 
-function parseCursor(cursor: string | undefined): AuditPosition | undefined {
-  if (cursor === undefined) return undefined;
-  if (cursor.length > 512 || !/^[A-Za-z0-9_-]+$/.test(cursor)) {
-    throw new Error("Invalid Computer activity cursor. Refresh the history to continue.");
-  }
+const invalidCursor = () =>
+  new ComputerAuditHistoryError({
+    message: "Invalid Computer activity cursor. Refresh the history to continue.",
+  });
+
+/** A cursor is a position only; it never supplies a filesystem path. */
+function parseCursor(cursor: string): AuditPosition | undefined {
+  if (cursor.length > 512 || !/^[A-Za-z0-9_-]+$/.test(cursor)) return undefined;
   try {
     const value: unknown = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
     if (
@@ -61,9 +82,9 @@ function parseCursor(cursor: string | undefined): AuditPosition | undefined {
       return { file: value.file, offset: value.offset, fingerprint: value.fingerprint };
     }
   } catch {
-    // A cursor is a position only; it never supplies a filesystem path.
+    // Undecodable cursors are invalid, reported by the caller.
   }
-  throw new Error("Invalid Computer activity cursor. Refresh the history to continue.");
+  return undefined;
 }
 
 function safeIdentifier(value: unknown): string | undefined {
@@ -78,28 +99,29 @@ function projectEntry(line: Buffer, position: AuditPosition): ComputerAuditHisto
     if (
       typeof record.ts !== "string" ||
       !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(record.ts) ||
-      !Number.isFinite(Date.parse(record.ts)) ||
       typeof record.tool !== "string" ||
       !/^computer_[a-z_]{1,80}$/.test(record.tool) ||
       !isAuditEffect(record.effect)
     ) {
       return null;
     }
+    const ts = DateTime.make(record.ts);
+    if (Option.isNone(ts)) return null;
     const threadId = safeIdentifier(record.threadId);
     const turnId = safeIdentifier(record.turnId);
-    const gatewayRequestId = safeIdentifier(record.gatewayRequestId);
+    const mcpRequestId = safeIdentifier(record.mcpRequestId);
     const code =
       typeof record.code === "string" && /^[a-z][a-z0-9_]{0,95}$/.test(record.code)
         ? record.code
         : undefined;
     return {
       id: digest(cursorFor(position)),
-      ts: new Date(record.ts).toISOString(),
+      ts: DateTime.formatIso(ts.value),
       tool: record.tool,
       effect: record.effect,
       ...(threadId !== undefined ? { threadId } : {}),
       ...(turnId !== undefined ? { turnId } : {}),
-      ...(gatewayRequestId !== undefined ? { gatewayRequestId } : {}),
+      ...(mcpRequestId !== undefined ? { mcpRequestId } : {}),
       ...(code !== undefined ? { code } : {}),
     };
   } catch {
@@ -114,16 +136,24 @@ function projectEntry(line: Buffer, position: AuditPosition): ComputerAuditHisto
  * File identity + byte offset preserves duplicate records during normal
  * appends/rotation. A unique fingerprint can recover a retained cursor after
  * compaction; ambiguous or expired cursors return an explicit truncated page.
+ * An `undefined` path means audit logging is off for this environment.
  */
-export async function readComputerAuditHistory(
+export const readComputerAuditHistory = Effect.fn("readComputerAuditHistory")(function* (
   filePath: string | undefined,
   input: ComputerGetAuditHistoryInput,
-): Promise<ComputerGetAuditHistoryResult> {
+): Effect.fn.Return<
+  ComputerGetAuditHistoryResult,
+  ComputerAuditHistoryError,
+  FileSystem.FileSystem
+> {
   const limit = input.limit ?? 30;
   if (!Number.isInteger(limit) || limit < 1 || limit > COMPUTER_AUDIT_HISTORY_MAX_LIMIT) {
-    throw new Error("Computer activity history supports between 1 and 100 entries per page.");
+    return yield* new ComputerAuditHistoryError({
+      message: "Computer activity history supports between 1 and 100 entries per page.",
+    });
   }
-  const before = parseCursor(input.before);
+  const before = input.before === undefined ? undefined : parseCursor(input.before);
+  if (input.before !== undefined && before === undefined) return yield* invalidCursor();
   if (filePath === undefined) {
     return { entries: [], nextCursor: null, truncated: false, status: "disabled" };
   }
@@ -135,7 +165,7 @@ export async function readComputerAuditHistory(
   let foundFile = false;
   let truncated = false;
   for (const path of [filePath, `${filePath}.1`, `${filePath}.2`]) {
-    const tail = await readComputerAuditFileTail(
+    const tail = yield* readComputerAuditFileTail(
       path,
       scannedRows < COMPUTER_AUDIT_HISTORY_MAX_ROWS ? remainingBytes : 0,
     );
@@ -194,4 +224,4 @@ export async function readComputerAuditHistory(
     truncated,
     status,
   };
-}
+});

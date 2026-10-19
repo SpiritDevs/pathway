@@ -1,0 +1,600 @@
+import { assert, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { CommandId, type Project, ProjectId, ProviderInstanceId } from "@spiritdevs/contracts";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
+import { TestClock } from "effect/testing";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+
+import { ServerConfig } from "../config.ts";
+import { ProjectServiceLayerLive } from "../orchestration-v2/runtimeLayer.ts";
+import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
+import * as ProjectEnrichmentService from "./ProjectEnrichmentService.ts";
+import * as ProjectFaviconResolver from "./ProjectFaviconResolver.ts";
+import * as ProjectService from "./ProjectService.ts";
+import * as RepositoryIdentityResolver from "./RepositoryIdentityResolver.ts";
+
+const workspacePathsLayer = Layer.succeed(WorkspacePaths.WorkspacePaths, {
+  normalizeWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot.replace(/\/$/, "")),
+  resolveRelativePathWithinRoot: ({ workspaceRoot, relativePath }) =>
+    Effect.succeed({ absolutePath: `${workspaceRoot}/${relativePath}`, relativePath }),
+});
+
+const metadataLayer = Layer.merge(
+  Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+    resolve: (workspaceRoot) =>
+      Effect.succeed({
+        canonicalKey: `github.com/spiritdevs/${workspaceRoot.split("/").at(-1)}`,
+        locator: {
+          source: "git-remote" as const,
+          remoteName: "origin",
+          remoteUrl: `git@github.com:spiritdevs/${workspaceRoot.split("/").at(-1)}.git`,
+        },
+        rootPath: workspaceRoot,
+      }),
+  }),
+  Layer.succeed(ProjectFaviconResolver.ProjectFaviconResolver, {
+    resolvePath: (workspaceRoot) => Effect.succeed(`${workspaceRoot}/favicon.svg`),
+  }),
+);
+
+const makeTestLayer = (
+  projectMetadataLayer: Layer.Layer<
+    | ProjectFaviconResolver.ProjectFaviconResolver
+    | RepositoryIdentityResolver.RepositoryIdentityResolver
+  >,
+  realDirectories = false,
+) =>
+  ProjectServiceLayerLive.pipe(
+    Layer.provideMerge(ProjectEnrichmentService.layer),
+    Layer.provideMerge(realDirectories ? WorkspacePaths.layer : workspacePathsLayer),
+    Layer.provideMerge(projectMetadataLayer),
+    Layer.provideMerge(SqlitePersistenceMemory),
+    Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "project-service-test-" })),
+    Layer.provideMerge(NodeServices.layer),
+  );
+
+const TestLayer = makeTestLayer(metadataLayer);
+
+const waitForProject = Effect.fn("ProjectServiceTest.waitForProject")(function* (
+  service: ProjectService.ProjectService["Service"],
+  projectId: ProjectId,
+  predicate: (project: Project) => boolean,
+) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const project = Option.getOrThrow(yield* service.getById(projectId));
+    if (predicate(project)) return project;
+    yield* Effect.yieldNow;
+  }
+  return yield* Effect.die(`Project ${projectId} was not enriched in time.`);
+});
+
+it.layer(TestLayer)("ProjectService", (it) => {
+  it.effect("creates, updates, resolves, snapshots, and soft-deletes projects", () =>
+    Effect.gen(function* () {
+      const service = yield* ProjectService.ProjectService;
+      const projectId = ProjectId.make("project:service-test");
+      const modelSelection = {
+        instanceId: ProviderInstanceId.make("codex_custom"),
+        model: "gpt-5.1-codex",
+      } as const;
+      yield* TestClock.setTime(Date.parse("2026-06-20T10:00:00.000Z"));
+
+      const created = yield* service.create({
+        commandId: CommandId.make("command:project:create"),
+        projectId,
+        title: "Project",
+        workspaceRoot: "/work/project/",
+        defaultModelSelection: modelSelection,
+        scripts: [
+          {
+            id: "setup",
+            name: "Setup",
+            command: "vp install",
+            icon: "configure",
+            runOnWorktreeCreate: true,
+          },
+        ],
+      });
+      assert.equal(created.workspaceRoot, "/work/project");
+      assert.isFalse(created.titleIsCustom);
+      assert.isNull(created.repositoryIdentity);
+      assert.isNull(created.faviconPath);
+
+      const hydratedCreated = yield* waitForProject(
+        service,
+        projectId,
+        (project) => project.repositoryIdentity !== null && project.faviconPath !== null,
+      );
+      assert.equal(
+        hydratedCreated?.repositoryIdentity?.canonicalKey,
+        "github.com/spiritdevs/project",
+      );
+      assert.equal(hydratedCreated?.faviconPath, "/work/project/favicon.svg");
+
+      const updated = yield* service.update({
+        commandId: CommandId.make("command:project:update"),
+        projectId,
+        title: "Renamed",
+        defaultThreadEnvMode: "worktree",
+        faviconPath: "brand assets/project icon.svg",
+      });
+      assert.equal(updated.title, "Renamed");
+      assert.isTrue(updated.titleIsCustom);
+      assert.equal(updated.defaultThreadEnvMode, "worktree");
+      assert.equal(updated.createdAt, created.createdAt);
+
+      const sql = yield* SqlClient.SqlClient;
+      const faviconRows = yield* sql<{
+        readonly faviconPath: string | null;
+        readonly titleIsCustom: number;
+      }>`
+        SELECT
+          favicon_path AS "faviconPath",
+          title_is_custom AS "titleIsCustom"
+        FROM projection_projects
+        WHERE project_id = ${projectId}
+      `;
+      assert.equal(faviconRows[0]?.faviconPath, "brand assets/project icon.svg");
+      assert.equal(faviconRows[0]?.titleIsCustom, 1);
+
+      const byId = yield* service.getById(projectId);
+      const byWorkspace = yield* service.getByWorkspaceRoot("/work/project/");
+      assert.isTrue(Option.isSome(byId));
+      assert.isTrue(Option.isSome(byWorkspace));
+      assert.equal(Option.getOrThrow(byId).faviconPath, "brand assets/project icon.svg");
+      assert.equal(Option.getOrThrow(byId).defaultThreadEnvMode, "worktree");
+      assert.equal(Option.getOrThrow(byWorkspace).faviconPath, "brand assets/project icon.svg");
+      assert.equal(Option.getOrThrow(byWorkspace).id, projectId);
+      assert.deepEqual(
+        (yield* service.snapshot).projects.map((project) => project.id),
+        [projectId],
+      );
+
+      const deleted = yield* service.delete({
+        commandId: CommandId.make("command:project:delete"),
+        projectId,
+      });
+      assert.isNotNull(deleted.deletedAt);
+      assert.isTrue(Option.isNone(yield* service.getById(projectId)));
+      assert.isTrue(Option.isSome(yield* service.getById(projectId, { includeDeleted: true })));
+      assert.deepEqual((yield* service.snapshot).projects, []);
+
+      const changes = yield* sql<{ readonly event_type: string }>`
+        SELECT event_type
+        FROM orchestration_events
+        WHERE aggregate_kind = 'project' AND stream_id = ${projectId}
+        ORDER BY sequence ASC
+      `;
+      assert.deepEqual(
+        changes.map((change) => change.event_type),
+        ["project.created", "project.meta-updated", "project.deleted"],
+      );
+    }),
+  );
+
+  it.effect("rejects active workspace collisions", () =>
+    Effect.gen(function* () {
+      const service = yield* ProjectService.ProjectService;
+      yield* TestClock.setTime(Date.parse("2026-06-20T10:00:00.000Z"));
+      yield* service.create({
+        commandId: CommandId.make("command:collision:first"),
+        projectId: ProjectId.make("project:collision:first"),
+        title: "First",
+        workspaceRoot: "/work/shared",
+      });
+      const error = yield* service
+        .create({
+          commandId: CommandId.make("command:collision:second"),
+          projectId: ProjectId.make("project:collision:second"),
+          title: "Second",
+          workspaceRoot: "/work/shared",
+        })
+        .pipe(Effect.flip);
+      assert.equal(error._tag, "ProjectConflictError");
+    }),
+  );
+
+  it.effect("creates name-only projects in a stable internal workspace", () =>
+    Effect.gen(function* () {
+      const service = yield* ProjectService.ProjectService;
+      const projectId = ProjectId.make("project:rootless");
+      yield* TestClock.setTime(Date.parse("2026-06-20T10:00:00.000Z"));
+
+      const created = yield* service.create({
+        commandId: CommandId.make("command:rootless:create"),
+        projectId,
+        title: "Rootless",
+        workspaceRoot: null,
+      });
+
+      assert.include(created.workspaceRoot!, "/project-workspaces/");
+      assert.equal(created.internalWorkspaceRoot, created.workspaceRoot);
+      assert.isNull(created.repositoryIdentity);
+      assert.isNull(created.faviconPath);
+      assert.equal(
+        Option.getOrThrow(yield* service.getById(projectId)).internalWorkspaceRoot,
+        created.workspaceRoot,
+      );
+    }),
+  );
+
+  it.effect("auto-bootstraps a workspace exactly once", () =>
+    Effect.gen(function* () {
+      const service = yield* ProjectService.ProjectService;
+      yield* TestClock.setTime(Date.parse("2026-06-20T10:00:00.000Z"));
+      const input = {
+        commandId: CommandId.make("command:bootstrap:first"),
+        projectId: ProjectId.make("project:bootstrap"),
+        title: "Bootstrap",
+        workspaceRoot: "/work/bootstrap/",
+      };
+      const first = yield* service.bootstrap(input);
+      const second = yield* service.bootstrap({
+        ...input,
+        commandId: CommandId.make("command:bootstrap:second"),
+        projectId: ProjectId.make("project:bootstrap:unused"),
+      });
+      assert.isTrue(first.created);
+      assert.isFalse(second.created);
+      assert.equal(second.project.id, first.project.id);
+    }),
+  );
+});
+
+it.effect(
+  "returns project mutations before slow enrichment and shares the eventual result across reads",
+  () =>
+    Effect.gen(function* () {
+      const repositoryStarted = yield* Deferred.make<void>();
+      const releaseRepository = yield* Deferred.make<void>();
+      const repositoryCalls = yield* Ref.make(0);
+      const faviconCalls = yield* Ref.make(0);
+
+      const slowMetadataLayer = Layer.merge(
+        Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+          resolve: (workspaceRoot) =>
+            Effect.gen(function* () {
+              yield* Ref.update(repositoryCalls, (count) => count + 1);
+              yield* Deferred.succeed(repositoryStarted, undefined);
+              yield* Deferred.await(releaseRepository);
+              return {
+                canonicalKey: "github.com/spiritdevs/slow-project",
+                locator: {
+                  source: "git-remote" as const,
+                  remoteName: "origin",
+                  remoteUrl: "git@github.com:spiritdevs/slow-project.git",
+                },
+                rootPath: workspaceRoot,
+              };
+            }),
+        }),
+        Layer.succeed(ProjectFaviconResolver.ProjectFaviconResolver, {
+          resolvePath: (workspaceRoot) =>
+            Ref.updateAndGet(faviconCalls, (count) => count + 1).pipe(
+              Effect.as(`${workspaceRoot}/favicon.svg`),
+            ),
+        }),
+      );
+
+      yield* Effect.gen(function* () {
+        const service = yield* ProjectService.ProjectService;
+        const projectId = ProjectId.make("project:slow-enrichment");
+        const createFiber = yield* service
+          .create({
+            commandId: CommandId.make("command:slow-enrichment:create"),
+            projectId,
+            title: "Slow enrichment",
+            workspaceRoot: "/work/slow-enrichment",
+          })
+          .pipe(Effect.forkChild({ startImmediately: true }));
+
+        yield* Deferred.await(repositoryStarted);
+        yield* Effect.yieldNow;
+        assert.isDefined(createFiber.pollUnsafe());
+
+        const created = yield* Fiber.join(createFiber);
+        assert.isNull(created.repositoryIdentity);
+        assert.isNull(created.faviconPath);
+
+        const updated = yield* service.update({
+          commandId: CommandId.make("command:slow-enrichment:update"),
+          projectId,
+          title: "Updated before enrichment",
+        });
+        assert.equal(updated.title, "Updated before enrichment");
+        assert.isNull(updated.repositoryIdentity);
+        assert.equal(updated.faviconPath, "/work/slow-enrichment/favicon.svg");
+
+        const immediateReadFiber = yield* service
+          .getById(projectId)
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Effect.yieldNow;
+        assert.isDefined(immediateReadFiber.pollUnsafe());
+        const immediateRead = Option.getOrThrow(yield* Fiber.join(immediateReadFiber));
+        assert.isNull(immediateRead.repositoryIdentity);
+        assert.equal(immediateRead.faviconPath, "/work/slow-enrichment/favicon.svg");
+
+        const snapshotFiber = yield* service.snapshot.pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* Effect.yieldNow;
+        assert.isDefined(snapshotFiber.pollUnsafe());
+        const immediateSnapshot = yield* Fiber.join(snapshotFiber);
+        assert.isNull(immediateSnapshot.projects[0]?.repositoryIdentity ?? null);
+
+        yield* Deferred.succeed(releaseRepository, undefined);
+
+        const firstProject = yield* waitForProject(
+          service,
+          projectId,
+          (project) => project.repositoryIdentity !== null && project.faviconPath !== null,
+        );
+        assert.isDefined(firstProject);
+        assert.equal(
+          firstProject.repositoryIdentity?.canonicalKey,
+          "github.com/spiritdevs/slow-project",
+        );
+        assert.equal(firstProject.faviconPath, "/work/slow-enrichment/favicon.svg");
+
+        const byId = Option.getOrThrow(yield* service.getById(projectId));
+        const secondSnapshot = yield* service.snapshot;
+        assert.equal(byId.repositoryIdentity?.canonicalKey, "github.com/spiritdevs/slow-project");
+        assert.equal(secondSnapshot.projects[0]?.faviconPath, "/work/slow-enrichment/favicon.svg");
+        assert.equal(yield* Ref.get(repositoryCalls), 1);
+        assert.equal(yield* Ref.get(faviconCalls), 1);
+      }).pipe(Effect.provide(makeTestLayer(slowMetadataLayer)));
+    }),
+);
+
+it.effect("keeps project snapshots available when optional metadata enrichment fails", () =>
+  Effect.gen(function* () {
+    const failingMetadataLayer = Layer.merge(
+      Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+        resolve: () => Effect.succeed(null),
+      }),
+      Layer.succeed(ProjectFaviconResolver.ProjectFaviconResolver, {
+        resolvePath: (workspaceRoot) =>
+          Effect.fail(
+            new ProjectFaviconResolver.ProjectFaviconResolutionError({
+              operation: "stat-candidate",
+              workspaceRoot,
+              cause: "permission denied",
+            }),
+          ),
+      }),
+    );
+
+    yield* Effect.gen(function* () {
+      const service = yield* ProjectService.ProjectService;
+      const projectId = ProjectId.make("project:failed-enrichment");
+      yield* service.create({
+        commandId: CommandId.make("command:failed-enrichment:create"),
+        projectId,
+        title: "Still visible",
+        workspaceRoot: "/work/failed-enrichment",
+      });
+
+      const snapshot = yield* service.snapshot;
+      assert.equal(snapshot.projects.length, 1);
+      assert.equal(snapshot.projects[0]?.id, projectId);
+      assert.equal(snapshot.projects[0]?.title, "Still visible");
+      assert.isNull(snapshot.projects[0]?.repositoryIdentity ?? null);
+      assert.isNull(snapshot.projects[0]?.faviconPath ?? null);
+    }).pipe(Effect.provide(makeTestLayer(failingMetadataLayer)));
+  }),
+);
+
+it.effect("invalidates workspace-derived metadata when a project moves", () =>
+  Effect.gen(function* () {
+    const metadataVersion = yield* Ref.make(1);
+    const versionedMetadataLayer = Layer.merge(
+      Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+        resolve: (workspaceRoot) =>
+          Ref.get(metadataVersion).pipe(
+            Effect.map((version) => ({
+              canonicalKey: `example.test/v${version}${workspaceRoot}`,
+              locator: {
+                source: "git-remote" as const,
+                remoteName: "origin",
+                remoteUrl: `https://example.test/v${version}${workspaceRoot}.git`,
+              },
+              rootPath: workspaceRoot,
+            })),
+          ),
+      }),
+      Layer.succeed(ProjectFaviconResolver.ProjectFaviconResolver, {
+        resolvePath: (workspaceRoot) =>
+          Ref.get(metadataVersion).pipe(
+            Effect.map((version) => `${workspaceRoot}/favicon-v${version}.svg`),
+          ),
+      }),
+    );
+
+    yield* Effect.gen(function* () {
+      const service = yield* ProjectService.ProjectService;
+      const projectId = ProjectId.make("project:moved-enrichment");
+      yield* service.create({
+        commandId: CommandId.make("command:moved-enrichment:create"),
+        projectId,
+        title: "Moved",
+        workspaceRoot: "/work/original",
+      });
+      assert.equal(
+        (yield* waitForProject(
+          service,
+          projectId,
+          (project) => project.faviconPath === "/work/original/favicon-v1.svg",
+        )).faviconPath,
+        "/work/original/favicon-v1.svg",
+      );
+
+      yield* Ref.set(metadataVersion, 2);
+      yield* service.update({
+        commandId: CommandId.make("command:moved-enrichment:away"),
+        projectId,
+        workspaceRoot: "/work/temporary",
+      });
+      yield* service.snapshot;
+
+      yield* Ref.set(metadataVersion, 3);
+      yield* service.update({
+        commandId: CommandId.make("command:moved-enrichment:return"),
+        projectId,
+        workspaceRoot: "/work/original",
+      });
+      assert.equal(
+        (yield* waitForProject(
+          service,
+          projectId,
+          (project) => project.faviconPath === "/work/original/favicon-v3.svg",
+        )).faviconPath,
+        "/work/original/favicon-v3.svg",
+      );
+    }).pipe(Effect.provide(makeTestLayer(versionedMetadataLayer)));
+  }),
+);
+
+it.layer(makeTestLayer(metadataLayer, true))("Internal project directories", (it) => {
+  it.effect("retains files and project identity through attachment and disconnection", () =>
+    Effect.gen(function* () {
+      const service = yield* ProjectService.ProjectService;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const projectId = ProjectId.make("internal-file-retention");
+      const created = yield* service.create({
+        commandId: CommandId.make("internal-create"),
+        projectId,
+        title: "Notes",
+        workspaceRoot: null,
+      });
+      const internal = created.workspaceRoot!;
+      assert.equal(created.internalWorkspaceRoot, internal);
+      assert.isTrue(yield* fs.exists(internal));
+      yield* fs.writeFileString(path.join(internal, "notes.txt"), "keep this work");
+      const premature = yield* service
+        .update({
+          commandId: CommandId.make("early-disconnect"),
+          projectId,
+          disconnectInternalWorkspace: true,
+        })
+        .pipe(Effect.flip);
+      assert.include(premature.message, "Attach your own directory");
+      const renamed = yield* service.update({
+        commandId: CommandId.make("internal-rename"),
+        projectId,
+        title: "Renamed",
+      });
+      assert.equal(renamed.workspaceRoot, internal);
+      const another = yield* service.create({
+        commandId: CommandId.make("another-create"),
+        projectId: ProjectId.make("another-notes"),
+        title: "Notes",
+        workspaceRoot: null,
+      });
+      assert.notEqual(another.workspaceRoot, internal);
+      const destination = yield* fs.makeTempDirectoryScoped();
+      const attached = yield* service.update({
+        commandId: CommandId.make("internal-attach"),
+        projectId,
+        workspaceRoot: destination,
+        copyInternalWorkspaceFiles: true,
+      });
+      assert.equal(attached.id, projectId);
+      assert.equal(attached.workspaceRoot, destination);
+      assert.equal(attached.internalWorkspaceRoot, internal);
+      assert.equal(yield* fs.readFileString(path.join(destination, "notes.txt")), "keep this work");
+      assert.equal(yield* fs.readFileString(path.join(internal, "notes.txt")), "keep this work");
+      const disconnected = yield* service.update({
+        commandId: CommandId.make("internal-disconnect"),
+        projectId,
+        disconnectInternalWorkspace: true,
+      });
+      assert.isNull(disconnected.internalWorkspaceRoot);
+      assert.equal(disconnected.workspaceRoot, destination);
+      assert.isTrue(yield* fs.exists(path.join(internal, "notes.txt")));
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("refuses attachment and disconnection while a project has active work", () =>
+    Effect.gen(function* () {
+      const service = yield* ProjectService.ProjectService;
+      const sql = yield* SqlClient.SqlClient;
+      const projectId = ProjectId.make("busy-internal-project");
+      yield* service.create({
+        commandId: CommandId.make("busy-create"),
+        projectId,
+        title: "Busy",
+        workspaceRoot: null,
+      });
+      yield* sql`INSERT INTO orchestration_v2_projection_threads
+      (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+      VALUES ('busy-thread', ${projectId}, 'Busy', 'codex', 'full-access', 'default', '2026-09-10', '2026-09-10', '{}')`;
+      yield* sql`INSERT INTO orchestration_v2_projection_runs
+      (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
+      VALUES ('busy-run', 'busy-thread', 1, 'codex', 'running', '2026-09-10', '{}')`;
+      const error = yield* service
+        .update({
+          commandId: CommandId.make("busy-attach"),
+          projectId,
+          workspaceRoot: "/unused-destination",
+        })
+        .pipe(Effect.flip);
+      assert.include(error.message, "Finish or stop active agent work");
+      const disconnect = yield* service
+        .update({
+          commandId: CommandId.make("busy-disconnect"),
+          projectId,
+          disconnectInternalWorkspace: true,
+        })
+        .pipe(Effect.flip);
+      assert.include(disconnect.message, "Finish or stop active agent work");
+    }),
+  );
+
+  it.effect("keeps both sets of files untouched when a copy would collide", () =>
+    Effect.gen(function* () {
+      const service = yield* ProjectService.ProjectService;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const projectId = ProjectId.make("internal-copy-conflict");
+      const created = yield* service.create({
+        commandId: CommandId.make("conflict-create"),
+        projectId,
+        title: "Notes",
+        workspaceRoot: null,
+      });
+      const internal = created.workspaceRoot!;
+      const destination = yield* fs.makeTempDirectoryScoped();
+      yield* fs.writeFileString(path.join(internal, "notes.txt"), "internal");
+      yield* fs.writeFileString(path.join(internal, "another.txt"), "internal");
+      yield* fs.writeFileString(path.join(destination, "notes.txt"), "user");
+      const conflict = yield* service
+        .update({
+          commandId: CommandId.make("conflict-attach"),
+          projectId,
+          workspaceRoot: destination,
+          copyInternalWorkspaceFiles: true,
+        })
+        .pipe(Effect.flip);
+      assert.include(conflict.message, "already contains notes.txt");
+      assert.equal(yield* fs.readFileString(path.join(destination, "notes.txt")), "user");
+      assert.isFalse(yield* fs.exists(path.join(destination, "another.txt")));
+      assert.equal(Option.getOrThrow(yield* service.getById(projectId)).workspaceRoot, internal);
+      const attached = yield* service.update({
+        commandId: CommandId.make("keep-internal-attach"),
+        projectId,
+        workspaceRoot: destination,
+      });
+      assert.equal(attached.internalWorkspaceRoot, internal);
+      assert.equal(yield* fs.readFileString(path.join(internal, "notes.txt")), "internal");
+    }).pipe(Effect.scoped),
+  );
+});

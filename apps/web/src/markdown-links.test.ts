@@ -1,12 +1,83 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import ReactMarkdown from "react-markdown";
 
 import {
-  extractAbsoluteFilesystemPaths,
-  markdownFilePathHref,
+  extractMarkdownLinkHrefs,
+  resolveInlineCodeFileLinkMeta,
+  resolveMarkdownFileLinkMeta,
   resolveMarkdownFileLinkTarget,
-  resolveUniqueAbsoluteSuffixTarget,
   rewriteMarkdownFileUriHref,
+  shouldOpenMarkdownFileLinkInBrowserByDefault,
+  shouldOpenMarkdownFileLinkInEditor,
 } from "./markdown-links";
+
+function renderMarkdownLinkHref(markdown: string): string | undefined {
+  let renderedHref: string | undefined;
+  renderToStaticMarkup(
+    createElement(
+      ReactMarkdown,
+      {
+        components: {
+          a({ href }) {
+            renderedHref = href;
+            return createElement("a", { href });
+          },
+        },
+      },
+      markdown,
+    ),
+  );
+  return renderedHref;
+}
+
+describe("extractMarkdownLinkHrefs", () => {
+  it("extracts angle-bracketed paths containing spaces", () => {
+    expect(
+      extractMarkdownLinkHrefs(
+        "[Open the Bike Receipts folder](</Users/dara/Downloads/Lime Ride Artifacts/Bike Receipts>)",
+      ),
+    ).toEqual(["/Users/dara/Downloads/Lime Ride Artifacts/Bike Receipts"]);
+  });
+
+  it("preserves ordinary destinations and ignores link titles", () => {
+    expect(
+      extractMarkdownLinkHrefs(
+        '[source](apps/web/src/markdown-links.ts "implementation") and [docs](https://example.com)',
+      ),
+    ).toEqual(["apps/web/src/markdown-links.ts", "https://example.com"]);
+  });
+});
+
+describe("shouldOpenMarkdownFileLinkInEditor", () => {
+  it("uses command-click on macOS", () => {
+    expect(shouldOpenMarkdownFileLinkInEditor({ metaKey: true, ctrlKey: false }, "MacIntel")).toBe(
+      true,
+    );
+    expect(shouldOpenMarkdownFileLinkInEditor({ metaKey: false, ctrlKey: true }, "MacIntel")).toBe(
+      false,
+    );
+  });
+
+  it("uses control-click on other platforms", () => {
+    expect(
+      shouldOpenMarkdownFileLinkInEditor({ metaKey: false, ctrlKey: true }, "Linux x86_64"),
+    ).toBe(true);
+    expect(
+      shouldOpenMarkdownFileLinkInEditor({ metaKey: true, ctrlKey: false }, "Linux x86_64"),
+    ).toBe(false);
+  });
+});
+
+describe("shouldOpenMarkdownFileLinkInBrowserByDefault", () => {
+  it("keeps PDFs browser-first while source files open in the file viewer", () => {
+    expect(shouldOpenMarkdownFileLinkInBrowserByDefault("report.pdf")).toBe(true);
+    expect(shouldOpenMarkdownFileLinkInBrowserByDefault("report.PDF?download=1")).toBe(true);
+    expect(shouldOpenMarkdownFileLinkInBrowserByDefault("report.html")).toBe(false);
+    expect(shouldOpenMarkdownFileLinkInBrowserByDefault("report.xml")).toBe(false);
+  });
+});
 
 describe("rewriteMarkdownFileUriHref", () => {
   it("rewrites file uri hrefs into direct path hrefs", () => {
@@ -19,6 +90,20 @@ describe("rewriteMarkdownFileUriHref", () => {
     expect(rewriteMarkdownFileUriHref("file:///Users/julius/project/file%2520name.md")).toBe(
       "/Users/julius/project/file%2520name.md",
     );
+  });
+
+  it("normalizes file uri hrefs for windows drive paths", () => {
+    expect(
+      rewriteMarkdownFileUriHref(
+        "file:///D:/Programme/pathway/apps/web/src/components/chat/OpenInPicker.tsx#L69",
+      ),
+    ).toBe("D:/Programme/pathway/apps/web/src/components/chat/OpenInPicker.tsx#L69");
+  });
+
+  it("unwraps angle-bracketed file uri hrefs", () => {
+    expect(
+      rewriteMarkdownFileUriHref(" <file:///D:/Programme/pathway/apps/web/src/markdown-links.ts> "),
+    ).toBe("D:/Programme/pathway/apps/web/src/markdown-links.ts");
   });
 });
 
@@ -63,120 +148,263 @@ describe("resolveMarkdownFileLinkTarget", () => {
     );
   });
 
+  it("formats tooltip display paths relative to the cwd when possible", () => {
+    expect(
+      resolveMarkdownFileLinkMeta(
+        "file:///C:/Users/mike/dev-stuff/pathway/apps/web/src/session-logic.ts#L501",
+        "C:/Users/mike/dev-stuff/pathway",
+      ),
+    ).toMatchObject({
+      displayPath: "pathway/apps/web/src/session-logic.ts:501",
+      workspaceRelativePath: "apps/web/src/session-logic.ts",
+    });
+  });
+
+  it("resolves the encoded spaces emitted by the markdown renderer", () => {
+    expect(
+      resolveMarkdownFileLinkMeta(
+        "/Users/dara/Downloads/Lime%20Ride%20Artifacts/Bike%20Receipts",
+        "/Users/dara/Downloads/Lime Ride Artifacts",
+      ),
+    ).toMatchObject({
+      targetPath: "/Users/dara/Downloads/Lime Ride Artifacts/Bike Receipts",
+      workspaceRelativePath: "Bike Receipts",
+      basename: "Bike Receipts",
+    });
+  });
+
+  it("resolves relative spaced folders from the markdown renderer", () => {
+    const href = renderMarkdownLinkHref("[folder](<docs/My Folder>)");
+
+    expect(href).toBe("docs/My%20Folder");
+    expect(resolveMarkdownFileLinkMeta(href, "/repo/project")).toMatchObject({
+      targetPath: "/repo/project/docs/My Folder",
+      workspaceRelativePath: "docs/My Folder",
+      basename: "My Folder",
+    });
+  });
+
+  it.each(["md", "html", "xml"])(
+    "resolves a bare spaced .%s filename from the markdown renderer",
+    (extension) => {
+      const href = renderMarkdownLinkHref(`[checklist](<Updated cutover checklist.${extension}>)`);
+
+      expect(href).toBe(`Updated%20cutover%20checklist.${extension}`);
+      expect(resolveMarkdownFileLinkMeta(href, "/repo/project")).toMatchObject({
+        targetPath: `/repo/project/Updated cutover checklist.${extension}`,
+        workspaceRelativePath: `Updated cutover checklist.${extension}`,
+        basename: `Updated cutover checklist.${extension}`,
+      });
+    },
+  );
+
+  it("formats tooltip display paths relative to the cwd for slash-prefixed windows paths", () => {
+    expect(
+      resolveMarkdownFileLinkMeta(
+        "/C:/Users/mike/dev-stuff/pathway/apps/web/src/components/chat/MessagesTimeline.virtualization.browser.tsx",
+        "C:/Users/mike/dev-stuff/pathway",
+      ),
+    ).toMatchObject({
+      displayPath:
+        "pathway/apps/web/src/components/chat/MessagesTimeline.virtualization.browser.tsx",
+      workspaceRelativePath:
+        "apps/web/src/components/chat/MessagesTimeline.virtualization.browser.tsx",
+    });
+  });
+
+  it("does not create a preview path for files outside the workspace", () => {
+    expect(resolveMarkdownFileLinkMeta("/tmp/report.ts", "/repo/project")).toMatchObject({
+      workspaceRelativePath: null,
+    });
+  });
+
+  it("normalizes slash-prefixed windows drive paths before resolving", () => {
+    expect(
+      resolveMarkdownFileLinkTarget(
+        "/D:/Programme/pathway/apps/web/src/components/chat/OpenInPicker.tsx#L69",
+      ),
+    ).toBe("D:/Programme/pathway/apps/web/src/components/chat/OpenInPicker.tsx:69");
+  });
+
+  it("resolves angle-bracketed windows drive paths", () => {
+    expect(
+      resolveMarkdownFileLinkTarget(
+        "</D:/Programme/pathway/apps/web/src/components/ChatMarkdown.tsx:1>",
+      ),
+    ).toBe("D:/Programme/pathway/apps/web/src/components/ChatMarkdown.tsx:1");
+  });
+
   it("does not treat app routes as file links", () => {
     expect(resolveMarkdownFileLinkTarget("/chat/settings")).toBeNull();
   });
 });
 
-describe("resolveUniqueAbsoluteSuffixTarget", () => {
-  const skillFile = "/Users/tester/.agents/skills/annotate-pr/references/uploadthing.md";
-  const tempFile = "/tmp/synara-codex-workspaces/thread-1/notes.md";
-
-  it("returns the unique known absolute path that already ends with the reference", () => {
+describe("resolveInlineCodeFileLinkMeta", () => {
+  it("links relative paths with file extensions", () => {
     expect(
-      resolveUniqueAbsoluteSuffixTarget("references/uploadthing.md", [
-        "/Users/tester/project/src/index.ts",
-        skillFile,
-      ]),
-    ).toBe(skillFile);
+      resolveInlineCodeFileLinkMeta(".plans/worktree-management-v1.md", "/Users/julius/project"),
+    ).toMatchObject({
+      targetPath: "/Users/julius/project/.plans/worktree-management-v1.md",
+      basename: "worktree-management-v1.md",
+    });
   });
 
-  it("keeps line suffixes on the known absolute path", () => {
-    expect(resolveUniqueAbsoluteSuffixTarget("notes.md:12", [tempFile])).toBe(`${tempFile}:12`);
+  it("links absolute posix paths", () => {
+    expect(resolveInlineCodeFileLinkMeta("/Users/julius/project/AGENTS.md")).toMatchObject({
+      targetPath: "/Users/julius/project/AGENTS.md",
+    });
+    expect(resolveInlineCodeFileLinkMeta("/usr/local/bin/tool")).toMatchObject({
+      targetPath: "/usr/local/bin/tool",
+    });
+    expect(resolveInlineCodeFileLinkMeta("/workspace/Makefile")).toMatchObject({
+      basename: "Makefile",
+    });
+    expect(resolveInlineCodeFileLinkMeta("/chat/settings")).toBeNull();
   });
 
-  it("returns null when no known path matches", () => {
-    expect(resolveUniqueAbsoluteSuffixTarget("references/uploadthing.md", [tempFile])).toBeNull();
+  it("links windows drive paths", () => {
+    expect(resolveInlineCodeFileLinkMeta("C:\\Users\\mike\\project\\src\\main.ts")).toMatchObject({
+      basename: "main.ts",
+    });
   });
 
-  it("returns null when two known paths share the same suffix", () => {
+  it("links relative paths with line positions", () => {
     expect(
-      resolveUniqueAbsoluteSuffixTarget("references/uploadthing.md", [
-        skillFile,
-        "/Users/tester/.codex/skills/other/references/uploadthing.md",
-      ]),
+      resolveInlineCodeFileLinkMeta("src/processRunner.ts:71", "/Users/julius/project"),
+    ).toMatchObject({
+      targetPath: "/Users/julius/project/src/processRunner.ts:71",
+      line: 71,
+    });
+  });
+
+  it("links bare filenames only when a line suffix marks them as file references", () => {
+    expect(resolveInlineCodeFileLinkMeta("script.ts:10", "/Users/julius/project")).toMatchObject({
+      targetPath: "/Users/julius/project/script.ts:10",
+      line: 10,
+    });
+    expect(resolveInlineCodeFileLinkMeta("AGENTS.md", "/Users/julius/project")).toBeNull();
+  });
+
+  it("links extensionless bare filenames with a line suffix", () => {
+    expect(resolveInlineCodeFileLinkMeta("Makefile:12", "/Users/julius/project")).toMatchObject({
+      targetPath: "/Users/julius/project/Makefile:12",
+      basename: "Makefile",
+      line: 12,
+    });
+    expect(resolveInlineCodeFileLinkMeta("Dockerfile:8:2", "/Users/julius/project")).toMatchObject({
+      line: 8,
+      column: 2,
+    });
+    expect(resolveInlineCodeFileLinkMeta("Makefile:12")).toBeNull();
+  });
+
+  it("does not treat arbitrary name:digits shapes as files", () => {
+    expect(resolveInlineCodeFileLinkMeta("error:1", "/Users/julius/project")).toBeNull();
+    expect(resolveInlineCodeFileLinkMeta("TODO:12", "/Users/julius/project")).toBeNull();
+    expect(resolveInlineCodeFileLinkMeta("exit:0", "/Users/julius/project")).toBeNull();
+    expect(resolveInlineCodeFileLinkMeta("port:3000", "/Users/julius/project")).toBeNull();
+    expect(resolveInlineCodeFileLinkMeta("http:80", "/Users/julius/project")).toBeNull();
+  });
+
+  it("links dot-prefixed relative paths without extensions", () => {
+    expect(
+      resolveInlineCodeFileLinkMeta("./scripts/deploy", "/Users/julius/project"),
+    ).toMatchObject({
+      basename: "deploy",
+    });
+  });
+
+  it("links relative windows-style paths by normalizing backslashes", () => {
+    expect(resolveInlineCodeFileLinkMeta("src\\main.ts", "/Users/julius/project")).toMatchObject({
+      targetPath: "/Users/julius/project/src/main.ts",
+      basename: "main.ts",
+    });
+    expect(
+      resolveInlineCodeFileLinkMeta(".\\scripts\\deploy", "/Users/julius/project"),
+    ).toMatchObject({
+      basename: "deploy",
+    });
+  });
+
+  it("ignores hosts, ports, and versions", () => {
+    expect(resolveInlineCodeFileLinkMeta("127.0.0.1:3000", "/Users/julius/project")).toBeNull();
+    expect(resolveInlineCodeFileLinkMeta("localhost:3000", "/Users/julius/project")).toBeNull();
+    expect(
+      resolveInlineCodeFileLinkMeta("example.com/index.html", "/Users/julius/project"),
+    ).toBeNull();
+    expect(resolveInlineCodeFileLinkMeta("example.com:8080", "/Users/julius/project")).toBeNull();
+    expect(resolveInlineCodeFileLinkMeta("10.0.0.1:80:1", "/Users/julius/project")).toBeNull();
+    expect(
+      resolveInlineCodeFileLinkMeta("localhost/index.html", "/Users/julius/project"),
+    ).toBeNull();
+    expect(
+      resolveInlineCodeFileLinkMeta("example.uk/index.html", "/Users/julius/project"),
     ).toBeNull();
   });
 
-  it("does not treat workspace-relative tool paths as known destinations", () => {
-    expect(resolveUniqueAbsoluteSuffixTarget("src/index.ts", ["apps/web/src/index.ts"])).toBeNull();
+  it("still links files whose extension merely resembles a tld", () => {
+    expect(resolveInlineCodeFileLinkMeta("script.ts:10", "/Users/julius/project")).not.toBeNull();
+    expect(resolveInlineCodeFileLinkMeta("src/setup.sh:3", "/Users/julius/project")).not.toBeNull();
+    expect(resolveInlineCodeFileLinkMeta("Makefile.in:12", "/Users/julius/project")).not.toBeNull();
+    expect(
+      resolveInlineCodeFileLinkMeta("conf.d/nginx.conf", "/Users/julius/project"),
+    ).not.toBeNull();
   });
 
-  it("strips a collapsed .../ prefix before matching the real tool path", () => {
+  it("prefers file over country-code host when a line suffix is present", () => {
+    expect(resolveInlineCodeFileLinkMeta("script.pl:10", "/Users/julius/project")).toMatchObject({
+      targetPath: "/Users/julius/project/script.pl:10",
+      line: 10,
+    });
+    expect(resolveInlineCodeFileLinkMeta("model.pt:3", "/Users/julius/project")).not.toBeNull();
     expect(
-      resolveUniqueAbsoluteSuffixTarget(".../scripts/delete_uploadthing.py", [
-        "/Users/tester/.agents/skills/annotate-pr/scripts/delete_uploadthing.py",
-      ]),
-    ).toBe("/Users/tester/.agents/skills/annotate-pr/scripts/delete_uploadthing.py");
-  });
-
-  it("uses a unique basename when the relative path is truncated", () => {
-    expect(
-      resolveUniqueAbsoluteSuffixTarget("delete_uploadthing.py", [
-        "/Users/tester/.agents/skills/annotate-pr/scripts/delete_uploadthing.py",
-      ]),
-    ).toBe("/Users/tester/.agents/skills/annotate-pr/scripts/delete_uploadthing.py");
-  });
-
-  it("joins a relative file onto a unique directory declared in the same message", () => {
-    expect(
-      resolveUniqueAbsoluteSuffixTarget("scripts/delete_uploadthing.py", [
-        "/Users/tester/.agents/skills/annotate-pr",
-      ]),
-    ).toBe("/Users/tester/.agents/skills/annotate-pr/scripts/delete_uploadthing.py");
-  });
-
-  it("does not treat a unique known file's parent as a join directory", () => {
-    expect(
-      resolveUniqueAbsoluteSuffixTarget("scripts/upsert_pr_proof.py", [
-        "/Users/tester/.agents/skills/annotate-pr/SKILL.md",
-      ]),
+      resolveInlineCodeFileLinkMeta("example.pl/index.html", "/Users/julius/project"),
     ).toBeNull();
+    expect(resolveInlineCodeFileLinkMeta("example.com:8080", "/Users/julius/project")).toBeNull();
   });
 
-  it("returns null when two declared directories would join to different files", () => {
-    expect(
-      resolveUniqueAbsoluteSuffixTarget("scripts/delete_uploadthing.py", [
-        "/Users/tester/.agents/skills/annotate-pr",
-        "/Users/tester/.config/opencode/skills/annotate-pr",
-      ]),
-    ).toBeNull();
+  it("ignores commands, flags, and expressions", () => {
+    expect(resolveInlineCodeFileLinkMeta("git worktree list --porcelain")).toBeNull();
+    expect(resolveInlineCodeFileLinkMeta("node.meta", "/Users/julius/project")).toBeNull();
+    expect(resolveInlineCodeFileLinkMeta("pnpm install", "/Users/julius/project")).toBeNull();
+    expect(resolveInlineCodeFileLinkMeta("src/**/*.ts", "/Users/julius/project")).toBeNull();
+  });
+
+  it("ignores extension-less relative segments like git refs and directories", () => {
+    expect(resolveInlineCodeFileLinkMeta("origin/main", "/Users/julius/project")).toBeNull();
+    expect(resolveInlineCodeFileLinkMeta("apps/web", "/Users/julius/project")).toBeNull();
+  });
+
+  it("ignores external urls", () => {
+    expect(resolveInlineCodeFileLinkMeta("https://example.com/docs.html")).toBeNull();
+  });
+
+  it("ignores relative paths without a cwd to resolve against", () => {
+    expect(resolveInlineCodeFileLinkMeta(".plans/worktree-management-v1.md")).toBeNull();
   });
 });
 
-describe("extractAbsoluteFilesystemPaths", () => {
-  it("collects backtick absolute files and directories", () => {
-    expect(
-      extractAbsoluteFilesystemPaths(
-        [
-          "**Dir:** `/Users/tester/.agents/skills/annotate-pr`",
-          "- `scripts/delete_uploadthing.py`",
-          "- `/Users/tester/.agents/skills/annotate-pr/SKILL.md:1`",
-        ].join("\n"),
-      ),
-    ).toEqual([
-      "/Users/tester/.agents/skills/annotate-pr",
-      "/Users/tester/.agents/skills/annotate-pr/SKILL.md",
-    ]);
+describe("directory paths with a trailing separator", () => {
+  it("keeps the final segment for a POSIX directory path", () => {
+    expect(resolveMarkdownFileLinkMeta("/tmp/favicons/", "/repo/project")).toMatchObject({
+      basename: "favicons",
+    });
   });
 
-  it("collects a bare POSIX home path in prose", () => {
+  it("keeps the final segment for a Windows directory path", () => {
     expect(
-      extractAbsoluteFilesystemPaths(
-        "Created global copy at /Users/tester/.agents/skills/annotate-pr for every project.",
-      ),
-    ).toEqual(["/Users/tester/.agents/skills/annotate-pr"]);
+      resolveMarkdownFileLinkMeta("C:\\Users\\kelchm\\.claude\\", "/repo/project"),
+    ).toMatchObject({ basename: ".claude" });
   });
-});
 
-describe("markdownFilePathHref", () => {
-  it.each([
-    "/vault/space %20 #hash?.md",
-    "C:/Users/me/space %20 #hash?.md",
-    "//server/share/space %20 #hash?.md",
-  ])("round-trips literal path characters in %s", (path) => {
-    const href = markdownFilePathHref(path);
-    expect(resolveMarkdownFileLinkTarget(href)).toBe(path);
-    expect(resolveMarkdownFileLinkTarget(rewriteMarkdownFileUriHref(href)!)).toBe(path);
+  it("matches the label of the same path without a trailing separator", () => {
+    const withSlash = resolveMarkdownFileLinkMeta("/tmp/favicons/", "/repo/project");
+    const withoutSlash = resolveMarkdownFileLinkMeta("/tmp/favicons", "/repo/project");
+    expect(withSlash?.basename).toBe(withoutSlash?.basename);
+  });
+
+  it("does not produce an empty label for the filesystem root", () => {
+    const meta = resolveMarkdownFileLinkMeta("/tmp/", "/repo/project");
+    expect(meta?.basename).not.toBe("");
   });
 });

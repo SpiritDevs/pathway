@@ -1,0 +1,41 @@
+{
+  "report": [
+    {
+      "scenario": "before-failed-refresh",
+      "text": "Version Control\n⑂  fix-pr-status\n#149: Keep PR status current\nMerge conflicts\nResolve\nChanges\n+0 −0"
+    },
+    {
+      "scenario": "turn-completion-clears-conflict",
+      "text": "Version Control\n⑂  fix-pr-status\n#149: Keep PR status current\nMerge\nChanges\n+0 −0"
+    },
+    {
+      "scenario": "push-completion-clears-conflict",
+      "text": "Version Control\n⑂  fix-pr-status\n#149: Keep PR status current\nMerge\nChanges\n+0 −0"
+    },
+    {
+      "scenario": "unknown-is-checking",
+      "text": "Version Control\n⑂  fix-pr-status\n#149: Keep PR status current\nChecking merge status…\nChanges\n+0 −0"
+    },
+    {
+      "scenario": "failure-and-retry",
+      "text": "Version Control\n⑂  fix-pr-status\n#149: Keep PR status current\nMerge\nChanges\n+0 −0"
+    },
+    {
+      "scenario": "return-to-thread-refreshes",
+      "text": "Version Control\n⑂  fix-pr-status\n#149: Keep PR status current\nMerge conflicts\nResolve\nChanges\n+0 −0"
+    },
+    {
+      "scenario": "return-to-window-refreshes",
+      "text": "Version Control\n⑂  fix-pr-status\n#149: Keep PR status current\nMerge\nChanges\n+0 −0"
+    },
+    {
+      "scenario": "poll-refreshes-external-change",
+      "text": "Version Control\n⑂  fix-pr-status\n#149: Keep PR status current\nMerge conflicts\nResolve\nChanges\n+0 −0"
+    },
+    {
+      "scenario": "poll-recovers-after-error",
+      "text": "Version Control\n⑂  fix-pr-status\n#149: Keep PR status current\nMerge\nChanges\n+0 −0"
+    }
+  ],
+  "errors": []
+}

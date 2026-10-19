@@ -1,72 +1,81 @@
-// FILE: release-smoke.ts
-// Purpose: Smoke-tests release version alignment and merged macOS updater manifests.
-// Layer: Release verification script
-// Depends on: update-release-package-versions.ts and merge-mac-update-manifests.ts.
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
+import * as Console from "effect/Console";
+import * as Effect from "effect/Effect";
 
-import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+const repoRoot = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "..");
 
-import {
-  SYNARA_DESKTOP_UPDATE_CHANNEL,
-  SYNARA_PRODUCTION_BUNDLE_ID,
-} from "@synara/shared/desktopIdentity";
-
-import {
-  readReleaseUpdatePolicyConfig,
-  resolveReleaseUpdatePolicy,
-} from "./lib/release-update-policy.ts";
-import {
-  RELEASE_LOCKFILE_PATH,
-  RELEASE_PATCHES_PATH,
-  RELEASE_WORKSPACE_MANIFEST_PATHS,
-} from "./lib/release-workspace-manifests.ts";
-
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const workspaceFiles = [
+  "package.json",
+  "pnpm-lock.yaml",
+  "pnpm-workspace.yaml",
+  "apps/server/package.json",
+  "apps/desktop/package.json",
+  "apps/web/package.json",
+  "infra/relay/package.json",
+  "oxlint-plugin-pathway/package.json",
+  "packages/backend/package.json",
+  "packages/client-runtime/package.json",
+  "packages/contracts/package.json",
+  "packages/shared/package.json",
+  "packages/ssh/package.json",
+  "packages/effect-acp/package.json",
+  "packages/effect-codex-app-server/package.json",
+  "scripts/package.json",
+] as const;
 
 function copyWorkspaceManifestFixture(targetRoot: string): void {
-  for (const relativePath of RELEASE_WORKSPACE_MANIFEST_PATHS) {
-    const sourcePath = resolve(repoRoot, relativePath);
-    const destinationPath = resolve(targetRoot, relativePath);
-    mkdirSync(dirname(destinationPath), { recursive: true });
-    cpSync(sourcePath, destinationPath);
+  for (const relativePath of workspaceFiles) {
+    const sourcePath = NodePath.resolve(repoRoot, relativePath);
+    const destinationPath = NodePath.resolve(targetRoot, relativePath);
+    NodeFS.mkdirSync(NodePath.dirname(destinationPath), { recursive: true });
+    NodeFS.cpSync(sourcePath, destinationPath);
   }
-  cpSync(resolve(repoRoot, RELEASE_LOCKFILE_PATH), resolve(targetRoot, RELEASE_LOCKFILE_PATH));
-  cpSync(resolve(repoRoot, RELEASE_PATCHES_PATH), resolve(targetRoot, RELEASE_PATCHES_PATH), {
-    recursive: true,
-  });
+
+  const patchesDirectory = NodePath.resolve(repoRoot, "patches");
+  if (NodeFS.existsSync(patchesDirectory)) {
+    NodeFS.cpSync(patchesDirectory, NodePath.resolve(targetRoot, "patches"), { recursive: true });
+  }
 }
 
 function writeMacManifestFixtures(targetRoot: string): { arm64Path: string; x64Path: string } {
-  const assetDirectory = resolve(targetRoot, "release-assets");
-  mkdirSync(assetDirectory, { recursive: true });
+  const assetDirectory = NodePath.resolve(targetRoot, "release-assets");
+  NodeFS.mkdirSync(assetDirectory, { recursive: true });
 
-  const arm64Path = resolve(assetDirectory, "latest-mac.yml");
-  const x64Path = resolve(assetDirectory, "latest-mac-x64.yml");
+  const arm64Path = NodePath.resolve(assetDirectory, "latest-mac.yml");
+  const x64Path = NodePath.resolve(assetDirectory, "latest-mac-x64.yml");
 
-  writeFileSync(
+  NodeFS.writeFileSync(
     arm64Path,
     `version: 9.9.9-smoke.0
 files:
-  - url: Synara-9.9.9-smoke.0-arm64.zip
+  - url: Pathway-Code-9.9.9-smoke.0-arm64.zip
     sha512: arm64zip
     size: 125621344
-path: Synara-9.9.9-smoke.0-arm64.zip
+  - url: Pathway-Code-9.9.9-smoke.0-arm64.dmg
+    sha512: arm64dmg
+    size: 131754935
+path: Pathway-Code-9.9.9-smoke.0-arm64.zip
 sha512: arm64zip
 releaseDate: '2026-03-08T10:32:14.587Z'
 `,
   );
 
-  writeFileSync(
+  NodeFS.writeFileSync(
     x64Path,
     `version: 9.9.9-smoke.0
 files:
-  - url: Synara-9.9.9-smoke.0-x64.zip
+  - url: Pathway-Code-9.9.9-smoke.0-x64.zip
     sha512: x64zip
     size: 132000112
-path: Synara-9.9.9-smoke.0-x64.zip
+  - url: Pathway-Code-9.9.9-smoke.0-x64.dmg
+    sha512: x64dmg
+    size: 138148807
+path: Pathway-Code-9.9.9-smoke.0-x64.zip
 sha512: x64zip
 releaseDate: '2026-03-08T10:36:07.540Z'
 `,
@@ -75,412 +84,110 @@ releaseDate: '2026-03-08T10:36:07.540Z'
   return { arm64Path, x64Path };
 }
 
+function writeWindowsManifestFixtures(
+  targetRoot: string,
+  channel: string,
+): { arm64Path: string; x64Path: string } {
+  const assetDirectory = NodePath.resolve(targetRoot, "release-assets");
+  NodeFS.mkdirSync(assetDirectory, { recursive: true });
+
+  const arm64Path = NodePath.resolve(assetDirectory, `${channel}-win-arm64.yml`);
+  const x64Path = NodePath.resolve(assetDirectory, `${channel}-win-x64.yml`);
+
+  NodeFS.writeFileSync(
+    arm64Path,
+    `version: 9.9.9-smoke.0
+files:
+  - url: Pathway-Code-9.9.9-smoke.0-arm64.exe
+    sha512: arm64exe
+    size: 126621344
+  - url: Pathway-Code-9.9.9-smoke.0-arm64.exe.blockmap
+    sha512: arm64blockmap
+    size: 152344
+path: Pathway-Code-9.9.9-smoke.0-arm64.exe
+sha512: arm64exe
+releaseDate: '2026-03-08T10:32:14.587Z'
+`,
+  );
+
+  NodeFS.writeFileSync(
+    x64Path,
+    `version: 9.9.9-smoke.0
+files:
+  - url: Pathway-Code-9.9.9-smoke.0-x64.exe
+    sha512: x64exe
+    size: 132000112
+  - url: Pathway-Code-9.9.9-smoke.0-x64.exe.blockmap
+    sha512: x64blockmap
+    size: 160112
+path: Pathway-Code-9.9.9-smoke.0-x64.exe
+sha512: x64exe
+releaseDate: '2026-03-08T10:36:07.540Z'
+`,
+  );
+
+  return { arm64Path, x64Path };
+}
+
+function writeWindowsBuilderDebugFixtures(targetRoot: string): {
+  arm64Path: string;
+  x64Path: string;
+} {
+  const assetDirectory = NodePath.resolve(targetRoot, "release-assets");
+  NodeFS.mkdirSync(assetDirectory, { recursive: true });
+
+  const arm64Path = NodePath.resolve(assetDirectory, "builder-debug-win-arm64.yml");
+  const x64Path = NodePath.resolve(assetDirectory, "builder-debug-win-x64.yml");
+  const debugFixture = `arm64:
+  firstOrDefaultFilePatterns:
+    - '**/*'
+nsis:
+  script: |-
+    !include "example.nsh"
+`;
+
+  NodeFS.writeFileSync(arm64Path, debugFixture);
+  NodeFS.writeFileSync(x64Path, debugFixture);
+
+  return { arm64Path, x64Path };
+}
 function assertContains(haystack: string, needle: string, message: string): void {
   if (!haystack.includes(needle)) {
     throw new Error(message);
   }
 }
 
-function assertNotContains(haystack: string, needle: string, message: string): void {
-  if (haystack.includes(needle)) {
+function assertExists(path: string, message: string): void {
+  if (!NodeFS.existsSync(path)) {
     throw new Error(message);
   }
 }
 
-function verifyCanonicalIdentity(): void {
-  const serverPackage = JSON.parse(
-    readFileSync(resolve(repoRoot, "apps/server/package.json"), "utf8"),
-  ) as { name?: string; bin?: Record<string, string> };
-  if (serverPackage.name !== "@synara/cli") {
-    throw new Error(`Expected CLI package @synara/cli, got ${serverPackage.name ?? "<missing>"}.`);
-  }
-  const expectedBinaries = {
-    synara: "dist/index.mjs",
-    "synara-restore-migration-backup": "dist/restoreMigrationBackup.mjs",
+function assertPackageVersion(path: string, version: string): void {
+  const packageJson = JSON.parse(NodeFS.readFileSync(path, "utf8")) as {
+    readonly version?: unknown;
   };
-  if (JSON.stringify(serverPackage.bin ?? {}) !== JSON.stringify(expectedBinaries)) {
-    throw new Error(
-      "Expected the CLI to expose only the Synara entry point and migration recovery binary.",
-    );
-  }
-  if (SYNARA_PRODUCTION_BUNDLE_ID !== "com.emanueledipietro.synara") {
-    throw new Error(`Unexpected production bundle ID: ${SYNARA_PRODUCTION_BUNDLE_ID}.`);
-  }
-  if (SYNARA_DESKTOP_UPDATE_CHANNEL !== "synara") {
-    throw new Error(`Unexpected desktop update channel: ${SYNARA_DESKTOP_UPDATE_CHANNEL}.`);
-  }
 
-  const releasePolicy = readReleaseUpdatePolicyConfig(repoRoot);
-  const resolvedPolicy = resolveReleaseUpdatePolicy("9.9.9", releasePolicy);
-  if (
-    resolvedPolicy.lane !== "clean" ||
-    !resolvedPolicy.makeLatest ||
-    resolvedPolicy.mirrorToStableChannel
-  ) {
-    throw new Error("Expected stable clean Synara releases to publish on GitHub Latest.");
+  if (packageJson.version !== version) {
+    throw new Error(`Expected ${path} to have version ${version}.`);
   }
 }
 
-function verifyReleaseWorkflowSafety(): void {
-  const workflow = readFileSync(
-    resolve(repoRoot, ".github/workflows/release.yml"),
-    "utf8",
-  ).replaceAll("\r\n", "\n");
-  assertContains(
-    workflow,
-    "\npermissions: {}\n",
-    "Expected the release workflow to deny GITHUB_TOKEN permissions by default.",
-  );
-  assertNotContains(
-    workflow,
-    "permissions:\n  contents: write\n  id-token: write",
-    "Release-wide publication permissions must not be inherited by every job.",
-  );
-  assertContains(
-    workflow,
-    "  preflight:\n    name: Preflight\n    runs-on: ubuntu-24.04\n    timeout-minutes: 15\n    permissions:\n      contents: read",
-    "Expected preflight to receive read-only repository access.",
-  );
-  const buildJob = workflow.slice(
-    workflow.indexOf("  build:\n"),
-    workflow.indexOf("  publish_cli:\n"),
-  );
-  assertContains(
-    buildJob,
-    "needs: [preflight, quality, server_tests, build_mac_icon, build_portable]",
-    "Native builds require exact-source prerequisites and every quality gate.",
-  );
-  assertContains(
-    buildJob,
-    "needs.quality.result == 'success' && (needs.server_tests.result == 'success' || needs.server_tests.result == 'skipped')",
-    "Native builds must not run after a failed lint, typecheck or test gate.",
-  );
-  for (const gate of [
-    "  quality:\n    name: Quality gates\n    needs: preflight\n    runs-on: ubuntu-24.04\n    timeout-minutes: 15\n    permissions:\n      contents: read",
-    "  server_tests:\n    name: Server tests (${{ matrix.shard }})\n    needs: preflight\n    if: needs.preflight.outputs.quality_gates == 'true'\n    runs-on: ubuntu-24.04\n    timeout-minutes: 15\n    permissions:\n      contents: read",
-    "bunx turbo run test --filter='!@synara/cli'",
-    "bunx turbo run test --filter=@synara/cli -- --shard=${{ matrix.shard }}",
-  ]) {
-    assertContains(workflow, gate, "Expected read-only, sharded quality gates before any build.");
-  }
-  assertContains(
-    buildJob,
-    "permissions:\n      contents: read",
-    "Artifact builds must remain read-only.",
-  );
-  assertContains(
-    readFileSync(resolve(repoRoot, "scripts/lib/release-build-scope.ts"), "utf8"),
-    'runner: "macos-15",',
-    "Expected the arm64 native release runner to retain the macOS 15 SDK.",
-  );
-  for (const toolchain of [
-    "native_developer_dir=/Applications/Xcode_16.4.app/Contents/Developer",
-    "DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer",
-    "runs-on: macos-26",
-    "name: mac-icon-catalog",
-    'echo "SYNARA_MAC_ICON_CATALOG=$RUNNER_TEMP/mac-icon/Assets.car" >> "$GITHUB_ENV"',
-  ]) {
-    assertContains(workflow, toolchain, "Expected separate native and icon release toolchains.");
-  }
-  assertContains(
-    readFileSync(resolve(repoRoot, ".github/actions/provision-cua/action.yml"), "utf8"),
-    "pkg-config libssl-dev libx11-dev libxtst-dev libxrandr-dev libxfixes-dev libxrender-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev",
-    "Expected the Linux release to install the native driver's build dependencies.",
-  );
-  assertContains(
-    workflow,
-    "    permissions:\n      contents: read\n      id-token: write\n    steps:",
-    "Expected only CLI publication to combine repository reads with npm OIDC.",
-  );
-  assertContains(
-    workflow,
-    "  build_server_tarball:\n    name: Build server tarball\n    if: needs.preflight.outputs.build_server == 'true'\n    needs: [preflight, build_portable]\n    runs-on: ubuntu-24.04\n    timeout-minutes: 10\n    permissions:\n      contents: read",
-    "Expected server tarball builds to receive read-only repository access.",
-  );
-  assertContains(
-    workflow,
-    "  release:\n    name: Publish GitHub Release\n    if: ${{ needs.preflight.outputs.publish_release == 'true' }}\n    needs: [preflight, build, build_server_tarball]\n    runs-on: ubuntu-24.04\n    timeout-minutes: 10\n    permissions:\n      contents: write",
-    "Expected only GitHub release publication to receive contents write access.",
-  );
-  assertContains(
-    workflow,
-    "repositories: ${{ github.event.repository.name }}\n          permission-contents: write",
-    "Expected release finalization to mint a repository-scoped contents token.",
-  );
-  assertContains(
-    workflow,
-    "publish_release:\n        description:",
-    "Expected a manual publication opt-in input.",
-  );
-  assertContains(
-    workflow,
-    "default: false\n        type: boolean",
-    "Expected manual release runs to default to build-only mode.",
-  );
-  assertContains(
-    workflow,
-    "publish_release: ${{ steps.release_mode.outputs.publish_release }}",
-    "Expected preflight to expose the resolved publication mode.",
-  );
-  assertContains(
-    workflow,
-    "if: ${{ needs.preflight.outputs.publish_release == 'true' }}",
-    "Expected GitHub publication to require explicit publication mode.",
-  );
-  assertContains(
-    workflow,
-    "needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_PUBLISH_CLI == '1'",
-    "Expected CLI publication to require explicit publication mode.",
-  );
-  assertContains(
-    workflow,
-    "needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_FINALIZE_RELEASE == '1'",
-    "Expected release finalization to require explicit publication mode.",
-  );
-  assertContains(
-    workflow,
-    "SYNARA_PUBLISH_RELEASE: ${{ needs.preflight.outputs.publish_release }}",
-    "Expected artifact signing admission to know whether artifacts will be published.",
-  );
-  assertContains(
-    workflow,
-    "Publishing macOS artifacts requires every signing and notarization secret.",
-    "Expected macOS publication to fail closed when signing is unavailable.",
-  );
-  assertContains(
-    workflow,
-    "Publishing Windows artifacts requires every Azure Trusted Signing secret.",
-    "Expected Windows publication to fail closed when signing is unavailable.",
-  );
-  assertNotContains(
-    workflow,
-    "Windows signing is optional",
-    "Windows publication must not retain the unsigned-installer fallback.",
-  );
-  assertContains(
-    workflow,
-    "node scripts/verify-release-source-provenance.ts",
-    "Expected preflight to bind release source provenance before artifact jobs.",
-  );
-  assertContains(
-    workflow,
-    "source_commit: ${{ steps.source_provenance.outputs.source_commit }}",
-    "Expected the verified source commit to be a preflight output.",
-  );
-  assertContains(
-    workflow,
-    "lockfile_sha256: ${{ steps.source_provenance.outputs.lockfile_sha256 }}",
-    "Expected the verified lockfile digest to be a preflight output.",
-  );
-  assertContains(
-    workflow,
-    '--source-commit "$SOURCE_COMMIT"',
-    "Expected desktop packaging to revalidate the verified source commit.",
-  );
-  assertContains(
-    workflow,
-    '--lockfile-sha256 "$LOCKFILE_SHA256"',
-    "Expected desktop packaging to revalidate the verified lockfile digest.",
-  );
-  assertNotContains(
-    workflow,
-    "Align package versions to release version",
-    "Release jobs must not mutate package versions after source provenance is established.",
-  );
-  assertContains(
-    workflow,
-    "node scripts/write-release-artifact-provenance.ts",
-    "Expected every platform lane to prove collected artifacts before upload.",
-  );
-  assertContains(
-    workflow,
-    'mv release-publish/latest-mac.yml "release-publish/latest-mac-${{ matrix.arch }}.yml"',
-    "Expected the x64 macOS matrix lane to preserve a distinct updater manifest for merging.",
-  );
-  assertContains(
-    workflow,
-    "APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}",
-    "Expected macOS signing admission to pin the post-build Team ID.",
-  );
-  assertContains(
-    workflow,
-    "AZURE_TRUSTED_SIGNING_SUBJECT_DN: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBJECT_DN }}",
-    "Expected Windows signing admission to require the exact certificate subject DN.",
-  );
-  assertContains(
-    workflow,
-    '--expected-windows-subject-dn "$EXPECTED_WINDOWS_SUBJECT_DN"',
-    "Expected Windows artifact provenance to verify the exact certificate subject DN.",
-  );
-  assertContains(
-    workflow,
-    "AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}",
-    "Expected the Windows build to receive the publisher identity that is pinned in the bundle.",
-  );
-  assertContains(
-    workflow,
-    "node scripts/verify-packaged-desktop-startup.ts",
-    "Expected every native payload to pass isolated packaged startup before upload.",
-  );
-
-  const cliScript = readFileSync(resolve(repoRoot, "apps/server/scripts/cli.ts"), "utf8");
-  assertContains(
-    cliScript,
-    "makeTempDirectoryScoped",
-    "Expected CLI publication to build an exclusively owned temporary package tree.",
-  );
-  assertContains(
-    cliScript,
-    "cwd: stagedPackageDir",
-    "Expected npm publication to run only from the isolated CLI stage.",
-  );
-  assertContains(
-    cliScript,
-    "Staged CLI bin target is missing its Node shebang",
-    "Expected staged CLI commands to remain executable npm bin entries.",
-  );
-  assertNotContains(
-    cliScript,
-    ".publish-bak",
-    "CLI publication must not mutate and restore source-tree assets.",
-  );
-
-  const desktopBuildConfig = readFileSync(
-    resolve(repoRoot, "apps/desktop/tsdown.config.mts"),
-    "utf8",
-  );
-  assertContains(
-    desktopBuildConfig,
-    "__SYNARA_WINDOWS_UPDATER_PUBLISHER__",
-    "Expected the Windows updater publisher identity to be compiled into the main bundle.",
-  );
-
-  const updaterSecurity = readFileSync(
-    resolve(repoRoot, "apps/desktop/src/electronUpdaterSecurity.ts"),
-    "utf8",
-  );
-  assertNotContains(
-    updaterSecurity,
-    "return feedPublisherNames",
-    "Runtime signature verification must not trust publisher names from mutable updater config.",
-  );
-}
-
-function verifyDesktopStageLockAuthority(): void {
-  const buildScript = readFileSync(resolve(repoRoot, "scripts/build-desktop-artifact.ts"), "utf8");
-  const gitAttributes = readFileSync(resolve(repoRoot, ".gitattributes"), "utf8");
-  assertContains(
-    gitAttributes,
-    "bun.lock text eol=lf",
-    "Expected bun.lock to retain byte-identical LF endings on every release runner.",
-  );
-  assertContains(
-    buildScript,
-    "bun install --frozen-lockfile --ignore-scripts --linker hoisted",
-    "Expected macOS and Linux desktop staging to install from the repository's frozen workspace lockfile.",
-  );
-  assertContains(
-    buildScript,
-    'if (platform === "win")',
-    "Expected Windows staging to use its explicit Bun lockfile-workaround path.",
-  );
-  assertContains(
-    buildScript,
-    "bun install --omit=dev --ignore-scripts --linker hoisted",
-    "Expected Windows staging to omit dev dependencies without Bun's implicitly frozen production mode.",
-  );
-  assertNotContains(
-    buildScript,
-    "--production --frozen-lockfile",
-    "Desktop staging must avoid Bun's divergent frozen production-workspace lockfile resolution.",
-  );
-  assertNotContains(
-    buildScript,
-    "bun install --production",
-    "Windows staging must not use Bun's production flag because it implicitly forces frozen mode.",
-  );
-  assertNotContains(
-    buildScript,
-    "--filter @synara/",
-    "Desktop staging must not use Bun workspace filters because filtered hoisted installs can diverge from bun.lock.",
-  );
-  assertContains(
-    buildScript,
-    ")`npm rebuild node-pty --foreground-scripts`,",
-    "Expected Linux desktop staging to build only node-pty after the script-free frozen install.",
-  );
-  assertNotContains(
-    buildScript,
-    "npm rebuild --foreground-scripts",
-    "Desktop staging must never enable every dependency lifecycle script.",
-  );
-  assertNotContains(
-    buildScript,
-    "bun pm trust --all",
-    "Desktop staging must never trust every dependency lifecycle script.",
-  );
-  assertContains(
-    buildScript,
-    'createRequire(new URL("./package.json", import.meta.url))',
-    "Expected desktop packaging to resolve dependencies from the owning scripts workspace.",
-  );
-  assertContains(
-    buildScript,
-    'requireFromScriptsWorkspace.resolve("electron-builder/cli.js")',
-    "Expected desktop packaging to resolve electron-builder across Bun hoisting layouts.",
-  );
-  assertContains(
-    buildScript,
-    "`${process.execPath} ${electronBuilderCliPath}",
-    "Expected desktop packaging to invoke electron-builder through Node without platform-specific bin shims.",
-  );
-  assertNotContains(
-    buildScript,
-    "electron-builder.cmd",
-    "Desktop packaging must not depend on a Windows bin shim that Bun may hoist elsewhere.",
-  );
-  assertContains(
-    buildScript,
-    "synaraCommitHash: commitHash",
-    "Expected the staged package to carry its exact source commit.",
-  );
-  assertContains(
-    buildScript,
-    "synaraLockfileSha256: resolvedLockfileSha256",
-    "Expected the staged package to carry its repository lockfile digest.",
-  );
-  assertContains(
-    buildScript,
-    "synaraWindowsPublisherSubject: resolvedBuildConfig.windowsPublisherSubject",
-    "Expected signed Windows packages to carry the independently configured certificate subject DN.",
-  );
-
-  const lockfile = readFileSync(resolve(repoRoot, RELEASE_LOCKFILE_PATH), "utf8");
-  const packagesSectionOffset = lockfile.indexOf('\n  "packages": {');
-  if (packagesSectionOffset < 0) {
-    throw new Error("Expected bun.lock to contain a packages section.");
-  }
-  const workspaceImporters = lockfile.slice(0, packagesSectionOffset);
-  for (const manifestPath of RELEASE_WORKSPACE_MANIFEST_PATHS) {
-    const workspacePath = manifestPath === "package.json" ? "" : dirname(manifestPath);
-    if (!workspaceImporters.includes(`${JSON.stringify(workspacePath)}: {`)) {
-      throw new Error(`Expected ${manifestPath} to have a matching importer in bun.lock.`);
-    }
+function assertMissing(path: string, message: string): void {
+  if (NodeFS.existsSync(path)) {
+    throw new Error(message);
   }
 }
 
-const tempRoot = mkdtempSync(join(tmpdir(), "synara-release-smoke-"));
+const tempRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pathway-release-smoke-"));
 
 try {
-  verifyCanonicalIdentity();
-  verifyReleaseWorkflowSafety();
-  verifyDesktopStageLockAuthority();
   copyWorkspaceManifestFixture(tempRoot);
 
-  execFileSync(
+  NodeChildProcess.execFileSync(
     process.execPath,
     [
-      resolve(repoRoot, "scripts/update-release-package-versions.ts"),
+      NodePath.resolve(repoRoot, "scripts/update-release-package-versions.ts"),
       "9.9.9-smoke.0",
       "--root",
       tempRoot,
@@ -491,46 +198,210 @@ try {
     },
   );
 
-  execFileSync("bun", ["install", "--lockfile-only", "--ignore-scripts"], {
+  NodeFS.rmSync(NodePath.resolve(tempRoot, "pnpm-lock.yaml"), { force: true });
+
+  NodeChildProcess.execFileSync("vp", ["install", "--lockfile-only", "--ignore-scripts"], {
     cwd: tempRoot,
     stdio: "inherit",
   });
 
-  const lockfile = readFileSync(resolve(tempRoot, "bun.lock"), "utf8");
+  const lockfile = NodeFS.readFileSync(NodePath.resolve(tempRoot, "pnpm-lock.yaml"), "utf8");
+  assertContains(lockfile, "lockfileVersion:", "Expected pnpm-lock.yaml to be regenerated.");
+
+  for (const relativePath of [
+    "apps/server/package.json",
+    "apps/desktop/package.json",
+    "apps/web/package.json",
+    "packages/contracts/package.json",
+  ]) {
+    assertPackageVersion(NodePath.resolve(tempRoot, relativePath), "9.9.9-smoke.0");
+  }
+
+  const nightlyReleaseMetadata = NodeChildProcess.execFileSync(
+    process.execPath,
+    [
+      NodePath.resolve(repoRoot, "scripts/resolve-nightly-release.ts"),
+      "--date",
+      "20260413",
+      "--run-number",
+      "321",
+      "--sha",
+      "abcdef1234567890",
+      "--root",
+      tempRoot,
+    ],
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+    },
+  );
   assertContains(
-    lockfile,
-    `"version": "9.9.9-smoke.0"`,
-    "Expected bun.lock to contain the smoke version.",
+    nightlyReleaseMetadata,
+    "version=9.9.10-nightly.20260413.321",
+    "Expected nightly metadata to contain the derived nightly version.",
+  );
+  assertContains(
+    nightlyReleaseMetadata,
+    "tag=v9.9.10-nightly.20260413.321",
+    "Expected nightly metadata to contain the derived nightly tag.",
+  );
+  assertContains(
+    nightlyReleaseMetadata,
+    "name=Pathway Nightly 9.9.10-nightly.20260413.321 (abcdef123456)",
+    "Expected nightly metadata to include the short commit SHA in the release name.",
   );
 
   const { arm64Path, x64Path } = writeMacManifestFixtures(tempRoot);
-  execFileSync(
+  NodeChildProcess.execFileSync(
     process.execPath,
-    [resolve(repoRoot, "scripts/merge-mac-update-manifests.ts"), arm64Path, x64Path],
+    [
+      NodePath.resolve(repoRoot, "scripts/merge-update-manifests.ts"),
+      "--platform",
+      "mac",
+      arm64Path,
+      x64Path,
+    ],
     {
       cwd: repoRoot,
       stdio: "inherit",
     },
   );
 
-  const mergedManifest = readFileSync(arm64Path, "utf8");
+  const mergedManifest = NodeFS.readFileSync(arm64Path, "utf8");
   assertContains(
     mergedManifest,
-    "Synara-9.9.9-smoke.0-arm64.zip",
+    "Pathway-Code-9.9.9-smoke.0-arm64.zip",
     "Merged manifest is missing the arm64 asset.",
   );
   assertContains(
     mergedManifest,
-    "Synara-9.9.9-smoke.0-x64.zip",
+    "Pathway-Code-9.9.9-smoke.0-x64.zip",
     "Merged manifest is missing the x64 asset.",
   );
-  assertNotContains(
-    mergedManifest,
-    ".dmg",
-    "macOS updater manifests must describe only the finalized ZIP artifacts.",
+
+  const { arm64Path: winArm64Path, x64Path: winX64Path } = writeWindowsManifestFixtures(
+    tempRoot,
+    "latest",
+  );
+  const mergedWindowsManifestPath = NodePath.resolve(tempRoot, "release-assets/latest.yml");
+  const { arm64Path: nightlyWinArm64Path, x64Path: nightlyWinX64Path } =
+    writeWindowsManifestFixtures(tempRoot, "nightly");
+  const mergedNightlyWindowsManifestPath = NodePath.resolve(tempRoot, "release-assets/nightly.yml");
+  const { arm64Path: previewWinArm64Path, x64Path: previewWinX64Path } =
+    writeWindowsManifestFixtures(tempRoot, "preview");
+  const mergedPreviewWindowsManifestPath = NodePath.resolve(tempRoot, "release-assets/preview.yml");
+  const { arm64Path: winDebugArm64Path, x64Path: winDebugX64Path } =
+    writeWindowsBuilderDebugFixtures(tempRoot);
+  NodeChildProcess.execFileSync(
+    "bash",
+    [
+      "-lc",
+      `
+        release_assets_dir=${JSON.stringify(NodePath.resolve(tempRoot, "release-assets"))}
+        shopt -s nullglob
+        found_windows_manifest=false
+        for x64_manifest in "$release_assets_dir"/*-win-x64.yml; do
+          if [[ "$(basename "$x64_manifest")" == builder-debug-* ]]; then
+            continue
+          fi
+
+          arm64_manifest="\${x64_manifest/-x64.yml/-arm64.yml}"
+          output_manifest="\${x64_manifest/-win-x64.yml/.yml}"
+          if [[ ! -f "$arm64_manifest" ]]; then
+            echo "Missing matching arm64 Windows manifest for $x64_manifest" >&2
+            exit 1
+          fi
+
+          found_windows_manifest=true
+          ${JSON.stringify(process.execPath)} ${JSON.stringify(NodePath.resolve(repoRoot, "scripts/merge-update-manifests.ts"))} --platform win \
+            "$arm64_manifest" \
+            "$x64_manifest" \
+            "$output_manifest"
+          rm -f "$arm64_manifest" "$x64_manifest"
+        done
+
+        if [[ "$found_windows_manifest" != true ]]; then
+          echo "No Windows updater manifests found to merge." >&2
+          exit 1
+        fi
+      `,
+    ],
+    {
+      cwd: repoRoot,
+      stdio: "inherit",
+    },
   );
 
-  console.log("Release smoke checks passed.");
+  const mergedWindowsManifest = NodeFS.readFileSync(mergedWindowsManifestPath, "utf8");
+  assertContains(
+    mergedWindowsManifest,
+    "Pathway-Code-9.9.9-smoke.0-arm64.exe",
+    "Merged Windows manifest is missing the arm64 asset.",
+  );
+  assertContains(
+    mergedWindowsManifest,
+    "Pathway-Code-9.9.9-smoke.0-x64.exe",
+    "Merged Windows manifest is missing the x64 asset.",
+  );
+  const mergedNightlyWindowsManifest = NodeFS.readFileSync(
+    mergedNightlyWindowsManifestPath,
+    "utf8",
+  );
+  assertContains(
+    mergedNightlyWindowsManifest,
+    "Pathway-Code-9.9.9-smoke.0-arm64.exe",
+    "Merged nightly Windows manifest is missing the arm64 asset.",
+  );
+  assertContains(
+    mergedNightlyWindowsManifest,
+    "Pathway-Code-9.9.9-smoke.0-x64.exe",
+    "Merged nightly Windows manifest is missing the x64 asset.",
+  );
+  const mergedPreviewWindowsManifest = NodeFS.readFileSync(
+    mergedPreviewWindowsManifestPath,
+    "utf8",
+  );
+  assertContains(
+    mergedPreviewWindowsManifest,
+    "Pathway-Code-9.9.9-smoke.0-arm64.exe",
+    "Merged preview Windows manifest is missing the arm64 asset.",
+  );
+  assertContains(
+    mergedPreviewWindowsManifest,
+    "Pathway-Code-9.9.9-smoke.0-x64.exe",
+    "Merged preview Windows manifest is missing the x64 asset.",
+  );
+  assertMissing(
+    winArm64Path,
+    "Windows release smoke unexpectedly kept the arm64 updater manifest.",
+  );
+  assertMissing(winX64Path, "Windows release smoke unexpectedly kept the x64 updater manifest.");
+  assertMissing(
+    nightlyWinArm64Path,
+    "Windows release smoke unexpectedly kept the nightly arm64 updater manifest.",
+  );
+  assertMissing(
+    nightlyWinX64Path,
+    "Windows release smoke unexpectedly kept the nightly x64 updater manifest.",
+  );
+  assertMissing(
+    previewWinArm64Path,
+    "Windows release smoke unexpectedly kept the preview arm64 updater manifest.",
+  );
+  assertMissing(
+    previewWinX64Path,
+    "Windows release smoke unexpectedly kept the preview x64 updater manifest.",
+  );
+  assertExists(
+    winDebugArm64Path,
+    "Windows release smoke unexpectedly removed the arm64 builder debug fixture.",
+  );
+  assertExists(
+    winDebugX64Path,
+    "Windows release smoke unexpectedly removed the x64 builder debug fixture.",
+  );
+
+  Effect.runSync(Console.log("Release smoke checks passed."));
 } finally {
-  rmSync(tempRoot, { recursive: true, force: true });
+  NodeFS.rmSync(tempRoot, { recursive: true, force: true });
 }

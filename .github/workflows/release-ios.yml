@@ -1,0 +1,116 @@
+name: Release iOS to TestFlight
+
+on:
+  schedule:
+    - cron: "27 */3 * * *"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "App version, for example 1.0.17 (blank uses the Xcode project version)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+# Xcode assigns the next available build number during upload.
+concurrency:
+  group: release-ios-testflight
+  cancel-in-progress: false
+
+jobs:
+  check_changes:
+    name: Check for iOS changes
+    runs-on: ${{ fromJSON(vars.FLEET_MACOS_RUNNER || '["self-hosted","fleet-macos-arm64"]') }}
+    timeout-minutes: 5
+    outputs:
+      should_release: ${{ steps.changes.outputs.should_release }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Compare with the last successful upload
+        id: changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          checkpoint=refs/tags/ios-testflight/latest
+          if [[ "$EVENT_NAME" == workflow_dispatch ]] || ! git rev-parse --verify "$checkpoint" >/dev/null 2>&1; then
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          elif git diff --quiet "$checkpoint" HEAD -- \
+            apps/pathway-ios scripts/ios scripts/configure-pathway-ios.ts \
+            scripts/lib/public-config.ts .github/workflows/release-ios.yml; then
+            echo "No iOS changes since the last successful main-branch upload."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  release:
+    name: Build and upload to TestFlight
+    needs: check_changes
+    if: needs.check_changes.outputs.should_release == 'true'
+    runs-on: ${{ fromJSON(vars.FLEET_APPLE_RUNNER || '["self-hosted","fleet-macos-arm64","xcode"]') }}
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    environment:
+      name: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+
+      - name: Verify bundled terminal
+        run: node scripts/ios/build-terminal.mjs --check
+
+      - name: Archive and upload
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          IOS_DEVELOPMENT_CERTIFICATE: ${{ secrets.IOS_DEVELOPMENT_CERTIFICATE }}
+          IOS_DEVELOPMENT_CERTIFICATE_PASSWORD: ${{ secrets.IOS_DEVELOPMENT_CERTIFICATE_PASSWORD }}
+          PATHWAY_CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
+          PATHWAY_CLERK_JWT_TEMPLATE: ${{ vars.CLERK_JWT_TEMPLATE }}
+          PATHWAY_CONVEX_URL: ${{ vars.CONVEX_URL }}
+          PATHWAY_RELAY_URL: https://${{ vars.RELAY_DOMAIN || 'relay.spiritdevs.com' }}
+          PATHWAY_HOSTED_APP_URL: https://${{ vars.PATHWAY_WEB_LATEST_DOMAIN || 'app.pathwayos.dev' }}
+        run: bash scripts/ios/release-testflight.sh
+
+      - name: Record the successful main-branch upload
+        if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        run: |
+          git tag --force ios-testflight/latest "$GITHUB_SHA"
+          git push origin refs/tags/ios-testflight/latest --force
+
+      - name: Save release logs and symbols
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-testflight-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/pathway-testflight/archive.log
+            ${{ runner.temp }}/pathway-testflight/upload.log
+            ${{ runner.temp }}/pathway-testflight/Pathway.xcarchive/dSYMs
+            ${{ runner.temp }}/pathway-testflight/export/DistributionSummary.plist
+          if-no-files-found: ignore
+          retention-days: 14

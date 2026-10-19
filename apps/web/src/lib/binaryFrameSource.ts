@@ -1,13 +1,18 @@
 // FILE: binaryFrameSource.ts
-// Purpose: Deliver encoded frames (device video, computer desktop captures) from
-// the server to a pane's decoder over a dedicated binary WebSocket.
+// Purpose: Deliver encoded frames (computer desktop captures) from the server
+// to a pane's decoder over a dedicated binary WebSocket.
 // Layer: Web transport helper
-// Exports: the shared frame-source mechanism plus the URL builder; the
-// device/computer modules wrap it with their route constants and decoders.
-
-import { makeSocketUrl } from "../wsTransport";
+// Exports: the shared frame-source mechanism; the computer module wraps it with
+// its route constants and decoder.
 
 export type FrameSourceResetReason = "closed" | "error" | "decode-failed";
+
+/** What a browser reveals about a closed socket. */
+export interface FrameSourceClose {
+  /** The close code; 1006 when the connection ended without a close frame. */
+  readonly code: number;
+  readonly reason: string;
+}
 
 /** The narrow slice of WebSocket the frame path uses, so tests need no DOM. */
 export interface WebSocketLike {
@@ -22,21 +27,27 @@ export interface WebSocketLike {
 }
 
 interface BinaryFrameSourceOptions<Frame> {
-  readonly streamId: string;
-  readonly streamIdParam: string;
-  readonly wsPath: string;
+  /**
+   * Fully resolved socket URL: route, stream id, and (for remote connections)
+   * a short-lived ticket. Frames are lossy, high-rate, and useless the moment
+   * they are late, so they ride this dedicated socket rather than the RPC
+   * socket: a frame burst can never delay an RPC response or a domain-event
+   * push, and a slow consumer drops frames instead of stalling the control
+   * plane. The subscription is the URL, so frames start with no handshake.
+   */
+  readonly url: string;
   readonly resyncMessage: string;
   readonly handlers: {
     readonly onFrame: (frame: Frame) => void;
     /**
      * The socket dropped. The pane resets its decoder because the next
      * connection starts a new stream generation with its own parameter sets.
+     * A `closed` reset carries what the close event revealed.
      */
-    readonly onReset: (reason: FrameSourceResetReason) => void;
+    readonly onReset: (reason: FrameSourceResetReason, close?: FrameSourceClose) => void;
   };
-  /** Test seam; defaults to the browser's WebSocket against the resolved server URL. */
+  /** Test seam; defaults to the browser's WebSocket. */
   readonly createSocket?: (url: string) => WebSocketLike;
-  readonly explicitUrl?: string | null;
   readonly decode: (
     bytes: Uint8Array,
   ) =>
@@ -45,57 +56,29 @@ interface BinaryFrameSourceOptions<Frame> {
   /** Test seam for the resync cooldown clock. */
   readonly now?: () => number;
   /**
-   * Rebuilding a capture session is expensive (the device route tears down and
-   * recreates a VideoToolbox encoder; the computer route re-primes compositor
-   * capture), so a gate that fires on every dropped frame must not be allowed
-   * to thrash it. One request is in flight at a time and further requests
-   * inside this window are dropped rather than queued — the resync already in
-   * flight will deliver the keyframe they wanted.
+   * Rebuilding a capture session is expensive (the computer route re-primes
+   * compositor capture), so a gate that fires on every dropped frame must not
+   * be allowed to thrash it. One request is in flight at a time and further
+   * requests inside this window are dropped rather than queued — the resync
+   * already in flight will deliver the keyframe they wanted.
    */
   readonly resyncCooldownMs: number;
 }
 
 export interface BinaryFrameSource {
   /**
-   * Ask the server for a fresh keyframe (and parameter sets, for codec streams)
-   * after a gap or decode error. Debounced; returns true when the request
-   * actually went out.
+   * Ask the server for a fresh keyframe after a gap or decode error.
+   * Debounced; returns true when the request actually went out.
    */
   readonly requestResync: () => boolean;
   /** Idempotent; a source is single-use and cannot be restarted after close. */
   readonly close: () => void;
 }
 
-/**
- * Frames are lossy, high-rate, and useless the moment they are late, which is
- * the opposite of everything the Effect RPC feature socket carries. They ride a
- * dedicated binary WebSocket so a frame burst can never delay an RPC response or
- * a domain-event push, and so a slow consumer drops frames instead of stalling
- * the control plane. The subscription is the URL, so frames start with no
- * handshake message. It keys on the stream (device, computer) rather than the
- * thread: two threads watching one source share the same capture output.
- */
-export function binaryFrameSocketUrl(input: {
-  readonly streamId: string;
-  readonly streamIdParam: string;
-  readonly wsPath: string;
-  readonly explicitUrl?: string | null;
-}): string {
-  const url = new URL(makeSocketUrl(input.explicitUrl ?? null, input.wsPath));
-  url.searchParams.set(input.streamIdParam, input.streamId);
-  return url.toString();
-}
-
 export function createBinaryFrameSource<Frame>(
   options: BinaryFrameSourceOptions<Frame>,
 ): BinaryFrameSource {
-  const url = binaryFrameSocketUrl({
-    streamId: options.streamId,
-    streamIdParam: options.streamIdParam,
-    wsPath: options.wsPath,
-    ...(options.explicitUrl !== undefined ? { explicitUrl: options.explicitUrl } : {}),
-  });
-  const socket = (options.createSocket ?? defaultCreateSocket)(url);
+  const socket = (options.createSocket ?? defaultCreateSocket)(options.url);
   socket.binaryType = "arraybuffer";
 
   const now = options.now ?? (() => Date.now());
@@ -107,9 +90,10 @@ export function createBinaryFrameSource<Frame>(
   // dropping it, or the canvas waits for the server's next natural keyframe.
   let resyncPending = false;
 
-  const reset = (reason: FrameSourceResetReason) => {
+  const reset = (reason: FrameSourceResetReason, close?: FrameSourceClose) => {
     if (closed) return;
-    options.handlers.onReset(reason);
+    if (close === undefined) options.handlers.onReset(reason);
+    else options.handlers.onReset(reason, close);
   };
 
   const sendResync = (): boolean => {
@@ -149,7 +133,11 @@ export function createBinaryFrameSource<Frame>(
     options.handlers.onFrame(result.frame);
   }) as (event: never) => void);
 
-  socket.addEventListener("close", (() => reset("closed")) as (event: never) => void);
+  socket.addEventListener("close", ((event: { code?: number; reason?: string }) =>
+    reset("closed", {
+      code: event.code ?? 1006,
+      reason: event.reason ?? "",
+    })) as (event: never) => void);
   socket.addEventListener("error", (() => reset("error")) as (event: never) => void);
 
   return {

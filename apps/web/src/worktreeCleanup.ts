@@ -1,4 +1,4 @@
-import type { Thread } from "./types";
+import type { ThreadShell } from "./types";
 
 function normalizeWorktreePath(path: string | null): string | null {
   const trimmed = path?.trim();
@@ -9,8 +9,8 @@ function normalizeWorktreePath(path: string | null): string | null {
 }
 
 export function getOrphanedWorktreePathForThread(
-  threads: readonly Thread[],
-  threadId: Thread["id"],
+  threads: ReadonlyArray<Pick<ThreadShell, "id" | "worktreePath">>,
+  threadId: ThreadShell["id"],
 ): string | null {
   const targetThread = threads.find((thread) => thread.id === threadId);
   if (!targetThread) {
@@ -30,6 +30,26 @@ export function getOrphanedWorktreePathForThread(
   });
 
   return isShared ? null : targetWorktreePath;
+}
+
+/** Kept threads may move to another worktree while retaining older server-owned folders. */
+export function getClientWorktreeCleanupPathForThread(
+  threads: ReadonlyArray<
+    Pick<ThreadShell, "id" | "worktreePath" | "ownedWorktreePath" | "temporary">
+  >,
+  threadId: ThreadShell["id"],
+): string | null {
+  const thread = threads.find((candidate) => candidate.id === threadId);
+  const worktreePath = thread ? normalizeWorktreePath(thread.worktreePath) : null;
+  if (
+    !thread ||
+    thread.temporary ||
+    worktreePath === null ||
+    worktreePath === normalizeWorktreePath(thread.ownedWorktreePath ?? null)
+  ) {
+    return null;
+  }
+  return getOrphanedWorktreePathForThread(threads, threadId);
 }
 
 export function formatWorktreePathForDisplay(worktreePath: string): string {

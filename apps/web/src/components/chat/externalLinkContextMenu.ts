@@ -1,0 +1,113 @@
+import type { ContextMenuItem } from "@spiritdevs/contracts";
+import { getChangeRequestTerminologyFromUrl } from "@spiritdevs/shared/sourceControl";
+
+export type ExternalLinkContextMenuAction =
+  | "attach-pull-request"
+  | "open-in-preview"
+  | "open-external"
+  | "copy-link";
+
+export type ExternalLinkContextMenuFailureOperation =
+  | "show-link-context-menu"
+  | "attach-pull-request"
+  | "open-link-in-preview"
+  | "open-link-external"
+  | "copy-link";
+
+const FAILURE_OPERATION_BY_ACTION = {
+  "attach-pull-request": "attach-pull-request",
+  "open-in-preview": "open-link-in-preview",
+  "open-external": "open-link-external",
+  "copy-link": "copy-link",
+} as const satisfies Record<ExternalLinkContextMenuAction, ExternalLinkContextMenuFailureOperation>;
+
+const EXTERNAL_LINK_CONTEXT_MENU_ITEMS = [
+  { id: "open-in-preview", label: "Open in integrated browser" },
+  { id: "open-external", label: "Open in system browser" },
+  { id: "copy-link", label: "Copy Link" },
+] as const satisfies readonly ContextMenuItem<ExternalLinkContextMenuAction>[];
+
+interface ShowExternalLinkContextMenuOptions {
+  readonly href: string;
+  readonly position: { readonly x: number; readonly y: number };
+  readonly showContextMenu: (
+    items: readonly ContextMenuItem<ExternalLinkContextMenuAction>[],
+    position: { readonly x: number; readonly y: number },
+  ) => Promise<ExternalLinkContextMenuAction | null>;
+  readonly openInPreview?: ((href: string) => Promise<void>) | undefined;
+  readonly openExternal: (href: string) => Promise<void>;
+  readonly copyLink: (href: string) => Promise<unknown>;
+  readonly attachPullRequest?: ((href: string) => Promise<unknown>) | undefined;
+  readonly reportFailure: (
+    operation: ExternalLinkContextMenuFailureOperation,
+    cause: unknown,
+  ) => void;
+}
+
+function resolveExternalWebLink(href: string | null | undefined): URL | null {
+  if (!href) return null;
+  try {
+    const url = new URL(href);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+export function resolveExternalWebLinkHref(href: string | null | undefined): string | null {
+  return resolveExternalWebLink(href)?.href ?? null;
+}
+
+export function resolveExternalWebLinkHost(href: string | undefined): string | null {
+  return resolveExternalWebLink(href)?.hostname || null;
+}
+
+export async function showExternalLinkContextMenu({
+  href,
+  position,
+  showContextMenu,
+  openInPreview,
+  openExternal,
+  copyLink,
+  attachPullRequest,
+  reportFailure,
+}: ShowExternalLinkContextMenuOptions): Promise<void> {
+  let action: ExternalLinkContextMenuAction | null;
+  try {
+    const changeRequestLabel = getChangeRequestTerminologyFromUrl(href).shortLabel;
+    const items = EXTERNAL_LINK_CONTEXT_MENU_ITEMS.filter(
+      (item) => item.id !== "open-in-preview" || openInPreview !== undefined,
+    );
+    action = await showContextMenu(
+      attachPullRequest
+        ? [
+            {
+              id: "attach-pull-request",
+              label: `Attach ${changeRequestLabel} to thread`,
+              separatorAfter: true,
+            },
+            ...items,
+          ]
+        : items,
+      position,
+    );
+  } catch (cause) {
+    reportFailure("show-link-context-menu", cause);
+    return;
+  }
+
+  try {
+    if (action === "attach-pull-request") {
+      await attachPullRequest?.(href);
+    } else if (action === "open-in-preview") {
+      await openInPreview?.(href);
+    } else if (action === "open-external") {
+      await openExternal(href);
+    } else if (action === "copy-link") {
+      await copyLink(href);
+    }
+  } catch (cause) {
+    if (action) reportFailure(FAILURE_OPERATION_BY_ACTION[action], cause);
+  }
+}

@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - effect has no synchronous SHA-256; the content hash is computed inline on the record/match path.
 /**
  * The coordinate frame a model points in: the screenshot it is looking at.
  *
@@ -17,12 +18,19 @@
  * names an earlier one. Frames are per thread, because two agents looking at
  * different windows must not read each other's pictures, and bounded, because
  * a model only ever refers back a few screenshots.
+ *
+ * Recording and matching are synchronous bookkeeping; resolving a frame and
+ * mapping a point or rect into it return Effects that fail with
+ * `ComputerTargetError` when the model points at nothing.
+ *
+ * @module computer/screenshotFrames
  */
-import { createHash } from "node:crypto";
+import * as NodeCrypto from "node:crypto";
 
-import type { ComputerPoint, ComputerRect, ComputerScreenshot } from "@synara/contracts";
+import type { ComputerPoint, ComputerRect, ComputerScreenshot } from "@spiritdevs/contracts";
+import * as Effect from "effect/Effect";
 
-import { ComputerTargetError } from "./uiTreeTargeting.ts";
+import { ComputerTargetError } from "./computerErrors.ts";
 
 export interface ScreenshotFrame {
   /** Id handed to the model as `screenshotId`, unique for the registry's lifetime. */
@@ -64,7 +72,7 @@ export class ScreenshotFrameRegistry {
   private imageHash(screenshot: ScreenshotFrameSource): string {
     let hash = this.sourceHashes.get(screenshot);
     if (hash === undefined) {
-      hash = createHash("sha256")
+      hash = NodeCrypto.createHash("sha256")
         .update(screenshot.bytesBase64 ?? "")
         .digest("hex");
       this.sourceHashes.set(screenshot, hash);
@@ -156,31 +164,45 @@ export class ScreenshotFrameRegistry {
    * thread that has not looked yet (or whose server restarted since) has to
    * take a screenshot before it can aim.
    */
-  resolve(threadId: string, screenshotId?: string): ScreenshotFrame {
-    const frames = this.threads.get(threadId) ?? [];
-    if (screenshotId !== undefined) {
-      const frame = frames.find((candidate) => candidate.id === screenshotId);
-      if (frame) return frame;
-      throw new ComputerTargetError({
-        code: "computer_target_not_found",
-        message:
-          `No screenshot ${JSON.stringify(screenshotId)} is available to point into` +
-          (frames.length > 0
-            ? `; the screenshots still available are ${frames.map((f) => f.id).join(", ")} (newest last).`
-            : ". Take a screenshot first and use its screenshotId."),
-        notFound: true,
-      });
-    }
-    const latest = frames.at(-1);
-    if (latest) return latest;
-    throw new ComputerTargetError({
-      code: "computer_target_invalid",
-      message:
-        "No screenshot to point into: this conversation has not received one yet. " +
-        "Take one with computer_screenshot or computer_get_state, then give x/y as pixel " +
-        "coordinates in that image.",
+  resolve(
+    threadId: string,
+    screenshotId?: string,
+  ): Effect.Effect<ScreenshotFrame, ComputerTargetError> {
+    return Effect.suspend(() => {
+      const frames = this.threads.get(threadId) ?? [];
+      if (screenshotId !== undefined) {
+        const frame = frames.find((candidate) => candidate.id === screenshotId);
+        if (frame) return Effect.succeed(frame);
+        return Effect.fail(unknownScreenshot(screenshotId, frames));
+      }
+      const latest = frames.at(-1);
+      if (latest) return Effect.succeed(latest);
+      return Effect.fail(
+        new ComputerTargetError({
+          code: "computer_target_invalid",
+          message:
+            "No screenshot to point into: this conversation has not received one yet. " +
+            "Take one with computer_screenshot or computer_get_state, then give x/y as pixel " +
+            "coordinates in that image.",
+        }),
+      );
     });
   }
+}
+
+function unknownScreenshot(
+  screenshotId: string,
+  frames: readonly ScreenshotFrame[],
+): ComputerTargetError {
+  return new ComputerTargetError({
+    code: "computer_target_not_found",
+    message:
+      `No screenshot ${JSON.stringify(screenshotId)} is available to point into` +
+      (frames.length > 0
+        ? `; the screenshots still available are ${frames.map((f) => f.id).join(", ")} (newest last).`
+        : ". Take a screenshot first and use its screenshotId."),
+    notFound: true,
+  });
 }
 
 function describeFrame(frame: ScreenshotFrame): string {
@@ -198,7 +220,7 @@ export function screenshotPointToDesktop(
   frame: ScreenshotFrame,
   x: number,
   y: number,
-): ComputerPoint {
+): Effect.Effect<ComputerPoint, ComputerTargetError> {
   if (
     !Number.isFinite(x) ||
     !Number.isFinite(y) ||
@@ -207,13 +229,15 @@ export function screenshotPointToDesktop(
     x > frame.width ||
     y > frame.height
   ) {
-    throw new ComputerTargetError({
-      code: "computer_target_offscreen",
-      message: `Computer target (${x}, ${y}) is outside ${describeFrame(frame)}; x/y are pixel coordinates in that image.`,
-      candidates: [],
-    });
+    return Effect.fail(
+      new ComputerTargetError({
+        code: "computer_target_offscreen",
+        message: `Computer target (${x}, ${y}) is outside ${describeFrame(frame)}; x/y are pixel coordinates in that image.`,
+        candidates: [],
+      }),
+    );
   }
-  return {
+  return Effect.succeed({
     x: clampToSpan(
       Math.round(frame.region.x + x / frame.scale),
       frame.region.x,
@@ -224,30 +248,35 @@ export function screenshotPointToDesktop(
       frame.region.y,
       frame.region.height,
     ),
-  };
+  });
 }
 
 /**
  * Desktop rect for a rect of frame pixels, clipped to what the frame covers.
  * A rect entirely outside the image is refused for the same reason a point is.
  */
-export function screenshotRectToDesktop(frame: ScreenshotFrame, rect: ComputerRect): ComputerRect {
+export function screenshotRectToDesktop(
+  frame: ScreenshotFrame,
+  rect: ComputerRect,
+): Effect.Effect<ComputerRect, ComputerTargetError> {
   const left = Math.max(0, rect.x);
   const top = Math.max(0, rect.y);
   const right = Math.min(frame.width, rect.x + rect.width);
   const bottom = Math.min(frame.height, rect.y + rect.height);
   if (!(right > left && bottom > top)) {
-    throw new ComputerTargetError({
-      code: "computer_target_offscreen",
-      message: `The requested region does not overlap ${describeFrame(frame)}; x/y/width/height are pixel coordinates in that image.`,
-      candidates: [],
-    });
+    return Effect.fail(
+      new ComputerTargetError({
+        code: "computer_target_offscreen",
+        message: `The requested region does not overlap ${describeFrame(frame)}; x/y/width/height are pixel coordinates in that image.`,
+        candidates: [],
+      }),
+    );
   }
   const x = Math.round(frame.region.x + left / frame.scale);
   const y = Math.round(frame.region.y + top / frame.scale);
   const farX = Math.round(frame.region.x + right / frame.scale);
   const farY = Math.round(frame.region.y + bottom / frame.scale);
-  return { x, y, width: Math.max(1, farX - x), height: Math.max(1, farY - y) };
+  return Effect.succeed({ x, y, width: Math.max(1, farX - x), height: Math.max(1, farY - y) });
 }
 
 /** Scroll distances given in frame pixels, as desktop logical pixels. */

@@ -1,4 +1,13 @@
-import type { ProviderRuntimeEvent } from "@synara/contracts";
+/**
+ * The short label the desktop cursor badge shows while an agent works: which
+ * tool is running, or what the owning thread is doing between tools.
+ *
+ * @module computer/cursorActivity
+ */
+import type { ProviderRuntimeEvent } from "@spiritdevs/contracts";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import type * as Scope from "effect/Scope";
 
 /** Short, factual labels. Never display arguments, typed text, or model reasoning. */
 export function cursorToolActivity(tool: string): string {
@@ -93,69 +102,114 @@ export function cursorRuntimeActivity(event: ProviderRuntimeEvent): string | und
   }
 }
 
-/** Cosmetic updates never block input. Debounce brief tools and deduplicate token events. */
-export class CursorActivity {
-  private owner: string | null = null;
-  private base = "Thinking";
-  private readonly pending = new Map<symbol, { thread: string; text: string }>();
-  private timer: ReturnType<typeof setTimeout> | undefined;
-  private last: string | null | undefined;
-  private disposed = false;
+/** How long a label must hold before it is published; brief tools never flash. */
+const CURSOR_ACTIVITY_DEBOUNCE = "80 millis";
+const QUESTION_LABELS: ReadonlySet<string> = new Set(["Waiting for you", "Needs approval"]);
 
-  constructor(private readonly publish: (text: string | null) => Promise<void> | undefined) {}
-
-  setOwner(owner: string | null): void {
-    if (this.owner === owner) return;
-    this.owner = owner;
-    this.base = "Thinking";
-    this.schedule();
-  }
-
-  setRuntime(thread: string, text: string, resumed = false): void {
-    if (thread !== this.owner || this.base === text) return;
-    // Content/item events may continue arriving while a question is open.
-    if (!resumed && ["Waiting for you", "Needs approval"].includes(this.base)) return;
-    this.base = text;
-    this.schedule();
-  }
-
-  async during<A>(thread: string, text: string, action: () => Promise<A>): Promise<A> {
-    const token = Symbol();
-    this.pending.set(token, { thread, text });
-    this.schedule();
-    try {
-      this.setRuntime(thread, "Thinking");
-      const result = await action();
-      return result;
-    } catch (error) {
-      this.setRuntime(thread, "Needs attention");
-      throw error;
-    } finally {
-      this.pending.delete(token);
-      this.schedule();
-    }
-  }
-
-  private schedule(): void {
-    if (this.disposed || this.timer !== undefined) return;
-    this.timer = setTimeout(() => {
-      this.timer = undefined;
-      const active = [...this.pending.values()].filter((item) => item.thread === this.owner).at(-1);
-      const waiting = ["Waiting for you", "Needs approval"].includes(this.base);
-      const text = this.owner === null ? null : waiting ? this.base : (active?.text ?? this.base);
-      if (text === this.last) return;
-      this.last = text;
-      // Catch synchronous and asynchronous backend failures alike.
-      void Promise.resolve()
-        .then(() => (this.disposed ? undefined : this.publish(text)))
-        .catch(() => undefined);
-    }, 80);
-    this.timer.unref?.();
-  }
-
-  dispose(): void {
-    this.disposed = true;
-    if (this.timer !== undefined) clearTimeout(this.timer);
-    this.pending.clear();
-  }
+export interface CursorActivity {
+  /** The thread whose activity the badge shows; null hides the badge. */
+  readonly setOwner: (owner: string | null) => Effect.Effect<void>;
+  /**
+   * The owner's between-tools state. An open question stays visible until
+   * `resumed` says its response arrived, because content events keep flowing
+   * while it is open.
+   */
+  readonly setRuntime: (thread: string, text: string, resumed?: boolean) => Effect.Effect<void>;
+  /** Shows `text` while `action` runs, then "Thinking", or "Needs attention" if it failed. */
+  readonly during: <A, E, R>(
+    thread: string,
+    text: string,
+    action: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E, R>;
+  /** Stops publishing; a label already scheduled is dropped. */
+  readonly dispose: Effect.Effect<void>;
 }
+
+/**
+ * Cosmetic updates never block input. Debounce brief tools and deduplicate
+ * token events. `publish` runs detached from the caller and its failures are
+ * ignored, so a slow or broken badge cannot delay or fail an action. Timer and
+ * publish fibers live in the caller's scope; closing it disposes the activity.
+ */
+export const makeCursorActivity = Effect.fnUntraced(function* <E>(
+  publish: (text: string | null) => Effect.Effect<void, E>,
+): Effect.fn.Return<CursorActivity, never, Scope.Scope> {
+  const scope = yield* Effect.scope;
+  let owner: string | null = null;
+  let base = "Thinking";
+  const pending = new Map<symbol, { readonly thread: string; readonly text: string }>();
+  let timer: Fiber.Fiber<void> | undefined;
+  let scheduled = false;
+  let last: string | null | undefined;
+  let disposed = false;
+
+  const flush = Effect.suspend(() => {
+    scheduled = false;
+    timer = undefined;
+    const active = [...pending.values()].findLast((item) => item.thread === owner);
+    const waiting = QUESTION_LABELS.has(base);
+    const text = owner === null ? null : waiting ? base : (active?.text ?? base);
+    if (text === last || disposed) return Effect.void;
+    last = text;
+    // Catch synchronous and asynchronous backend failures alike.
+    return Effect.asVoid(
+      Effect.forkIn(Effect.ignoreCause(Effect.suspend(() => publish(text))), scope),
+    );
+  });
+
+  const schedule = Effect.suspend(() => {
+    if (disposed || scheduled) return Effect.void;
+    scheduled = true;
+    return Effect.map(
+      Effect.forkIn(Effect.andThen(Effect.sleep(CURSOR_ACTIVITY_DEBOUNCE), flush), scope),
+      (fiber) => {
+        if (scheduled) timer = fiber;
+      },
+    );
+  });
+
+  const setOwner = (next: string | null) =>
+    Effect.suspend(() => {
+      if (owner === next) return Effect.void;
+      owner = next;
+      base = "Thinking";
+      return schedule;
+    });
+
+  const setRuntime = (thread: string, text: string, resumed = false) =>
+    Effect.suspend(() => {
+      if (thread !== owner || base === text) return Effect.void;
+      // Content/item events may continue arriving while a question is open.
+      if (!resumed && QUESTION_LABELS.has(base)) return Effect.void;
+      base = text;
+      return schedule;
+    });
+
+  const during = <A, E, R>(thread: string, text: string, action: Effect.Effect<A, E, R>) =>
+    Effect.suspend(() => {
+      const token = Symbol();
+      pending.set(token, { thread, text });
+      return schedule.pipe(
+        Effect.andThen(setRuntime(thread, "Thinking")),
+        Effect.andThen(action),
+        Effect.onError(() => setRuntime(thread, "Needs attention")),
+        Effect.ensuring(
+          Effect.suspend(() => {
+            pending.delete(token);
+            return schedule;
+          }),
+        ),
+      );
+    });
+
+  const dispose = Effect.suspend(() => {
+    disposed = true;
+    pending.clear();
+    const running = timer;
+    timer = undefined;
+    return running === undefined ? Effect.void : Fiber.interrupt(running);
+  });
+
+  yield* Effect.addFinalizer(() => dispose);
+  return { setOwner, setRuntime, during, dispose } satisfies CursorActivity;
+});

@@ -1,58 +1,54 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
+import * as Schema from "effect/Schema";
 
-import {
-  WsAutomationCreateRpc,
-  WsAutomationGetMemoryRpc,
-  WsAutomationResolveProposalRpc,
-  WsBootstrapRpcGroup,
-  WsFeatureRpcGroup,
-  WsComputerRpcGroup,
-  WsProjectsDiscoverScriptsRpc,
-  WsProjectsProvisionFromGitHubRpc,
-  WsProjectsSubscribeFileChangeRpc,
-  WsPullRequestsReviewRequestCountRpc,
-  WsRpcError,
-} from "./rpc";
-import { COMPUTER_WS_METHODS } from "./computer";
-import { ORCHESTRATION_WS_METHODS } from "./orchestration";
+import { COMPUTER_WS_METHODS } from "./computer.ts";
+import { ORCHESTRATION_V2_WS_METHODS } from "./orchestrationV2.ts";
+import { WS_METHODS, WsRpcGroup, WsServerGetProviderUsageRpc } from "./rpc.ts";
 
-describe("WS RPC contracts", () => {
-  it("keeps bootstrap and feature RPCs in separate groups", () => {
-    expect(WsBootstrapRpcGroup.requests.has("bootstrap.negotiate")).toBe(true);
-    expect(WsFeatureRpcGroup.requests.has("bootstrap.negotiate")).toBe(false);
-    expect(
-      WsFeatureRpcGroup.requests.has(ORCHESTRATION_WS_METHODS.listProviderDeliveryBlockers),
-    ).toBe(true);
-    expect(WsFeatureRpcGroup.requests.has(ORCHESTRATION_WS_METHODS.reconcileProviderDelivery)).toBe(
-      true,
+describe("WebSocket RPC contracts", () => {
+  it("exposes only the V2 orchestration transport surface", () => {
+    const methods = [...WsRpcGroup.requests.keys()];
+
+    expect(methods).toEqual(expect.arrayContaining(Object.values(ORCHESTRATION_V2_WS_METHODS)));
+    expect(methods.filter((method) => method.startsWith("orchestrationV1."))).toEqual([]);
+  });
+
+  it("exposes issue import preview and execute", () => {
+    expect([...WsRpcGroup.requests.keys()]).toEqual(
+      expect.arrayContaining([
+        WS_METHODS.cloudIssueImportPreview,
+        WS_METHODS.cloudIssueImportExecute,
+      ]),
     );
   });
 
   it("registers every computer method, including setup", () => {
+    const methods = [...WsRpcGroup.requests.keys()];
     for (const method of Object.values(COMPUTER_WS_METHODS)) {
-      expect(WsComputerRpcGroup.requests.has(method)).toBe(true);
+      expect(methods).toContain(method);
     }
   });
 
-  it("uses a schema-backed transport error", () => {
-    expect(new WsRpcError({ message: "failed" }).message).toBe("failed");
+  it("exposes the provider usage subscription", () => {
+    expect([...WsRpcGroup.requests.keys()]).toContain(WS_METHODS.serverSubscribeProviderUsage);
   });
 
-  it("exports the project script discovery RPC", () => {
-    expect(WsProjectsDiscoverScriptsRpc).toBeDefined();
-    expect(WsProjectsProvisionFromGitHubRpc).toBeDefined();
-    expect(WsProjectsSubscribeFileChangeRpc).toBeDefined();
-    expect(WsFeatureRpcGroup.requests.has("projects.provisionFromGitHub")).toBe(true);
-    expect(WsFeatureRpcGroup.requests.has("projects.subscribeFileChange")).toBe(true);
-  });
+  it("round-trips provider rate-limit deadlines", () => {
+    const decode = Schema.decodeUnknownSync(WsServerGetProviderUsageRpc.successSchema);
+    const encode = Schema.encodeUnknownSync(WsServerGetProviderUsageRpc.successSchema);
+    const snapshot = decode({
+      instanceId: "usage_test",
+      provider: "claudeAgent",
+      source: "provider-rate-limit",
+      updatedAt: "2026-09-01T20:00:00.000Z",
+      limits: [],
+      usageLines: [],
+      status: "error",
+      rateLimitedUntil: "2026-09-01T20:05:00.000Z",
+    });
 
-  it("exports the automation create RPC", () => {
-    expect(WsAutomationCreateRpc).toBeDefined();
-    expect(WsAutomationGetMemoryRpc).toBeDefined();
-    expect(WsAutomationResolveProposalRpc).toBeDefined();
-  });
-
-  it("exports the count-only pull request review RPC", () => {
-    expect(WsPullRequestsReviewRequestCountRpc).toBeDefined();
+    expect(encode(snapshot)).toMatchObject({
+      rateLimitedUntil: "2026-09-01T20:05:00.000Z",
+    });
   });
 });

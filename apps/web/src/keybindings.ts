@@ -1,31 +1,41 @@
 import {
   type KeybindingCommand,
-  type ResolvedKeybindingRule,
   type KeybindingShortcut,
   type KeybindingWhenNode,
+  MODEL_PICKER_JUMP_KEYBINDING_COMMANDS,
   type ResolvedKeybindingsConfig,
-  SPACE_JUMP_KEYBINDING_COMMANDS,
-  type SpaceJumpKeybindingCommand,
   THREAD_JUMP_KEYBINDING_COMMANDS,
+  type ModelPickerJumpKeybindingCommand,
   type ThreadJumpKeybindingCommand,
-} from "@synara/contracts";
-import { isKeyboardShortcutsHelpChord } from "@synara/shared/browserShortcuts";
-import { isMacPlatform, isWindowsPlatform } from "./lib/utils";
+} from "@spiritdevs/contracts";
+import { isMacPlatform } from "./lib/utils";
 
 export interface ShortcutEventLike {
   type?: string;
   code?: string;
   key: string;
+  repeat?: boolean;
   metaKey: boolean;
   ctrlKey: boolean;
   shiftKey: boolean;
   altKey: boolean;
-  repeat?: boolean;
+}
+
+export interface ShortcutModifierStateLike {
+  metaKey: boolean;
+  ctrlKey: boolean;
+  shiftKey: boolean;
+  altKey: boolean;
 }
 
 export interface ShortcutMatchContext {
+  agentThreadsView: boolean;
+  /** True on `/calendar`, which is what lets that surface's bare-key defaults fire at all. */
+  calendarView: boolean;
   terminalFocus: boolean;
   terminalOpen: boolean;
+  previewFocus: boolean;
+  previewOpen: boolean;
   [key: string]: boolean;
 }
 
@@ -38,332 +48,66 @@ interface ResolvedShortcutLabelOptions extends ShortcutMatchOptions {
   platform?: string;
 }
 
-function commandShortcut(
-  key: string,
-  overrides: Partial<Omit<KeybindingShortcut, "key">> = {},
-): KeybindingShortcut {
-  return {
-    key,
-    metaKey: false,
-    ctrlKey: false,
-    shiftKey: false,
-    altKey: false,
-    modKey: true,
-    ...overrides,
-  };
-}
-
-function whenIdentifier(name: string): KeybindingWhenNode {
-  return { type: "identifier", name };
-}
-
-function whenNot(node: KeybindingWhenNode): KeybindingWhenNode {
-  return { type: "not", node };
-}
-
-function whenAnd(left: KeybindingWhenNode, right: KeybindingWhenNode): KeybindingWhenNode {
-  return { type: "and", left, right };
-}
-
-function whenOr(left: KeybindingWhenNode, right: KeybindingWhenNode): KeybindingWhenNode {
-  return { type: "or", left, right };
-}
-
-const whenNotTerminalFocus = whenNot(whenIdentifier("terminalFocus"));
-// Cmd+1…9 is app navigation on macOS, including from a focused/full-width terminal.
-// On Linux/Windows `mod` is Ctrl, so keep yielding the chord to the shell and to the
-// terminal workspace's Ctrl+1/Ctrl+2 tabs while that surface is open.
-const whenThreadJumpAvailable = whenOr(
-  whenAnd(whenNotTerminalFocus, whenNot(whenIdentifier("terminalWorkspaceOpen"))),
-  whenIdentifier("isMac"),
-);
-// App-level `mod` chords (new chat/terminal/provider chat/split, copy thread id) bind to
-// `mod`, which is Cmd on macOS. xterm never forwards a Cmd-chord to the PTY, so a bare
-// `!terminalFocus` guard silently dropped these chords whenever the terminal had focus
-// — the chord did nothing instead of running the command. `|| isMac` lets them fire from
-// the terminal on macOS while still yielding the chord to the shell on Linux/Windows,
-// where `mod` is Ctrl and keys like Ctrl+N are real shell input that must pass through.
-const whenModChordAllowed = whenOr(whenNotTerminalFocus, whenIdentifier("isMac"));
-
-export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
-  {
-    command: "sidebar.activity",
-    shortcut: commandShortcut("u", { altKey: true }),
-    whenAst: whenModChordAllowed,
-  },
-  {
-    command: "sidebar.addProject",
-    shortcut: commandShortcut("o", { shiftKey: true }),
-    whenAst: whenNotTerminalFocus,
-  },
-  {
-    command: "sidebar.importThread",
-    shortcut: commandShortcut("i"),
-    whenAst: whenNotTerminalFocus,
-  },
-  {
-    command: "chat.new",
-    shortcut: commandShortcut("n"),
-    whenAst: whenModChordAllowed,
-  },
-  {
-    command: "chat.newLatestProject",
-    shortcut: commandShortcut("n", { shiftKey: true }),
-    whenAst: whenModChordAllowed,
-  },
-  {
-    command: "chat.newClaude",
-    shortcut: commandShortcut("c", { altKey: true }),
-    whenAst: whenModChordAllowed,
-  },
-  {
-    command: "chat.newChat",
-    shortcut: commandShortcut("n", { altKey: true }),
-    whenAst: whenModChordAllowed,
-  },
-  {
-    command: "chat.newTerminal",
-    shortcut: commandShortcut("t", { shiftKey: true }),
-    whenAst: whenModChordAllowed,
-  },
-  {
-    command: "chat.newCodex",
-    shortcut: commandShortcut("x", { altKey: true }),
-    whenAst: whenModChordAllowed,
-  },
-  {
-    command: "chat.newCursor",
-    shortcut: commandShortcut("r", { altKey: true }),
-    whenAst: whenModChordAllowed,
-  },
-  {
-    command: "chat.split",
-    shortcut: commandShortcut("\\"),
-    whenAst: whenModChordAllowed,
-  },
-  // Installed-app only (Electron / standalone PWA). Browsers reserve Ctrl+Tab and
-  // Ctrl+Shift+Tab for tab switching and won't deliver them to the page, so the
-  // recent-view switcher does not open in a normal browser tab. Uses literal Ctrl
-  // (not mod) on purpose so it stays Ctrl+Tab on macOS too, matching Arc/Helium.
-  // This intentionally ignores terminal focus; the chat route captures the chord
-  // before xterm can pass it through to the shell.
-  {
-    command: "view.recent.next",
-    shortcut: commandShortcut("tab", { ctrlKey: true, modKey: false }),
-  },
-  {
-    command: "view.recent.previous",
-    shortcut: commandShortcut("tab", { ctrlKey: true, shiftKey: true, modKey: false }),
-  },
-  {
-    command: "modelPicker.toggle",
-    shortcut: commandShortcut("m", { shiftKey: true }),
-    whenAst: whenNotTerminalFocus,
-  },
-  {
-    command: "model.next",
-    shortcut: commandShortcut("]", { altKey: true, modKey: false }),
-    whenAst: whenNotTerminalFocus,
-  },
-  {
-    command: "model.previous",
-    shortcut: commandShortcut("[", { altKey: true, modKey: false }),
-    whenAst: whenNotTerminalFocus,
-  },
-  {
-    command: "traitsPicker.toggle",
-    shortcut: commandShortcut("e", { shiftKey: true }),
-    whenAst: whenNotTerminalFocus,
-  },
-  {
-    command: "diff.change.next",
-    shortcut: commandShortcut("arrowdown", { altKey: true, modKey: false }),
-    whenAst: whenNotTerminalFocus,
-  },
-  {
-    command: "diff.change.previous",
-    shortcut: commandShortcut("arrowup", { altKey: true, modKey: false }),
-    whenAst: whenNotTerminalFocus,
-  },
-  // Cmd-only instead of mod so Ctrl+L remains available to shells on non-macOS.
-  {
-    command: "composer.focus.toggle",
-    shortcut: commandShortcut("l", { metaKey: true, modKey: false }),
-    whenAst: whenNotTerminalFocus,
-  },
-  {
-    command: "chat.find",
-    shortcut: commandShortcut("f"),
-    whenAst: whenNotTerminalFocus,
-  },
-  {
-    command: "settings.usage",
-    shortcut: commandShortcut("u", { shiftKey: true }),
-    whenAst: whenNotTerminalFocus,
-  },
-  // Cmd+Ctrl+P on macOS. On Windows/Linux the literal chord would require the
-  // Super/Windows key, which window managers routinely swallow before it reaches
-  // the app, so those platforms get Ctrl+Alt+P instead (see the sibling entry below).
-  {
-    command: "git.commitAndPush",
-    shortcut: commandShortcut("p", { metaKey: true, ctrlKey: true, modKey: false }),
-    whenAst: whenAnd(whenNotTerminalFocus, whenIdentifier("isMac")),
-  },
-  {
-    command: "git.commitAndPush",
-    shortcut: commandShortcut("p", { ctrlKey: true, altKey: true, modKey: false }),
-    whenAst: whenAnd(whenNotTerminalFocus, whenNot(whenIdentifier("isMac"))),
-  },
-  // Numbered space jumps target the switcher's visual tab order (mod+alt+1 = Void).
-  // Same guard as the creation chords: Cmd+Alt never reaches the PTY on macOS, while
-  // Ctrl+Alt+digit doubles as AltGr input on Linux/Windows and must yield to terminals.
-  ...SPACE_JUMP_KEYBINDING_COMMANDS.map((command, index) => ({
-    command,
-    shortcut: commandShortcut(String(index + 1), { altKey: true }),
-    whenAst: whenModChordAllowed,
-  })),
-  {
-    command: "thread.jump.1",
-    shortcut: commandShortcut("1"),
-    whenAst: whenThreadJumpAvailable,
-  },
-  {
-    command: "thread.jump.2",
-    shortcut: commandShortcut("2"),
-    whenAst: whenThreadJumpAvailable,
-  },
-  {
-    command: "thread.jump.3",
-    shortcut: commandShortcut("3"),
-    whenAst: whenThreadJumpAvailable,
-  },
-  {
-    command: "thread.jump.4",
-    shortcut: commandShortcut("4"),
-    whenAst: whenThreadJumpAvailable,
-  },
-  {
-    command: "thread.jump.5",
-    shortcut: commandShortcut("5"),
-    whenAst: whenThreadJumpAvailable,
-  },
-  {
-    command: "thread.jump.6",
-    shortcut: commandShortcut("6"),
-    whenAst: whenThreadJumpAvailable,
-  },
-  {
-    command: "thread.jump.7",
-    shortcut: commandShortcut("7"),
-    whenAst: whenThreadJumpAvailable,
-  },
-  {
-    command: "thread.jump.8",
-    shortcut: commandShortcut("8"),
-    whenAst: whenThreadJumpAvailable,
-  },
-  {
-    command: "thread.jump.9",
-    shortcut: commandShortcut("9"),
-    whenAst: whenThreadJumpAvailable,
-  },
-  {
-    command: "thread.copyId",
-    shortcut: commandShortcut("c", { shiftKey: true }),
-    whenAst: whenModChordAllowed,
-  },
-  {
-    command: "terminal.workspace.newFullWidth",
-    shortcut: commandShortcut("j", { shiftKey: true }),
-  },
-  {
-    command: "terminal.workspace.closeActive",
-    shortcut: commandShortcut("w"),
-    whenAst: whenIdentifier("terminalWorkspaceOpen"),
-  },
-  {
-    command: "terminal.workspace.terminal",
-    shortcut: commandShortcut("1", { ctrlKey: true, modKey: false }),
-    whenAst: whenIdentifier("terminalWorkspaceOpen"),
-  },
-  {
-    command: "terminal.workspace.chat",
-    shortcut: commandShortcut("2", { ctrlKey: true, modKey: false }),
-    whenAst: whenIdentifier("terminalWorkspaceOpen"),
-  },
-  {
-    command: "editor.file.save",
-    shortcut: commandShortcut("s"),
-    whenAst: whenNotTerminalFocus,
-  },
-];
-
 const TERMINAL_WORD_BACKWARD = "\u001bb";
 const TERMINAL_WORD_FORWARD = "\u001bf";
 const TERMINAL_LINE_START = "\u0001";
 const TERMINAL_LINE_END = "\u0005";
-const EVENT_CODE_KEY_ALIASES: Readonly<Record<string, readonly string[]>> = {
-  BracketLeft: ["["],
-  BracketRight: ["]"],
-  Digit0: ["0"],
-  Digit1: ["1"],
-  Digit2: ["2"],
-  Digit3: ["3"],
-  Digit4: ["4"],
-  Digit5: ["5"],
-  Digit6: ["6"],
-  Digit7: ["7"],
-  Digit8: ["8"],
-  Digit9: ["9"],
-  KeyA: ["a"],
-  KeyB: ["b"],
-  KeyC: ["c"],
-  KeyD: ["d"],
-  KeyE: ["e"],
-  KeyF: ["f"],
-  KeyG: ["g"],
-  KeyH: ["h"],
-  KeyI: ["i"],
-  KeyJ: ["j"],
-  KeyK: ["k"],
-  KeyL: ["l"],
-  KeyM: ["m"],
-  KeyN: ["n"],
-  KeyO: ["o"],
-  KeyP: ["p"],
-  KeyQ: ["q"],
-  KeyR: ["r"],
-  KeyS: ["s"],
-  KeyT: ["t"],
-  KeyU: ["u"],
-  KeyV: ["v"],
-  KeyW: ["w"],
-  KeyX: ["x"],
-  KeyY: ["y"],
-  KeyZ: ["z"],
+const TERMINAL_DELETE_TO_LINE_START = "\u0015";
+const EVENT_CODE_SHORTCUT_KEYS: Readonly<Record<string, string>> = {
+  Backquote: "`",
+  Backslash: "\\",
+  BracketLeft: "[",
+  BracketRight: "]",
+  Comma: ",",
+  Digit0: "0",
+  Digit1: "1",
+  Digit2: "2",
+  Digit3: "3",
+  Digit4: "4",
+  Digit5: "5",
+  Digit6: "6",
+  Digit7: "7",
+  Digit8: "8",
+  Digit9: "9",
+  Equal: "=",
+  Minus: "-",
+  Period: ".",
+  Quote: "'",
+  Semicolon: ";",
+  Slash: "/",
 };
 
 function normalizeEventKey(key: string): string {
   const normalized = key.toLowerCase();
   if (normalized === "esc") return "escape";
-  if (normalized === "{") return "[";
-  if (normalized === "}") return "]";
   return normalized;
 }
 
-function resolveEventKeys(event: ShortcutEventLike): Set<string> {
-  const keys = new Set([normalizeEventKey(event.key)]);
-  const aliases = event.code ? EVENT_CODE_KEY_ALIASES[event.code] : undefined;
-  if (!aliases) return keys;
+export function shortcutKeyFromEvent(event: Pick<ShortcutEventLike, "key" | "code">): string {
+  const layoutKey = normalizeEventKey(event.key);
+  if (/^[a-z]$/.test(layoutKey)) return layoutKey;
+  const physicalKey = event.code ? EVENT_CODE_SHORTCUT_KEYS[event.code] : undefined;
+  return physicalKey ?? layoutKey;
+}
 
-  for (const alias of aliases) {
-    keys.add(alias);
+function resolveEventKeys(event: ShortcutEventLike): Set<string> {
+  const layoutKey = normalizeEventKey(event.key);
+  const keys = new Set([layoutKey]);
+  // The physical-position fallback exists for layouts that type non-Latin
+  // letters (Cyrillic, Greek) and for Option-modified symbols on macOS.
+  // When the layout already produces a Latin letter, match on it alone;
+  // otherwise a remapped physical key triggers shortcuts for two different
+  // letters at once and shadows system shortcuts on non-QWERTY layouts.
+  const letterCode = event.code?.match(/^Key([A-Z])$/)?.[1];
+  if (letterCode && !/^\p{Script=Latin}$/u.test(layoutKey)) {
+    keys.add(letterCode.toLowerCase());
   }
+  keys.add(shortcutKeyFromEvent(event));
   return keys;
 }
 
 function matchesShortcutModifiers(
-  event: ShortcutEventLike,
+  event: ShortcutModifierStateLike,
   shortcut: KeybindingShortcut,
   platform = navigator.platform,
 ): boolean {
@@ -392,13 +136,13 @@ function resolvePlatform(options: ShortcutMatchOptions | undefined): string {
 }
 
 function resolveContext(options: ShortcutMatchOptions | undefined): ShortcutMatchContext {
-  // `isMac` is derived from the resolved platform so `when` clauses can gate on it
-  // (e.g. `whenModChordAllowed`) without every dispatch site having to thread the flag
-  // through `context`. An explicit `context.isMac` still wins via the spread below.
   return {
+    agentThreadsView: false,
+    calendarView: false,
     terminalFocus: false,
     terminalOpen: false,
-    isMac: isMacPlatform(resolvePlatform(options)),
+    previewFocus: false,
+    previewOpen: false,
     ...options?.context,
   };
 }
@@ -426,11 +170,13 @@ function matchesWhenClause(
   return evaluateWhenNode(whenAst, context);
 }
 
-function shortcutConflictKey(shortcut: KeybindingShortcut, platform = navigator.platform): string {
+export function shortcutConflictKey(
+  shortcut: KeybindingShortcut,
+  platform = navigator.platform,
+): string {
   const useMetaForMod = isMacPlatform(platform);
   const metaKey = shortcut.metaKey || (shortcut.modKey && useMetaForMod);
   const ctrlKey = shortcut.ctrlKey || (shortcut.modKey && !useMetaForMod);
-
   return [
     shortcut.key,
     metaKey ? "meta" : "",
@@ -445,14 +191,6 @@ function findEffectiveShortcutForCommand(
   command: KeybindingCommand,
   options?: ShortcutMatchOptions,
 ): KeybindingShortcut | null {
-  return findEffectiveKeybindingForCommand(keybindings, command, options)?.shortcut ?? null;
-}
-
-export function findEffectiveKeybindingForCommand(
-  keybindings: ResolvedKeybindingsConfig,
-  command: KeybindingCommand,
-  options?: ShortcutMatchOptions,
-): ResolvedKeybindingRule | null {
   const platform = resolvePlatform(options);
   const context = resolveContext(options);
   const claimedShortcuts = new Set<string>();
@@ -469,36 +207,11 @@ export function findEffectiveKeybindingForCommand(
 
     claimedShortcuts.add(conflictKey);
     if (binding.command === command) {
-      return binding;
+      return binding.shortcut;
     }
   }
 
   return null;
-}
-
-export function resolveKeybindingForCommand(
-  keybindings: ResolvedKeybindingsConfig,
-  command: KeybindingCommand,
-  options?: ShortcutMatchOptions,
-): ResolvedKeybindingRule | null {
-  return (
-    findEffectiveKeybindingForCommand(keybindings, command, options) ??
-    findEffectiveKeybindingForCommand(getFallbackBindings(keybindings), command, options)
-  );
-}
-
-export function formatKeybindingWhenExpression(node: KeybindingWhenNode | undefined): string {
-  if (!node) return "";
-  switch (node.type) {
-    case "identifier":
-      return node.name;
-    case "not":
-      return `!(${formatKeybindingWhenExpression(node.node)})`;
-    case "and":
-      return `(${formatKeybindingWhenExpression(node.left)} && ${formatKeybindingWhenExpression(node.right)})`;
-    case "or":
-      return `(${formatKeybindingWhenExpression(node.left)} || ${formatKeybindingWhenExpression(node.right)})`;
-  }
 }
 
 function matchesCommandShortcut(
@@ -510,7 +223,7 @@ function matchesCommandShortcut(
   return resolveShortcutCommand(event, keybindings, options) === command;
 }
 
-function resolveShortcutCommandFromBindings(
+export function resolveShortcutCommand(
   event: ShortcutEventLike,
   keybindings: ResolvedKeybindingsConfig,
   options?: ShortcutMatchOptions,
@@ -525,36 +238,10 @@ function resolveShortcutCommandFromBindings(
     if (!matchesShortcut(event, binding.shortcut, platform)) continue;
     return binding.command;
   }
-
   return null;
 }
 
-function getFallbackBindings(
-  keybindings: ResolvedKeybindingsConfig,
-): ReadonlyArray<ResolvedKeybindingRule> {
-  const configuredCommands = new Set(keybindings.map((binding) => binding.command));
-  return DEFAULT_SHORTCUT_FALLBACKS.filter((binding) => !configuredCommands.has(binding.command));
-}
-
-export function resolveShortcutCommand(
-  event: ShortcutEventLike,
-  keybindings: ResolvedKeybindingsConfig,
-  options?: ShortcutMatchOptions,
-): string | null {
-  const explicitCommand = resolveShortcutCommandFromBindings(event, keybindings, options);
-  if (explicitCommand !== null) {
-    return explicitCommand;
-  }
-
-  const fallbackBindings = getFallbackBindings(keybindings);
-  if (fallbackBindings.length === 0) {
-    return null;
-  }
-
-  return resolveShortcutCommandFromBindings(event, fallbackBindings, options);
-}
-
-function formatShortcutKeyLabel(key: string): string {
+export function formatShortcutKeyLabel(key: string): string {
   if (key === " ") return "Space";
   if (key.length === 1) return key.toUpperCase();
   if (key === "escape") return "Esc";
@@ -589,29 +276,6 @@ export function formatShortcutLabel(
   return parts.join("+");
 }
 
-const MODIFIER_SYMBOLS = new Set(["⌘", "⌥", "⌃", "⇧"]);
-
-export function splitShortcutLabel(shortcutLabel: string): string[] {
-  if (shortcutLabel.includes("+")) {
-    return shortcutLabel
-      .split("+")
-      .map((part) => part.trim())
-      .filter((part) => part.length > 0);
-  }
-
-  if ([...shortcutLabel].some((char) => MODIFIER_SYMBOLS.has(char))) {
-    const parts = [...shortcutLabel];
-    const key = parts
-      .filter((char) => !MODIFIER_SYMBOLS.has(char))
-      .join("")
-      .trim();
-    const modifiers = parts.filter((char) => MODIFIER_SYMBOLS.has(char));
-    return key.length > 0 ? [...modifiers, key] : modifiers;
-  }
-
-  return [shortcutLabel];
-}
-
 export function shortcutLabelForCommand(
   keybindings: ResolvedKeybindingsConfig,
   command: KeybindingCommand,
@@ -622,40 +286,8 @@ export function shortcutLabelForCommand(
       ? ({ platform: options } satisfies ResolvedShortcutLabelOptions)
       : options;
   const platform = resolvePlatform(resolvedOptions);
-  const contextProvided = resolvedOptions?.context !== undefined;
-
-  if (!contextProvided) {
-    // Honor platform-gated `when` clauses (e.g. `isMac` / `!isMac`) using default
-    // focus flags so labels stay correct without a full UI context.
-    const platformAware = findEffectiveShortcutForCommand(keybindings, command, { platform });
-    if (platformAware) {
-      return formatShortcutLabel(platformAware, platform);
-    }
-    // Fall back to the last binding ignoring `when` so focus-gated chords
-    // (e.g. terminal-only) still surface a label in chrome affordances.
-    for (let index = keybindings.length - 1; index >= 0; index -= 1) {
-      const binding = keybindings[index];
-      if (!binding || binding.command !== command) continue;
-      return formatShortcutLabel(binding.shortcut, platform);
-    }
-    for (const binding of getFallbackBindings(keybindings)) {
-      if (binding.command !== command) continue;
-      return formatShortcutLabel(binding.shortcut, platform);
-    }
-    return null;
-  }
-
   const shortcut = findEffectiveShortcutForCommand(keybindings, command, resolvedOptions);
-  if (shortcut) {
-    return formatShortcutLabel(shortcut, platform);
-  }
-
-  const fallbackShortcut = findEffectiveShortcutForCommand(
-    getFallbackBindings(keybindings),
-    command,
-    resolvedOptions,
-  );
-  return fallbackShortcut ? formatShortcutLabel(fallbackShortcut, platform) : null;
+  return shortcut ? formatShortcutLabel(shortcut, platform) : null;
 }
 
 export function threadJumpCommandForIndex(index: number): ThreadJumpKeybindingCommand | null {
@@ -667,13 +299,12 @@ export function threadJumpIndexFromCommand(command: string): number | null {
   return index === -1 ? null : index;
 }
 
-export function spaceJumpCommandForIndex(index: number): SpaceJumpKeybindingCommand | null {
-  return SPACE_JUMP_KEYBINDING_COMMANDS[index] ?? null;
-}
-
-export function spaceJumpIndexFromCommand(command: string): number | null {
-  const index = SPACE_JUMP_KEYBINDING_COMMANDS.indexOf(command as SpaceJumpKeybindingCommand);
-  return index === -1 ? null : index;
+export function threadTraversalDirectionFromCommand(
+  command: string | null,
+): "previous" | "next" | null {
+  if (command === "thread.previous") return "previous";
+  if (command === "thread.next") return "next";
+  return null;
 }
 
 export function shouldShowThreadJumpHints(
@@ -681,15 +312,30 @@ export function shouldShowThreadJumpHints(
   keybindings: ResolvedKeybindingsConfig,
   options?: ShortcutMatchOptions,
 ): boolean {
+  return shouldShowThreadJumpHintsForModifiers(event, keybindings, options);
+}
+
+export function shouldShowThreadJumpHintsForModifiers(
+  modifiers: ShortcutModifierStateLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): boolean {
+  // The embedded terminal owns keystrokes while it has focus: the Ghostty
+  // surface encodes the keydown and can write the pressed key into the shell
+  // before our window-level shortcut handling ever runs, regardless of any
+  // configured `when` clause on the jump command. Advertising jump hints
+  // here would promise a shortcut that instead types into the terminal, so
+  // never show them while the terminal is focused.
+  if (resolveContext(options).terminalFocus) {
+    return false;
+  }
+
   const platform = resolvePlatform(options);
-  const fallbackBindings = getFallbackBindings(keybindings);
 
   for (const command of THREAD_JUMP_KEYBINDING_COMMANDS) {
-    const shortcut =
-      findEffectiveShortcutForCommand(keybindings, command, options) ??
-      findEffectiveShortcutForCommand(fallbackBindings, command, options);
+    const shortcut = findEffectiveShortcutForCommand(keybindings, command, options);
     if (!shortcut) continue;
-    if (matchesShortcutModifiers(event, shortcut, platform)) {
+    if (matchesShortcutModifiers(modifiers, shortcut, platform)) {
       return true;
     }
   }
@@ -697,52 +343,188 @@ export function shouldShowThreadJumpHints(
   return false;
 }
 
+export function modelPickerJumpCommandForIndex(
+  index: number,
+): ModelPickerJumpKeybindingCommand | null {
+  return MODEL_PICKER_JUMP_KEYBINDING_COMMANDS[index] ?? null;
+}
+
+export function modelPickerJumpIndexFromCommand(command: string): number | null {
+  const index = MODEL_PICKER_JUMP_KEYBINDING_COMMANDS.indexOf(
+    command as ModelPickerJumpKeybindingCommand,
+  );
+  return index === -1 ? null : index;
+}
+
+export function shouldShowModelPickerJumpHints(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): boolean {
+  return shouldShowModelPickerJumpHintsForModifiers(event, keybindings, options);
+}
+
+export function shouldShowModelPickerJumpHintsForModifiers(
+  modifiers: ShortcutModifierStateLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): boolean {
+  const platform = resolvePlatform(options);
+
+  for (const command of MODEL_PICKER_JUMP_KEYBINDING_COMMANDS) {
+    const shortcut = findEffectiveShortcutForCommand(keybindings, command, options);
+    if (!shortcut) continue;
+    if (matchesShortcutModifiers(modifiers, shortcut, platform)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+export function isTerminalToggleShortcut(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): boolean {
+  return matchesCommandShortcut(event, keybindings, "terminal.toggle", options);
+}
+
+export function isTerminalSplitShortcut(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): boolean {
+  return matchesCommandShortcut(event, keybindings, "terminal.split", options);
+}
+
+export function isTerminalSplitVerticalShortcut(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): boolean {
+  return matchesCommandShortcut(event, keybindings, "terminal.splitVertical", options);
+}
+
+export function isTerminalNewShortcut(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): boolean {
+  return matchesCommandShortcut(event, keybindings, "terminal.new", options);
+}
+
+export function isTerminalCloseShortcut(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): boolean {
+  return matchesCommandShortcut(event, keybindings, "terminal.close", options);
+}
+
+export function isDiffToggleShortcut(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): boolean {
+  return matchesCommandShortcut(event, keybindings, "diff.toggle", options);
+}
+
+export function isPreviewToggleShortcut(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): boolean {
+  return matchesCommandShortcut(event, keybindings, "preview.toggle", options);
+}
+
+export function isPreviewRefreshShortcut(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): boolean {
+  return matchesCommandShortcut(event, keybindings, "preview.refresh", options);
+}
+
+export function isPreviewFocusUrlShortcut(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): boolean {
+  return matchesCommandShortcut(event, keybindings, "preview.focusUrl", options);
+}
+
+export function isChatNewShortcut(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): boolean {
+  return matchesCommandShortcut(event, keybindings, "chat.new", options);
+}
+
+export function isChatNewLocalShortcut(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): boolean {
+  return matchesCommandShortcut(event, keybindings, "chat.newLocal", options);
+}
+
 export function isOpenFavoriteEditorShortcut(
   event: ShortcutEventLike,
   keybindings: ResolvedKeybindingsConfig,
   options?: ShortcutMatchOptions,
 ): boolean {
-  return matchesCommandShortcut(event, keybindings, "editor.openFavorite", options);
+  return (
+    event.repeat !== true &&
+    matchesCommandShortcut(event, keybindings, "editor.openFavorite", options)
+  );
 }
 
-export function isEditorFileSaveShortcut(
+export function isTerminalClearShortcut(
   event: ShortcutEventLike,
-  keybindings: ResolvedKeybindingsConfig,
-  options?: ShortcutMatchOptions,
+  platform = navigator.platform,
 ): boolean {
-  return matchesCommandShortcut(event, keybindings, "editor.file.save", options);
-}
-
-export function isTerminalClearShortcut(event: ShortcutEventLike): boolean {
   if (event.type !== undefined && event.type !== "keydown") {
     return false;
   }
 
   const key = event.key.toLowerCase();
 
-  return key === "l" && event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
+  if (key === "l" && event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+    return true;
+  }
+
+  return (
+    isMacPlatform(platform) &&
+    key === "k" &&
+    event.metaKey &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    !event.shiftKey
+  );
 }
 
-export function isKeyboardShortcutsHelpShortcut(
+export function terminalDeleteShortcutData(
   event: ShortcutEventLike,
   platform = navigator.platform,
-): boolean {
-  return isKeyboardShortcutsHelpChord(
-    {
-      key: event.key,
-      meta: event.metaKey,
-      ctrl: event.ctrlKey,
-      shift: event.shiftKey,
-      alt: event.altKey,
-      ...(event.type !== undefined ? { type: event.type } : {}),
-      ...(event.code !== undefined ? { code: event.code } : {}),
-      ...(event.repeat !== undefined ? { repeat: event.repeat } : {}),
-    },
-    {
-      isMac: isMacPlatform(platform),
-      isWindows: isWindowsPlatform(platform),
-    },
-  );
+): string | null {
+  if (event.type !== undefined && event.type !== "keydown") {
+    return null;
+  }
+
+  if (!isMacPlatform(platform)) {
+    return null;
+  }
+
+  const key = normalizeEventKey(event.key);
+  if (key !== "backspace") {
+    return null;
+  }
+
+  return event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
+    ? TERMINAL_DELETE_TO_LINE_START
+    : null;
 }
 
 export function terminalNavigationShortcutData(

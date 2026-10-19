@@ -1,94 +1,156 @@
-// FILE: useProvisionComputer.ts
-// Purpose: The single "Set up computer control" mutation, shared by the chat's setup
-//          card and the Computer settings panel.
-// Layer: Web data hook
-// Exports: useProvisionComputer
-// Depends on: provisionComputer RPC, computerProvisioning copy, toast manager
-//
-// Provisioning changes the machine — it installs packages, compiles a helper and
-// puts an OS permission dialog on screen — so there must be exactly one of it in
-// flight and exactly one account of what happened. Both surfaces used to own a
-// private implementation: one raised toasts and the other did not, neither had a
-// pending state that stopped a second press, and pressing Set up in the panel
-// while the card's Set up was still running started a second provision against
-// the same helper.
+// The single "Set up computer control" command, shared by the chat's setup card
+// and the Computer settings panel. Provisioning changes the machine (installs
+// packages, builds a helper, raises an OS permission dialog), so there must be
+// exactly one in flight per environment and one account of what happened.
 
-import type { ComputerPermission, ComputerProvisionResult } from "@synara/contracts";
-import { useIsMutating, useMutation, useQueryClient } from "@tanstack/react-query";
+import type {
+  ComputerPermission,
+  ComputerProvisionResult,
+  EnvironmentId,
+} from "@spiritdevs/contracts";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@spiritdevs/client-runtime/state/runtime";
+import { useCallback, useState, useSyncExternalStore } from "react";
 
-import { toastManager } from "~/components/ui/toast";
+import { toastManager } from "../components/ui/toast";
+import { computerEnvironmentFence, useComputerStateStore } from "../computerStateStore";
+import { isElectron } from "../env";
 import {
   computerProvisionErrorToast,
   computerProvisionNote,
   computerProvisionOutcome,
   computerProvisionResultToast,
   computerProvisionStartToast,
-} from "~/lib/computerProvisioning";
-import { provisionComputer, serverQueryKeys } from "~/lib/serverReactQuery";
+  readLocalComputerPermissionBridge,
+} from "../lib/computerProvisioning";
+import { computerEnvironment } from "../state/computer";
+import { usePrimaryEnvironmentId } from "../state/environments";
+import { useAtomCommand } from "../state/use-atom-command";
 
-const COMPUTER_PROVISION_MUTATION_KEY = ["computer", "provision"] as const;
+/**
+ * Environments with a provision in flight, shared by every mounted surface so
+ * the card and the panel agree on "Setting up…" and a second press is refused.
+ */
+const pendingProvisions = new Set<string>();
+const pendingListeners = new Set<() => void>();
+
+function setProvisionPending(environmentId: string, pending: boolean): void {
+  if (pending) pendingProvisions.add(environmentId);
+  else pendingProvisions.delete(environmentId);
+  for (const listener of pendingListeners) listener();
+}
+
+function subscribePendingProvisions(listener: () => void): () => void {
+  pendingListeners.add(listener);
+  return () => pendingListeners.delete(listener);
+}
+
+export function isComputerProvisionPending(environmentId: string): boolean {
+  return pendingProvisions.has(environmentId);
+}
 
 export interface UseProvisionComputerResult {
-  /** Starts a provision, or does nothing while one is already running. */
-  readonly provision: () => void;
+  /**
+   * Starts a provision, or does nothing while one is already running. Settles
+   * once the attempt is accounted for.
+   */
+  readonly provision: () => Promise<void>;
   readonly isPending: boolean;
   /** The settings panel's inline account of the attempt; undefined when there is nothing to say. */
   readonly note: string | undefined;
 }
 
-export function useProvisionComputer(options?: {
-  /**
-   * The grants the OS is currently withholding, so the opening toast can name
-   * them. Optional: a surface that does not know yet gets the general wording.
-   */
-  readonly missing?: readonly ComputerPermission[];
-  /**
-   * Toasts are how a transcript card reports; the settings panel keeps the same
-   * words in an inline row instead and would otherwise say everything twice.
-   */
-  readonly notify?: boolean;
-  /** Ran once, after a provision that left nothing to set up. */
-  readonly onReady?: (result: ComputerProvisionResult) => void;
-}): UseProvisionComputerResult {
+type ProvisionAttempt =
+  | { readonly kind: "idle" }
+  | { readonly kind: "success"; readonly result: ComputerProvisionResult }
+  | { readonly kind: "error"; readonly error: unknown };
+
+const IDLE_ATTEMPT: ProvisionAttempt = { kind: "idle" };
+
+export function useProvisionComputer(
+  environmentId: EnvironmentId | null,
+  options?: {
+    /** The grants the OS is withholding, so the opening toast can name them. */
+    readonly missing?: readonly ComputerPermission[];
+    /**
+     * Toasts are how a transcript card reports; the settings panel keeps the
+     * same words inline instead and would otherwise say everything twice.
+     */
+    readonly notify?: boolean;
+    /** Ran once, after a provision that left nothing to set up. */
+    readonly onReady?: (result: ComputerProvisionResult) => void;
+  },
+): UseProvisionComputerResult {
   const notify = options?.notify ?? false;
   const missing = options?.missing;
   const onReady = options?.onReady;
-  const queryClient = useQueryClient();
-
-  const mutation = useMutation({
-    mutationKey: COMPUTER_PROVISION_MUTATION_KEY,
-    mutationFn: provisionComputer,
-    onSuccess: (result) => {
-      // Legacy setup returns its final status; the native guide also pushes later grants.
-      if (globalThis.window?.desktopBridge?.appSnap) {
-        // Native setup can advance while the initiating RPC is returning.
-        // Do not overwrite a newer grant push with its earlier status snapshot.
-        void queryClient.invalidateQueries({ queryKey: serverQueryKeys.computerStatus() });
-      } else {
-        queryClient.setQueryData(serverQueryKeys.computerStatus(), result.status);
-      }
-      if (
-        notify &&
-        (!globalThis.window?.desktopBridge?.appSnap || computerProvisionOutcome(result) === "ready")
-      )
-        toastManager.add(computerProvisionResultToast(result));
-      if (computerProvisionOutcome(result) === "ready") onReady?.(result);
-    },
-    onError: (error: unknown) => {
-      if (notify) toastManager.add(computerProvisionErrorToast(error));
-    },
+  // The desktop app's native grant guide speaks for its own primary environment
+  // whichever surface started setup. It can push later grants while the RPC
+  // returns, so the RPC's status snapshot is re-read instead of trusted.
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const nativePermissionSetup =
+    readLocalComputerPermissionBridge({
+      environmentIsDesktopPrimary:
+        isElectron && environmentId !== null && environmentId === primaryEnvironmentId,
+    }) !== null;
+  const provisionCommand = useAtomCommand(computerEnvironment.provision, { reportFailure: false });
+  const refreshStatus = useAtomCommand(computerEnvironment.refreshStatus, {
+    reportFailure: false,
   });
+  const [attempt, setAttempt] = useState<ProvisionAttempt>(IDLE_ATTEMPT);
+  const isPending = useSyncExternalStore(
+    subscribePendingProvisions,
+    () => environmentId !== null && pendingProvisions.has(environmentId),
+    () => false,
+  );
 
-  const isPending = useIsMutating({ mutationKey: COMPUTER_PROVISION_MUTATION_KEY }) > 0;
-  const { mutate } = mutation;
-  const provision = () => {
-    // React Query happily runs a second mutation over the first; a second
-    // provision would re-enter the installer and re-arm the permission prompt
-    // behind the dialog the user is already looking at.
-    if (queryClient.isMutating({ mutationKey: COMPUTER_PROVISION_MUTATION_KEY }) > 0) return;
+  const provision = useCallback(() => {
+    // A second provision would re-enter the installer and re-arm the permission
+    // prompt behind the dialog the user is already looking at.
+    if (environmentId === null || pendingProvisions.has(environmentId)) return Promise.resolve();
     if (notify) toastManager.add(computerProvisionStartToast(missing));
-    mutate();
-  };
+    setProvisionPending(environmentId, true);
+    setAttempt(IDLE_ATTEMPT);
+    const isCurrent = computerEnvironmentFence(environmentId);
+    return provisionCommand({ environmentId, input: {} })
+      .then(async (outcome) => {
+        if (outcome._tag === "Success") {
+          const result = outcome.value;
+          const setStatus = useComputerStateStore.getState().setStatus;
+          if (nativePermissionSetup) {
+            // Do not overwrite a newer grant push with the RPC's earlier snapshot.
+            const refreshed = await refreshStatus({ environmentId, input: {} });
+            if (refreshed._tag === "Success" && isCurrent()) {
+              setStatus(environmentId, refreshed.value);
+            }
+          } else if (isCurrent()) {
+            setStatus(environmentId, result.status);
+          }
+          setAttempt({ kind: "success", result });
+          const ready = computerProvisionOutcome(result) === "ready";
+          if (notify && (!nativePermissionSetup || ready)) {
+            toastManager.add(computerProvisionResultToast(result));
+          }
+          if (ready) onReady?.(result);
+          return;
+        }
+        if (isAtomCommandInterrupted(outcome)) return;
+        const error = squashAtomCommandFailure(outcome);
+        setAttempt({ kind: "error", error });
+        if (notify) toastManager.add(computerProvisionErrorToast(error));
+      })
+      .finally(() => setProvisionPending(environmentId, false));
+  }, [
+    environmentId,
+    missing,
+    nativePermissionSetup,
+    notify,
+    onReady,
+    provisionCommand,
+    refreshStatus,
+  ]);
 
   return {
     provision,
@@ -96,8 +158,8 @@ export function useProvisionComputer(options?: {
     note: computerProvisionNote({
       isPending,
       ...(missing ? { missing } : {}),
-      error: mutation.error,
-      result: globalThis.window?.desktopBridge?.appSnap ? undefined : mutation.data,
+      error: attempt.kind === "error" ? attempt.error : undefined,
+      result: attempt.kind === "success" && !nativePermissionSetup ? attempt.result : undefined,
     }),
   };
 }

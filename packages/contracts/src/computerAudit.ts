@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 
-import { IsoDateTime } from "./baseSchemas";
+import { IsoDateTime } from "./baseSchemas.ts";
 
 export const COMPUTER_AUDIT_HISTORY_MAX_LIMIT = 100;
 
@@ -28,8 +28,8 @@ export const ComputerAuditHistoryEntry = Schema.Struct({
   effect: ComputerAuditEffect,
   threadId: Schema.optional(ComputerAuditIdentifier),
   turnId: Schema.optional(ComputerAuditIdentifier),
-  /** JSON-RPC transport identity, not a provider tool-item ID. */
-  gatewayRequestId: Schema.optional(ComputerAuditIdentifier),
+  /** MCP JSON-RPC request identity, not a provider tool-item ID. */
+  mcpRequestId: Schema.optional(ComputerAuditIdentifier),
   code: Schema.optional(Schema.String.check(Schema.isPattern(/^[a-z][a-z0-9_]{0,95}$/))),
 });
 export type ComputerAuditHistoryEntry = typeof ComputerAuditHistoryEntry.Type;

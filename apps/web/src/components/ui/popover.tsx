@@ -3,7 +3,6 @@
 import { Popover as PopoverPrimitive } from "@base-ui/react/popover";
 
 import { cn } from "~/lib/utils";
-import { APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME } from "../chat/composerPickerStyles";
 
 const PopoverCreateHandle = PopoverPrimitive.createHandle;
 
@@ -20,43 +19,47 @@ function PopoverTrigger({ className, children, ...props }: PopoverPrimitive.Trig
 function PopoverPopup({
   children,
   className,
-  side: sideProp,
-  align: alignProp,
-  sideOffset: sideOffsetProp,
-  alignOffset: alignOffsetProp,
-  tooltipStyle: tooltipStyleProp,
+  positionerClassName,
+  viewportClassName,
+  side = "bottom",
+  align = "center",
+  sideOffset = 4,
+  alignOffset = 0,
+  collisionAvoidance,
+  tooltipStyle = false,
   anchor,
   ...props
 }: PopoverPrimitive.Popup.Props & {
+  positionerClassName?: string;
+  viewportClassName?: string;
   side?: PopoverPrimitive.Positioner.Props["side"];
   align?: PopoverPrimitive.Positioner.Props["align"];
   sideOffset?: PopoverPrimitive.Positioner.Props["sideOffset"];
   alignOffset?: PopoverPrimitive.Positioner.Props["alignOffset"];
+  collisionAvoidance?: PopoverPrimitive.Positioner.Props["collisionAvoidance"];
   tooltipStyle?: boolean;
   anchor?: PopoverPrimitive.Positioner.Props["anchor"];
 }) {
-  const side = sideProp ?? "bottom";
-  const align = alignProp ?? "center";
-  const sideOffset = sideOffsetProp ?? 4;
-  const alignOffset = alignOffsetProp ?? 0;
-  const tooltipStyle = tooltipStyleProp ?? false;
   return (
     <PopoverPrimitive.Portal>
       <PopoverPrimitive.Positioner
         align={align}
         alignOffset={alignOffset}
         anchor={anchor}
-        className="z-50 h-(--positioner-height) w-(--positioner-width) max-w-(--available-width) transition-[top,left,right,bottom,transform] data-instant:transition-none"
+        collisionAvoidance={collisionAvoidance}
+        className={cn(
+          "z-[130] h-(--positioner-height) w-(--positioner-width) max-w-(--available-width) transition-[top,left,right,bottom,transform] data-instant:transition-none",
+          positionerClassName,
+        )}
         data-slot="popover-positioner"
         side={side}
         sideOffset={sideOffset}
       >
         <PopoverPrimitive.Popup
           className={cn(
-            APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME,
-            "relative flex h-(--popup-height,auto) w-(--popup-width,auto) origin-(--transform-origin) outline-none transition-[width,height,scale,opacity] has-data-[slot=calendar]:rounded-xl data-starting-style:scale-98 data-starting-style:opacity-0",
+            "dropdown-glass relative flex h-(--popup-height,auto) w-(--popup-width,auto) origin-(--transform-origin) rounded-lg text-popover-foreground outline-none transition-[width,height,scale,opacity] before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-lg)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] has-data-[slot=calendar]:rounded-xl has-data-[slot=calendar]:before:rounded-[calc(var(--radius-xl)-1px)] data-starting-style:scale-98 data-starting-style:opacity-0 dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
             tooltipStyle &&
-              "w-fit text-balance rounded-md text-ui leading-snug shadow-md/5 before:rounded-[calc(var(--radius-md)-1px)]",
+              "w-fit text-balance rounded-md text-xs shadow-md/5 before:rounded-[calc(var(--radius-md)-1px)]",
             className,
           )}
           data-slot="popover-popup"
@@ -68,6 +71,7 @@ function PopoverPopup({
               tooltipStyle
                 ? "py-1 [--viewport-inline-padding:--spacing(2)]"
                 : "not-data-transitioning:overflow-y-auto",
+              viewportClassName,
             )}
             data-slot="popover-viewport"
           >
@@ -96,7 +100,7 @@ function PopoverTitle({ className, ...props }: PopoverPrimitive.Title.Props) {
 function PopoverDescription({ className, ...props }: PopoverPrimitive.Description.Props) {
   return (
     <PopoverPrimitive.Description
-      className={cn("text-muted-foreground text-ui leading-snug", className)}
+      className={cn("text-muted-foreground text-sm", className)}
       data-slot="popover-description"
       {...props}
     />
@@ -108,6 +112,7 @@ export {
   Popover,
   PopoverTrigger,
   PopoverPopup,
+  PopoverPopup as PopoverContent,
   PopoverTitle,
   PopoverDescription,
   PopoverClose,

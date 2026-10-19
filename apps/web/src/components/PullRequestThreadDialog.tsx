@@ -1,14 +1,18 @@
-import type { GitResolvePullRequestResult } from "@synara/contracts";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
+import { isAtomCommandInterrupted } from "@spiritdevs/client-runtime/state/runtime";
 import { useDebouncedValue } from "@tanstack/react-pacer";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  gitPreparePullRequestThreadMutationOptions,
-  gitResolvePullRequestQueryOptions,
-} from "~/lib/gitReactQuery";
+  readCachedPullRequestResolution,
+  usePreparePullRequestThreadAction,
+  usePullRequestResolution,
+} from "~/lib/sourceControlActions";
 import { cn } from "~/lib/utils";
 import { parsePullRequestReference } from "~/pullRequestReference";
+import { getSourceControlPresentation } from "~/sourceControlPresentation";
+import { useEnvironmentQuery } from "~/state/query";
+import { vcsEnvironment } from "~/state/vcs";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -24,58 +28,23 @@ import { Spinner } from "./ui/spinner";
 
 interface PullRequestThreadDialogProps {
   open: boolean;
+  environmentId: EnvironmentId;
+  threadId: ThreadId;
   cwd: string | null;
   initialReference: string | null;
   onOpenChange: (open: boolean) => void;
-  onPrepared: (input: {
-    branch: string;
-    worktreePath: string | null;
-    pullRequest: NonNullable<GitResolvePullRequestResult["pullRequest"]>;
-  }) => Promise<void> | void;
+  onPrepared: (input: { branch: string; worktreePath: string | null }) => Promise<void> | void;
 }
 
 export function PullRequestThreadDialog({
   open,
+  environmentId,
+  threadId,
   cwd,
   initialReference,
   onOpenChange,
   onPrepared,
 }: PullRequestThreadDialogProps) {
-  // Mirrors the content's prepare-in-flight state so the close guard can live
-  // up here while all form state resets by unmounting below DialogPopup.
-  const [busy, setBusy] = useState(false);
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(nextOpen) => {
-        if (!busy) {
-          onOpenChange(nextOpen);
-        }
-      }}
-    >
-      <DialogPopup className="max-w-xl">
-        <PullRequestThreadDialogContent
-          cwd={cwd}
-          initialReference={initialReference}
-          onOpenChange={onOpenChange}
-          onPrepared={onPrepared}
-          onBusyChange={setBusy}
-        />
-      </DialogPopup>
-    </Dialog>
-  );
-}
-
-function PullRequestThreadDialogContent({
-  cwd,
-  initialReference,
-  onOpenChange,
-  onPrepared,
-  onBusyChange,
-}: Omit<PullRequestThreadDialogProps, "open"> & {
-  onBusyChange: (busy: boolean) => void;
-}) {
-  const queryClient = useQueryClient();
   const referenceInputRef = useRef<HTMLInputElement>(null);
   const [reference, setReference] = useState(initialReference ?? "");
   const [referenceDirty, setReferenceDirty] = useState(false);
@@ -85,8 +54,23 @@ function PullRequestThreadDialogContent({
     { wait: 450 },
     (debouncerState) => ({ isPending: debouncerState.isPending }),
   );
+  const { data: gitStatus } = useEnvironmentQuery(
+    cwd === null
+      ? null
+      : vcsEnvironment.status({
+          environmentId,
+          input: { cwd },
+        }),
+  );
+  const sourceControlPresentation = useMemo(
+    () => getSourceControlPresentation(gitStatus?.sourceControlProvider),
+    [gitStatus?.sourceControlProvider],
+  );
+  const terminology = sourceControlPresentation.terminology;
+  const SourceControlIcon = sourceControlPresentation.Icon;
 
   useEffect(() => {
+    if (!open) return;
     const frame = window.requestAnimationFrame(() => {
       referenceInputRef.current?.focus();
       referenceInputRef.current?.select();
@@ -98,210 +82,223 @@ function PullRequestThreadDialogContent({
 
   const parsedReference = parsePullRequestReference(reference);
   const parsedDebouncedReference = parsePullRequestReference(debouncedReference);
-  const resolvePullRequestQuery = useQuery(
-    gitResolvePullRequestQueryOptions({
+  const sourceControlScope = useMemo(
+    () => ({
+      environmentId,
       cwd,
-      reference: parsedDebouncedReference,
     }),
+    [cwd, environmentId],
   );
-  const cachedPullRequest =
-    cwd && parsedReference
-      ? (queryClient.getQueryData<GitResolvePullRequestResult>([
-          "git",
-          "pull-request",
-          cwd,
-          parsedReference,
-        ])?.pullRequest ?? null)
-      : null;
-  const preparePullRequestThreadMutation = useMutation(
-    gitPreparePullRequestThreadMutationOptions({ cwd, queryClient }),
-  );
+  const pullRequestResolution = usePullRequestResolution({
+    ...sourceControlScope,
+    reference: open ? parsedDebouncedReference : null,
+  });
+  const cachedPullRequest = useMemo(() => {
+    return (
+      readCachedPullRequestResolution({
+        ...sourceControlScope,
+        reference: parsedReference,
+      })?.pullRequest ?? null
+    );
+  }, [parsedReference, sourceControlScope]);
+  const preparePullRequestThreadAction = usePreparePullRequestThreadAction(sourceControlScope);
 
   const liveResolvedPullRequest =
     parsedReference !== null && parsedReference === parsedDebouncedReference
-      ? (resolvePullRequestQuery.data?.pullRequest ?? null)
+      ? (pullRequestResolution.data?.pullRequest ?? null)
       : null;
   const resolvedPullRequest = liveResolvedPullRequest ?? cachedPullRequest;
   const isResolving =
+    open &&
     parsedReference !== null &&
     resolvedPullRequest === null &&
     (referenceDebouncer.state.isPending ||
       parsedReference !== parsedDebouncedReference ||
-      resolvePullRequestQuery.isPending ||
-      resolvePullRequestQuery.isFetching);
-  let statusTone: string;
-  switch (resolvedPullRequest?.state) {
-    case "merged":
-      statusTone = "text-indigo-600 dark:text-indigo-300/90";
-      break;
-    case "closed":
-      statusTone = "text-zinc-500 dark:text-zinc-400/80";
-      break;
-    case "open":
-      statusTone = "text-emerald-600 dark:text-emerald-300/90";
-      break;
-    default:
-      statusTone = "text-muted-foreground";
-  }
+      pullRequestResolution.isPending ||
+      pullRequestResolution.isFetching);
+  const statusTone = useMemo(() => {
+    switch (resolvedPullRequest?.state) {
+      case "merged":
+        return "text-violet-600 dark:text-violet-300/90";
+      case "closed":
+        return "text-zinc-500 dark:text-zinc-400/80";
+      case "open":
+        return "text-emerald-600 dark:text-emerald-300/90";
+      default:
+        return "text-muted-foreground";
+    }
+  }, [resolvedPullRequest?.state]);
 
-  // Promise chain instead of async/try-finally: React Compiler does not yet
-  // support try/finally, and it would skip optimizing this whole component.
-  const handleConfirm = (mode: "local" | "worktree") => {
-    if (!parsedReference) {
-      setReferenceDirty(true);
-      return;
-    }
-    if (!parsedReference || !resolvedPullRequest || !cwd) {
-      return;
-    }
-    setPreparingMode(mode);
-    onBusyChange(true);
-    void preparePullRequestThreadMutation
-      .mutateAsync({
+  const handleConfirm = useCallback(
+    async (mode: "local" | "worktree") => {
+      if (!parsedReference) {
+        setReferenceDirty(true);
+        return;
+      }
+      if (!parsedReference || !resolvedPullRequest || !cwd) {
+        return;
+      }
+      setPreparingMode(mode);
+      const result = await preparePullRequestThreadAction.run({
         reference: parsedReference,
         mode,
-      })
-      .then((result) =>
-        Promise.resolve(
-          onPrepared({
-            branch: result.branch,
-            worktreePath: result.worktreePath,
-            pullRequest: resolvedPullRequest,
-          }),
-        ).then(() => {
-          onOpenChange(false);
-        }),
-      )
-      .catch(() => undefined)
-      .finally(() => {
-        setPreparingMode(null);
-        onBusyChange(false);
+        ...(mode === "worktree" ? { threadId } : {}),
       });
-  };
+      setPreparingMode(null);
+      if (result._tag === "Failure") {
+        if (isAtomCommandInterrupted(result)) {
+          preparePullRequestThreadAction.resetError();
+        }
+        return;
+      }
+      await onPrepared({
+        branch: result.value.branch,
+        worktreePath: result.value.worktreePath,
+      });
+      onOpenChange(false);
+    },
+    [
+      cwd,
+      onOpenChange,
+      onPrepared,
+      parsedReference,
+      preparePullRequestThreadAction,
+      resolvedPullRequest,
+      threadId,
+    ],
+  );
 
   const validationMessage = !referenceDirty
     ? null
     : reference.trim().length === 0
-      ? "Paste a GitHub pull request URL or enter 123 / #123."
+      ? `Paste a ${terminology.singular} URL, checkout command, or enter 123 / #123.`
       : parsedReference === null
-        ? "Use a GitHub pull request URL, 123, or #123."
+        ? `Use a ${terminology.singular} URL, checkout command, 123, or #123.`
         : null;
   const errorMessage =
     validationMessage ??
-    (resolvedPullRequest === null && resolvePullRequestQuery.isError
-      ? resolvePullRequestQuery.error instanceof Error
-        ? resolvePullRequestQuery.error.message
-        : "Failed to resolve pull request."
-      : preparePullRequestThreadMutation.error instanceof Error
-        ? preparePullRequestThreadMutation.error.message
-        : preparePullRequestThreadMutation.error
-          ? "Failed to prepare pull request thread."
+    (resolvedPullRequest === null && pullRequestResolution.error
+      ? pullRequestResolution.error
+      : preparePullRequestThreadAction.error instanceof Error
+        ? preparePullRequestThreadAction.error.message
+        : preparePullRequestThreadAction.error
+          ? `Failed to prepare ${terminology.singular} thread.`
           : null);
 
   return (
-    <>
-      <DialogHeader>
-        <DialogTitle>Checkout Pull Request</DialogTitle>
-        <DialogDescription>
-          Resolve a GitHub pull request, then create the draft thread in the main repo or in a
-          dedicated worktree.
-        </DialogDescription>
-      </DialogHeader>
-      <DialogPanel className="space-y-4">
-        <label className="grid gap-1.5">
-          <span className="text-ui leading-snug font-medium text-foreground">Pull request</span>
-          <Input
-            ref={referenceInputRef}
-            placeholder="https://github.com/owner/repo/pull/42 or #42"
-            value={reference}
-            onChange={(event) => {
-              setReferenceDirty(true);
-              setReference(event.target.value);
-            }}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter") {
-                return;
-              }
-              event.preventDefault();
-              if (!isResolving && !preparePullRequestThreadMutation.isPending) {
-                void handleConfirm("local");
-              }
-            }}
-          />
-        </label>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!preparePullRequestThreadAction.isPending) {
+          onOpenChange(nextOpen);
+        }
+      }}
+    >
+      <DialogPopup className="max-w-xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <SourceControlIcon className="size-4" />
+            Checkout {terminology.singular}
+          </DialogTitle>
+          <DialogDescription>
+            Resolve a {sourceControlPresentation.providerName} {terminology.singular}, then create
+            the draft thread in the main repo or in a dedicated worktree.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogPanel className="space-y-4">
+          <label className="grid gap-1.5">
+            <span className="text-xs font-medium text-foreground capitalize">
+              {terminology.singular}
+            </span>
+            <Input
+              ref={referenceInputRef}
+              placeholder={`${terminology.shortLabel} URL, checkout command, or #42`}
+              value={reference}
+              onChange={(event) => {
+                setReferenceDirty(true);
+                setReference(event.target.value);
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") {
+                  return;
+                }
+                event.preventDefault();
+                if (!isResolving && !preparePullRequestThreadAction.isPending) {
+                  void handleConfirm("local");
+                }
+              }}
+            />
+          </label>
 
-        {resolvedPullRequest ? (
-          <div className="rounded-xl border border-border/70 bg-muted/24 p-3">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="truncate font-medium text-ui-lg leading-snug">
-                  {resolvedPullRequest.title}
-                </p>
-                <p className="truncate text-muted-foreground text-ui leading-snug">
-                  #{resolvedPullRequest.number} · {resolvedPullRequest.headBranch} to{" "}
-                  {resolvedPullRequest.baseBranch}
-                </p>
+          {resolvedPullRequest ? (
+            <div className="rounded-xl border border-border/70 bg-muted/24 p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate font-medium text-sm">{resolvedPullRequest.title}</p>
+                  <p className="truncate text-muted-foreground text-xs">
+                    #{resolvedPullRequest.number} · {resolvedPullRequest.headBranch} to{" "}
+                    {resolvedPullRequest.baseBranch}
+                  </p>
+                </div>
+                <span className={cn("shrink-0 text-xs capitalize", statusTone)}>
+                  {resolvedPullRequest.state}
+                </span>
               </div>
-              <span className={cn("shrink-0 text-ui leading-snug capitalize", statusTone)}>
-                {resolvedPullRequest.state}
-              </span>
             </div>
-          </div>
-        ) : null}
+          ) : null}
 
-        {isResolving ? (
-          <div className="flex items-center gap-2 text-muted-foreground text-ui leading-snug">
-            <Spinner className="size-3.5" />
-            Resolving pull request...
-          </div>
-        ) : null}
+          {isResolving ? (
+            <div className="flex items-center gap-2 text-muted-foreground text-xs">
+              <Spinner className="size-3.5" />
+              Resolving {terminology.singular}...
+            </div>
+          ) : null}
 
-        {errorMessage ? (
-          <p className="text-destructive text-ui leading-snug">{errorMessage}</p>
-        ) : null}
-      </DialogPanel>
-      <DialogFooter>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() => onOpenChange(false)}
-          disabled={preparePullRequestThreadMutation.isPending}
-        >
-          Cancel
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          onClick={() => {
-            void handleConfirm("local");
-          }}
-          disabled={
-            !cwd ||
-            !resolvedPullRequest ||
-            isResolving ||
-            preparePullRequestThreadMutation.isPending
-          }
-        >
-          {preparingMode === "local" ? "Preparing local..." : "Local"}
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          onClick={() => {
-            void handleConfirm("worktree");
-          }}
-          disabled={
-            !cwd ||
-            !resolvedPullRequest ||
-            isResolving ||
-            preparePullRequestThreadMutation.isPending
-          }
-        >
-          {preparingMode === "worktree" ? "Preparing worktree..." : "Worktree"}
-        </Button>
-      </DialogFooter>
-    </>
+          {errorMessage ? <p className="text-destructive text-xs">{errorMessage}</p> : null}
+        </DialogPanel>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => onOpenChange(false)}
+            disabled={preparePullRequestThreadAction.isPending}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              void handleConfirm("local");
+            }}
+            disabled={
+              !cwd ||
+              !resolvedPullRequest ||
+              isResolving ||
+              preparePullRequestThreadAction.isPending
+            }
+          >
+            {preparingMode === "local" ? "Preparing local..." : "Local"}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => {
+              void handleConfirm("worktree");
+            }}
+            disabled={
+              !cwd ||
+              !resolvedPullRequest ||
+              isResolving ||
+              preparePullRequestThreadAction.isPending
+            }
+          >
+            {preparingMode === "worktree" ? "Preparing worktree..." : "Worktree"}
+          </Button>
+        </DialogFooter>
+      </DialogPopup>
+    </Dialog>
   );
 }

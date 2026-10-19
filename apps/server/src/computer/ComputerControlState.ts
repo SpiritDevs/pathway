@@ -1,136 +1,194 @@
-import { readFileSync } from "node:fs";
-import { mkdir, rename, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+/**
+ * Durable per-thread Computer consent: whether control is disabled, the
+ * revocation generation, and the explicit chat opt-in.
+ *
+ * @module computer/ComputerControlState
+ */
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 
-function noop(): void {}
+/** The consent file's name inside the environment's state directory. */
+export const COMPUTER_CONTROL_STATE_FILE = "computer-control.json";
 
-interface ThreadControlState {
+export interface ThreadControlState {
   readonly disabled: boolean;
   readonly generation: number;
   readonly chatGeneration?: number;
 }
 
-/** Frozen request generations prevent old queued consent from surviving a disable. */
-export class ComputerControlState {
-  private readonly threads = new Map<string, ThreadControlState>();
-  private writes = Promise.resolve();
-  /**
-   * Per-thread operation chain. Queued-dispatch and edit-resend admissions for
-   * the same thread race through admitControl concurrently; without
-   * serialization their read-modify-write sequences interleave and the last
-   * writer silently wins. Chaining keeps every mutation ordered per thread
-   * while reads stay synchronous. Entries are removed once their tail settles
-   * so threads do not accumulate here beyond the threads map itself.
-   */
-  private readonly threadChains = new Map<string, Promise<void>>();
-  private loadError: Error | undefined;
+export class ComputerControlStateError extends Schema.TaggedErrorClass<ComputerControlStateError>()(
+  "ComputerControlStateError",
+  {
+    message: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
 
-  constructor(private readonly filePath?: string) {
-    if (!filePath) return;
-    try {
-      const data: unknown = JSON.parse(readFileSync(filePath, "utf8"));
-      if (typeof data !== "object" || data === null || Array.isArray(data))
-        throw new Error("Invalid state structure.");
-      for (const [threadId, value] of Object.entries(data)) {
-        const state = value as Partial<ThreadControlState> | null;
-        if (
-          state === null ||
-          typeof state !== "object" ||
-          typeof state.disabled !== "boolean" ||
-          !Number.isSafeInteger(state.generation) ||
-          (state.generation ?? -1) < 0 ||
-          (state.chatGeneration !== undefined &&
-            (!Number.isSafeInteger(state.chatGeneration) || state.chatGeneration < 0))
-        )
-          throw new Error("Invalid thread authorization state.");
-        this.threads.set(threadId, state as ThreadControlState);
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-      // A broken consent file disables Computer, not ordinary coding or server boot.
-      this.loadError = new Error(
-        "Computer authorization state could not be loaded; control remains disabled.",
-        { cause: error },
-      );
+const Generation = Schema.Int.check(
+  Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+);
+
+const ControlStateFile = Schema.fromJsonString(
+  Schema.Record(
+    Schema.String,
+    Schema.Struct({
+      disabled: Schema.Boolean,
+      generation: Generation,
+      chatGeneration: Schema.optionalKey(Generation),
+    }),
+  ),
+);
+
+const decodeControlStateFile = Schema.decodeUnknownEffect(ControlStateFile);
+
+/** Frozen request generations prevent old queued consent from surviving a disable. */
+export interface ComputerControlState {
+  /** The thread's current state; every thread reads as disabled when the file failed to load. */
+  readonly get: (threadId: string) => ThreadControlState;
+  /** Whether a request frozen at `generation` may still act for the thread. */
+  readonly allows: (threadId: string, generation: number) => boolean;
+  /**
+   * Disables (bumping the generation, which also clears chat intent) or
+   * re-enables the thread, then persists. Enabling an enabled thread is free.
+   */
+  readonly set: (
+    threadId: string,
+    disabled: boolean,
+  ) => Effect.Effect<void, ComputerControlStateError>;
+  /**
+   * Records whether the thread's chat opted in to Computer at `generation`.
+   * Intent only sticks when it matches the current, enabled generation. A
+   * write that fails, dies or is interrupted rolls the intent back so it
+   * cannot authorize a later turn.
+   */
+  readonly recordChatIntent: (
+    threadId: string,
+    enabled: boolean,
+    generation: number,
+  ) => Effect.Effect<void, ComputerControlStateError>;
+}
+
+/**
+ * Loads the consent file from `stateDir`, or keeps state in memory when
+ * `stateDir` is `undefined`. A missing file is an empty state; a broken one
+ * disables Computer for every thread — not ordinary coding or server boot.
+ */
+export const makeComputerControlState = Effect.fn("makeComputerControlState")(function* (
+  stateDir: string | undefined,
+): Effect.fn.Return<ComputerControlState, never, FileSystem.FileSystem | Path.Path> {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const filePath =
+    stateDir === undefined ? undefined : path.join(stateDir, COMPUTER_CONTROL_STATE_FILE);
+  const threads = new Map<string, ThreadControlState>();
+  /**
+   * Queued-dispatch and edit-resend admissions race through consent updates
+   * concurrently; without serialization their read-modify-write sequences
+   * interleave and the last writer silently wins. One permit orders every
+   * mutation and its write while reads stay synchronous.
+   */
+  const lock = yield* Semaphore.make(1);
+  let loadError: ComputerControlStateError | undefined;
+
+  if (filePath !== undefined) {
+    const loaded = yield* fs.readFileString(filePath).pipe(
+      Effect.flatMap(decodeControlStateFile),
+      Effect.map((data) => ({ data }) as const),
+      Effect.catch((error) =>
+        Effect.succeed(
+          error._tag === "PlatformError" && error.reason._tag === "NotFound"
+            ? ({ data: {} } as const)
+            : ({ error } as const),
+        ),
+      ),
+    );
+    if ("error" in loaded) {
+      loadError = new ComputerControlStateError({
+        message: "Computer authorization state could not be loaded; control remains disabled.",
+        cause: loaded.error,
+      });
+    } else {
+      for (const [threadId, state] of Object.entries(loaded.data)) threads.set(threadId, state);
     }
   }
 
-  get(threadId: string): ThreadControlState {
-    if (this.loadError) return { disabled: true, generation: 0 };
-    return this.threads.get(threadId) ?? { disabled: false, generation: 0 };
-  }
+  const get = (threadId: string): ThreadControlState => {
+    if (loadError) return { disabled: true, generation: 0 };
+    return threads.get(threadId) ?? { disabled: false, generation: 0 };
+  };
 
-  allows(threadId: string, generation: number): boolean {
-    const state = this.get(threadId);
+  const allows = (threadId: string, generation: number): boolean => {
+    const state = get(threadId);
     return !state.disabled && generation === state.generation;
-  }
+  };
 
-  set(threadId: string, disabled: boolean): Promise<void> {
-    if (this.loadError) return Promise.reject(this.loadError);
-    const previous = this.get(threadId);
-    if (!disabled && !previous.disabled) return Promise.resolve();
-    return this.serialize(threadId, () => {
-      const current = this.get(threadId);
-      if (!disabled && !current.disabled) return Promise.resolve();
-      this.threads.set(threadId, {
-        disabled,
-        generation: current.generation + (disabled ? 1 : 0),
-      });
-      return this.persist();
+  const encode = Schema.encodeEffect(ControlStateFile);
+  const persist: Effect.Effect<void, ComputerControlStateError> = Effect.suspend(() => {
+    if (filePath === undefined) return Effect.void;
+    const temporaryPath = `${filePath}.tmp`;
+    return encode(Object.fromEntries(threads)).pipe(
+      Effect.tap(() => fs.makeDirectory(path.dirname(filePath), { recursive: true, mode: 0o700 })),
+      Effect.flatMap((content) => fs.writeFileString(temporaryPath, content, { mode: 0o600 })),
+      Effect.andThen(fs.rename(temporaryPath, filePath)),
+      Effect.mapError(
+        (cause) =>
+          new ComputerControlStateError({
+            message: "Computer authorization state could not be saved.",
+            cause,
+          }),
+      ),
+    );
+  });
+
+  const set = (threadId: string, disabled: boolean) =>
+    Effect.suspend(() => {
+      if (loadError) return Effect.fail(loadError);
+      if (!disabled && !get(threadId).disabled) return Effect.void;
+      // Uninterruptible once admitted: an interrupted write would leave memory
+      // at the new generation and disk at the old one, so a request frozen
+      // before a disable would regain authority after a restart.
+      return lock.withPermit(
+        Effect.suspend(() => {
+          const current = get(threadId);
+          if (!disabled && !current.disabled) return Effect.void;
+          threads.set(threadId, {
+            disabled,
+            generation: current.generation + (disabled ? 1 : 0),
+          });
+          return persist;
+        }).pipe(Effect.uninterruptible),
+      );
     });
-  }
 
-  recordChatIntent(threadId: string, enabled: boolean, generation: number): Promise<void> {
-    if (this.loadError) return enabled ? Promise.reject(this.loadError) : Promise.resolve();
-    return this.serialize(threadId, () => {
-      const previous = this.get(threadId);
-      const chatGeneration = enabled && this.allows(threadId, generation) ? generation : undefined;
-      if (previous.chatGeneration === chatGeneration) return Promise.resolve();
-      const next = {
-        disabled: previous.disabled,
-        generation: previous.generation,
-        ...(chatGeneration !== undefined ? { chatGeneration } : {}),
-      };
-      this.threads.set(threadId, next);
-      return this.persist().catch((error) => {
-        if (this.threads.get(threadId) === next) {
-          this.threads.set(threadId, { disabled: next.disabled, generation: next.generation });
-        }
-        throw error;
-      });
+  const recordChatIntent = (threadId: string, enabled: boolean, generation: number) =>
+    Effect.suspend(() => {
+      if (loadError) return enabled ? Effect.fail(loadError) : Effect.void;
+      return lock.withPermit(
+        Effect.suspend(() => {
+          const previous = get(threadId);
+          const chatGeneration = enabled && allows(threadId, generation) ? generation : undefined;
+          if (previous.chatGeneration === chatGeneration) return Effect.void;
+          const next: ThreadControlState = {
+            disabled: previous.disabled,
+            generation: previous.generation,
+            ...(chatGeneration !== undefined ? { chatGeneration } : {}),
+          };
+          threads.set(threadId, next);
+          return persist.pipe(
+            Effect.onError(() =>
+              Effect.sync(() => {
+                if (threads.get(threadId) === next) {
+                  threads.set(threadId, { disabled: next.disabled, generation: next.generation });
+                }
+              }),
+            ),
+          );
+        }),
+      );
     });
-  }
 
-  /**
-   * Runs the operation after every earlier operation for this thread settles,
-   * successfully or not. The returned promise settles exactly like the
-   * operation itself; the stored tail never rejects so a failure cannot stall
-   * later work.
-   */
-  private serialize(threadId: string, operation: () => Promise<void>): Promise<void> {
-    const previous = this.threadChains.get(threadId) ?? Promise.resolve();
-    const next = previous.then(operation, operation);
-    const tail = next.then(noop, noop);
-    this.threadChains.set(threadId, tail);
-    void tail.then(() => {
-      if (this.threadChains.get(threadId) === tail) this.threadChains.delete(threadId);
-    });
-    return next;
-  }
-
-  private persist(): Promise<void> {
-    if (!this.filePath) return Promise.resolve();
-    const filePath = this.filePath;
-    const content = JSON.stringify(Object.fromEntries(this.threads));
-    const write = this.writes
-      .catch(() => undefined)
-      .then(async () => {
-        await mkdir(dirname(filePath), { recursive: true, mode: 0o700 });
-        const temporaryPath = `${filePath}.tmp`;
-        await writeFile(temporaryPath, content, { mode: 0o600 });
-        await rename(temporaryPath, filePath);
-      });
-    this.writes = write;
-    return write;
-  }
-}
+  return { get, allows, set, recordChatIntent } satisfies ComputerControlState;
+});

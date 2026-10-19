@@ -1,0 +1,467 @@
+/**
+ * Merges per-environment usage summaries into the single view the page renders.
+ *
+ * Pure, so the de-duplication and derivation rules can be tested without a
+ * connected environment.
+ *
+ * @module usageMerge
+ */
+import type {
+  EnvironmentId,
+  UsageBucket,
+  UsageProjectTotals,
+  UsageProviderKind,
+  UsageSourceFingerprint,
+  UsageSummary,
+} from "@spiritdevs/contracts";
+
+export interface EnvironmentUsage {
+  readonly environmentId: EnvironmentId;
+  readonly label: string;
+  readonly summary: UsageSummary;
+}
+
+export interface ProviderTotals {
+  readonly provider: UsageProviderKind;
+  readonly costUsd: number;
+  readonly totalTokens: number;
+  readonly records: number;
+  readonly costShare: number;
+  readonly tokenShare: number;
+}
+
+export interface ModelTotals {
+  readonly model: string;
+  readonly provider: UsageProviderKind;
+  readonly costUsd: number;
+  readonly totalTokens: number;
+  readonly records: number;
+  readonly costShare: number;
+}
+
+export interface DailyTotals {
+  readonly day: string;
+  readonly costUsd: number;
+  readonly totalTokens: number;
+  readonly byProvider: ReadonlyMap<UsageProviderKind, { costUsd: number; totalTokens: number }>;
+}
+
+export interface HourlyTotals {
+  readonly day: string;
+  readonly hourStart: string;
+  readonly costUsd: number;
+  readonly totalTokens: number;
+  readonly byProvider: ReadonlyMap<UsageProviderKind, { costUsd: number; totalTokens: number }>;
+}
+
+/** Usage attributed to one working directory, summed across providers and environments. */
+export interface WorkspaceUsage {
+  readonly workspaceSlug: string;
+  readonly costUsd: number;
+  readonly totalTokens: number;
+  readonly records: number;
+  readonly sessions: number;
+  readonly activeMs: number;
+}
+
+export interface CostQuality {
+  readonly providerReportedShare: number;
+  readonly modelPricedShare: number;
+  readonly unpricedShare: number;
+  readonly cacheSavingsUsd: number;
+}
+
+export interface MergedUsage {
+  readonly costUsd: number;
+  readonly uncachedInputTokens: number;
+  readonly cachedInputTokens: number;
+  readonly cacheCreationTokens: number;
+  readonly outputTokens: number;
+  readonly reasoningTokens: number;
+  readonly totalTokens: number;
+  readonly records: number;
+  readonly sessions: number;
+  readonly providers: readonly ProviderTotals[];
+  readonly models: readonly ModelTotals[];
+  readonly daily: readonly DailyTotals[];
+  readonly hourly: readonly HourlyTotals[];
+  readonly costQuality: CostQuality;
+  /** Per-working-directory totals, for the providers that record one. */
+  readonly workspaces: readonly WorkspaceUsage[];
+  /** Environments whose data was dropped as a duplicate of another's. */
+  readonly duplicateSources: readonly string[];
+  readonly contributingEnvironments: readonly EnvironmentId[];
+  readonly staleEnvironments: readonly EnvironmentId[];
+}
+
+/**
+ * Two sources are the same physical transcript directory only when host,
+ * provider, path and filesystem identity all agree.
+ *
+ * `volumeId` is what stops two machines that happen to share a hostname and a
+ * home path, which is every Mac in a fleet, from collapsing into one source and
+ * having one of them silently dropped.
+ */
+export function usageSourceId(fingerprint: UsageSourceFingerprint): string {
+  return [
+    fingerprint.hostId,
+    fingerprint.provider,
+    fingerprint.resolvedHomePath,
+    fingerprint.volumeId,
+  ]
+    .map((part) => encodeURIComponent(part))
+    .join(":");
+}
+
+/**
+ * Decides which environment owns each physical transcript directory.
+ *
+ * Several environments on one machine (worktree servers, for instance) resolve
+ * the same provider home and would otherwise double count every token. The
+ * healthiest, most recent source claims its fingerprint. Only duplicate source
+ * buckets are dropped; other homes on the same provider remain included.
+ */
+function claimSources(environments: readonly EnvironmentUsage[]): {
+  readonly ownerByFingerprint: ReadonlyMap<string, EnvironmentId>;
+  readonly duplicates: readonly string[];
+} {
+  const ownerByFingerprint = new Map<string, EnvironmentId>();
+  const duplicates: string[] = [];
+
+  const quality = { ok: 0, partial: 1, failed: 2, missing: 3 };
+  const ordered = environments
+    .flatMap((environment) =>
+      environment.summary.sources.map((source) => ({ environment, source })),
+    )
+    .sort(
+      (a, b) =>
+        quality[a.source.status] - quality[b.source.status] ||
+        b.environment.summary.readAt.localeCompare(a.environment.summary.readAt) ||
+        a.environment.environmentId.localeCompare(b.environment.environmentId),
+    );
+  for (const { environment, source } of ordered) {
+    if (source.status === "missing") continue;
+    const key = usageSourceId(source.fingerprint);
+    if (ownerByFingerprint.has(key)) {
+      duplicates.push(`${environment.label}: ${source.fingerprint.resolvedHomePath}`);
+      continue;
+    }
+    ownerByFingerprint.set(key, environment.environmentId);
+  }
+
+  return { ownerByFingerprint, duplicates };
+}
+
+/** Sources this environment owns after fingerprint claims, plus their buckets. */
+function ownedContribution(
+  environment: EnvironmentUsage,
+  ownerByFingerprint: ReadonlyMap<string, EnvironmentId>,
+): {
+  readonly buckets: readonly UsageBucket[];
+  readonly sessions: number;
+  readonly projects: readonly UsageProjectTotals[];
+} {
+  const ownedProviders = new Set<UsageProviderKind>();
+  const ownedSources = new Set<string>();
+  let sessions = 0;
+  for (const source of environment.summary.sources) {
+    if (source.status === "missing") continue;
+    const key = usageSourceId(source.fingerprint);
+    if (ownerByFingerprint.get(key) === environment.environmentId) {
+      ownedProviders.add(source.fingerprint.provider);
+      ownedSources.add(key);
+      // Distinct within a directory. Summing per-bucket session counts instead
+      // would count a session once per day and model it spans.
+      sessions += source.distinctSessions;
+    }
+  }
+  return {
+    buckets: environment.summary.buckets.filter((bucket) =>
+      bucket.sourceId ? ownedSources.has(bucket.sourceId) : ownedProviders.has(bucket.provider),
+    ),
+    sessions,
+    // Same claim rule as the buckets: a directory two worktree servers both scan must contribute
+    // its tokens once, not once per server.
+    projects: environment.summary.projects.filter((project) =>
+      project.sourceId ? ownedSources.has(project.sourceId) : ownedProviders.has(project.provider),
+    ),
+  };
+}
+
+function projectTokens(project: UsageProjectTotals): number {
+  // reasoningTokens is a subset of outputTokens and must not be added again.
+  return (
+    project.totals.uncachedInputTokens +
+    project.totals.cachedInputTokens +
+    project.totals.cacheCreationTokens +
+    project.totals.outputTokens
+  );
+}
+
+function bucketTokens(bucket: UsageBucket): number {
+  // reasoningTokens is a subset of outputTokens and must not be added again.
+  return (
+    bucket.totals.uncachedInputTokens +
+    bucket.totals.cachedInputTokens +
+    bucket.totals.cacheCreationTokens +
+    bucket.totals.outputTokens
+  );
+}
+
+const EMPTY_MERGED: MergedUsage = {
+  costUsd: 0,
+  uncachedInputTokens: 0,
+  cachedInputTokens: 0,
+  cacheCreationTokens: 0,
+  outputTokens: 0,
+  reasoningTokens: 0,
+  totalTokens: 0,
+  records: 0,
+  sessions: 0,
+  providers: [],
+  models: [],
+  daily: [],
+  hourly: [],
+  costQuality: {
+    providerReportedShare: 0,
+    modelPricedShare: 0,
+    unpricedShare: 0,
+    cacheSavingsUsd: 0,
+  },
+  workspaces: [],
+  duplicateSources: [],
+  contributingEnvironments: [],
+  staleEnvironments: [],
+};
+
+/**
+ * Merges every connected environment's summary.
+ *
+ * `expectedContractVersion` guards against an environment running older server
+ * code: rather than blocking the page, its data is excluded and its id is
+ * reported so the UI can say coverage is partial.
+ */
+export function mergeUsage(
+  environments: readonly EnvironmentUsage[],
+  expectedContractVersion: number,
+): MergedUsage {
+  if (environments.length === 0) return EMPTY_MERGED;
+
+  const current: EnvironmentUsage[] = [];
+  const staleEnvironments: EnvironmentId[] = [];
+  for (const environment of environments) {
+    if (environment.summary.contractVersion === expectedContractVersion) {
+      current.push(environment);
+    } else {
+      staleEnvironments.push(environment.environmentId);
+    }
+  }
+
+  const { ownerByFingerprint, duplicates } = claimSources(current);
+
+  let costUsd = 0;
+  let uncachedInputTokens = 0;
+  let cachedInputTokens = 0;
+  let cacheCreationTokens = 0;
+  let outputTokens = 0;
+  let reasoningTokens = 0;
+  let records = 0;
+  let sessions = 0;
+  let cacheSavingsUsd = 0;
+  let providerReportedRecords = 0;
+  let unpricedRecords = 0;
+
+  const providerAccumulator = new Map<
+    UsageProviderKind,
+    { costUsd: number; totalTokens: number; records: number }
+  >();
+  const modelAccumulator = new Map<
+    string,
+    { provider: UsageProviderKind; costUsd: number; totalTokens: number; records: number }
+  >();
+  const dailyAccumulator = new Map<
+    string,
+    {
+      costUsd: number;
+      totalTokens: number;
+      byProvider: Map<UsageProviderKind, { costUsd: number; totalTokens: number }>;
+    }
+  >();
+  const hourlyAccumulator = new Map<
+    string,
+    {
+      day: string;
+      hourStart: string;
+      costUsd: number;
+      totalTokens: number;
+      byProvider: Map<UsageProviderKind, { costUsd: number; totalTokens: number }>;
+    }
+  >();
+  const workspaceAccumulator = new Map<
+    string,
+    { costUsd: number; totalTokens: number; records: number; sessions: number; activeMs: number }
+  >();
+  const contributingEnvironments: EnvironmentId[] = [];
+
+  for (const environment of current) {
+    const {
+      buckets,
+      sessions: environmentSessions,
+      projects,
+    } = ownedContribution(environment, ownerByFingerprint);
+    if (buckets.length > 0) contributingEnvironments.push(environment.environmentId);
+    sessions += environmentSessions;
+
+    for (const project of projects) {
+      const current = workspaceAccumulator.get(project.workspaceSlug) ?? {
+        costUsd: 0,
+        totalTokens: 0,
+        records: 0,
+        sessions: 0,
+        activeMs: 0,
+      };
+      current.costUsd += project.costUsd;
+      current.totalTokens += projectTokens(project);
+      current.records += project.records;
+      current.sessions += project.sessions;
+      current.activeMs += project.activeMs;
+      workspaceAccumulator.set(project.workspaceSlug, current);
+    }
+
+    for (const bucket of buckets) {
+      const tokens = bucketTokens(bucket);
+
+      costUsd += bucket.costUsd;
+      cacheSavingsUsd += bucket.cacheSavingsUsd;
+      uncachedInputTokens += bucket.totals.uncachedInputTokens;
+      cachedInputTokens += bucket.totals.cachedInputTokens;
+      cacheCreationTokens += bucket.totals.cacheCreationTokens;
+      outputTokens += bucket.totals.outputTokens;
+      reasoningTokens += bucket.totals.reasoningTokens;
+      records += bucket.records;
+      unpricedRecords += bucket.unpricedRecords;
+      if (bucket.costSource === "providerReported") providerReportedRecords += bucket.records;
+
+      const provider = providerAccumulator.get(bucket.provider) ?? {
+        costUsd: 0,
+        totalTokens: 0,
+        records: 0,
+      };
+      provider.costUsd += bucket.costUsd;
+      provider.totalTokens += tokens;
+      provider.records += bucket.records;
+      providerAccumulator.set(bucket.provider, provider);
+
+      const modelKey = `${bucket.provider} ${bucket.model}`;
+      const model = modelAccumulator.get(modelKey) ?? {
+        provider: bucket.provider,
+        costUsd: 0,
+        totalTokens: 0,
+        records: 0,
+      };
+      model.costUsd += bucket.costUsd;
+      model.totalTokens += tokens;
+      model.records += bucket.records;
+      modelAccumulator.set(modelKey, model);
+
+      const day = dailyAccumulator.get(bucket.day) ?? {
+        costUsd: 0,
+        totalTokens: 0,
+        byProvider: new Map<UsageProviderKind, { costUsd: number; totalTokens: number }>(),
+      };
+      day.costUsd += bucket.costUsd;
+      day.totalTokens += tokens;
+      const dayProvider = day.byProvider.get(bucket.provider) ?? { costUsd: 0, totalTokens: 0 };
+      dayProvider.costUsd += bucket.costUsd;
+      dayProvider.totalTokens += tokens;
+      day.byProvider.set(bucket.provider, dayProvider);
+      dailyAccumulator.set(bucket.day, day);
+
+      if (bucket.hourStart !== undefined) {
+        const hour = hourlyAccumulator.get(bucket.hourStart) ?? {
+          day: bucket.day,
+          hourStart: bucket.hourStart,
+          costUsd: 0,
+          totalTokens: 0,
+          byProvider: new Map<UsageProviderKind, { costUsd: number; totalTokens: number }>(),
+        };
+        hour.costUsd += bucket.costUsd;
+        hour.totalTokens += tokens;
+        const hourProvider = hour.byProvider.get(bucket.provider) ?? {
+          costUsd: 0,
+          totalTokens: 0,
+        };
+        hourProvider.costUsd += bucket.costUsd;
+        hourProvider.totalTokens += tokens;
+        hour.byProvider.set(bucket.provider, hourProvider);
+        hourlyAccumulator.set(bucket.hourStart, hour);
+      }
+    }
+  }
+
+  const totalTokens = uncachedInputTokens + cachedInputTokens + cacheCreationTokens + outputTokens;
+
+  const providers: ProviderTotals[] = [...providerAccumulator.entries()]
+    .map(([provider, totals]) => ({
+      provider,
+      costUsd: totals.costUsd,
+      totalTokens: totals.totalTokens,
+      records: totals.records,
+      costShare: costUsd === 0 ? 0 : totals.costUsd / costUsd,
+      tokenShare: totalTokens === 0 ? 0 : totals.totalTokens / totalTokens,
+    }))
+    .sort((a, b) => b.costUsd - a.costUsd);
+
+  const models: ModelTotals[] = [...modelAccumulator.entries()]
+    .map(([key, totals]) => ({
+      model: key.slice(key.indexOf(" ") + 1),
+      provider: totals.provider,
+      costUsd: totals.costUsd,
+      totalTokens: totals.totalTokens,
+      records: totals.records,
+      costShare: costUsd === 0 ? 0 : totals.costUsd / costUsd,
+    }))
+    .sort((a, b) => b.costUsd - a.costUsd || b.totalTokens - a.totalTokens);
+
+  const daily: DailyTotals[] = [...dailyAccumulator.entries()]
+    .map(([day, totals]) => ({
+      day,
+      costUsd: totals.costUsd,
+      totalTokens: totals.totalTokens,
+      byProvider: totals.byProvider,
+    }))
+    .sort((a, b) => a.day.localeCompare(b.day));
+
+  const hourly: HourlyTotals[] = [...hourlyAccumulator.values()].sort((a, b) =>
+    a.hourStart.localeCompare(b.hourStart),
+  );
+
+  return {
+    costUsd,
+    uncachedInputTokens,
+    cachedInputTokens,
+    cacheCreationTokens,
+    outputTokens,
+    reasoningTokens,
+    totalTokens,
+    records,
+    sessions,
+    providers,
+    models,
+    daily,
+    hourly,
+    costQuality: {
+      providerReportedShare: records === 0 ? 0 : providerReportedRecords / records,
+      unpricedShare: records === 0 ? 0 : unpricedRecords / records,
+      modelPricedShare:
+        records === 0 ? 0 : (records - providerReportedRecords - unpricedRecords) / records,
+      cacheSavingsUsd,
+    },
+    workspaces: [...workspaceAccumulator.entries()]
+      .map(([workspaceSlug, totals]) => ({ workspaceSlug, ...totals }))
+      .sort((a, b) => b.costUsd - a.costUsd || a.workspaceSlug.localeCompare(b.workspaceSlug)),
+    duplicateSources: duplicates,
+    contributingEnvironments,
+    staleEnvironments,
+  };
+}

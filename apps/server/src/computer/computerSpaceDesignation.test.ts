@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import type { OrchestrationMessage } from "@synara/contracts";
+import { describe, expect, it } from "@effect/vitest";
+
+import type { ComputerVisibleUseMessage } from "./computerVisibleUse.ts";
 import {
   computerSpaceDesignationForMessages,
   messageDesignatesComputerSpaces,
@@ -7,19 +8,9 @@ import {
 
 function message(
   text: string,
-  overrides: Partial<OrchestrationMessage> = {},
-): OrchestrationMessage {
-  return {
-    id: "msg" as OrchestrationMessage["id"],
-    role: "user",
-    text,
-    turnId: null,
-    streaming: false,
-    source: "native",
-    createdAt: "2026-09-20T12:00:00.000Z",
-    updatedAt: "2026-09-20T12:00:00.000Z",
-    ...overrides,
-  };
+  overrides: Partial<ComputerVisibleUseMessage> = {},
+): ComputerVisibleUseMessage {
+  return { id: "msg", role: "user", text, streaming: false, source: "native", ...overrides };
 }
 
 describe("Computer Space designation", () => {

@@ -1,23 +1,27 @@
-import { describe, expect, it } from "vitest";
-import { currentComputerTask, withComputerTask } from "./computerTaskContext";
+import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+
+import { currentComputerTask, withComputerTask } from "./computerTaskContext.ts";
 
 describe("computer task attribution", () => {
-  it("is absent in ordinary work and expires in detached continuations", async () => {
-    expect(currentComputerTask()).toBeUndefined();
-    let readLater!: () => ReturnType<typeof currentComputerTask>;
-    let wake!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      wake = resolve;
-    });
-    const task = { threadId: "thread", turnId: "turn" };
-    let detached!: Promise<ReturnType<typeof currentComputerTask>>;
-    await withComputerTask(task, async () => {
-      expect(currentComputerTask()).toEqual(task);
-      readLater = currentComputerTask;
-      detached = gate.then(() => currentComputerTask());
-    });
-    wake();
-    expect(readLater()).toBeUndefined();
-    expect(await detached).toBeUndefined();
-  });
+  it.effect("is absent in ordinary work and expires in detached continuations", () =>
+    Effect.gen(function* () {
+      expect(yield* currentComputerTask).toBeUndefined();
+      const gate = yield* Deferred.make<void>();
+      const task = { threadId: "thread", turnId: "turn" };
+      const detached = yield* withComputerTask(
+        task,
+        Effect.gen(function* () {
+          expect(yield* currentComputerTask).toEqual(task);
+          return yield* Effect.forkDetach(
+            Effect.andThen(Deferred.await(gate), currentComputerTask),
+          );
+        }),
+      );
+      yield* Deferred.succeed(gate, undefined);
+      expect(yield* Fiber.join(detached)).toBeUndefined();
+    }),
+  );
 });

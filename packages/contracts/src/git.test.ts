@@ -1,71 +1,44 @@
-import { describe, expect, it } from "vitest";
-import { Schema } from "effect";
+import { describe, expect, it } from "vite-plus/test";
+import * as Schema from "effect/Schema";
 
 import {
-  GitCreateWorktreeInput,
-  GitHandoffThreadInput,
+  VcsCreateWorktreeInput,
   GitPreparePullRequestThreadInput,
+  GitRunStackedActionResult,
   GitRunStackedActionInput,
   GitResolvePullRequestResult,
-  GitReadWorkingTreeDiffInput,
-  GitSummarizeDiffInput,
-} from "./git";
+} from "./git.ts";
 
-const decodeCreateWorktreeInput = Schema.decodeUnknownSync(GitCreateWorktreeInput);
-const decodeHandoffThreadInput = Schema.decodeUnknownSync(GitHandoffThreadInput);
+const decodeCreateWorktreeInput = Schema.decodeUnknownSync(VcsCreateWorktreeInput);
 const decodePreparePullRequestThreadInput = Schema.decodeUnknownSync(
   GitPreparePullRequestThreadInput,
 );
 const decodeRunStackedActionInput = Schema.decodeUnknownSync(GitRunStackedActionInput);
-const decodeSummarizeDiffInput = Schema.decodeUnknownSync(GitSummarizeDiffInput);
+const decodeRunStackedActionResult = Schema.decodeUnknownSync(GitRunStackedActionResult);
 const decodeResolvePullRequestResult = Schema.decodeUnknownSync(GitResolvePullRequestResult);
 
-describe("GitReadWorkingTreeDiffInput", () => {
-  it("preserves the optional literal file path through the RPC schema", () => {
-    const decode = Schema.decodeUnknownSync(GitReadWorkingTreeDiffInput);
-    expect(decode({ cwd: "/repo", scope: "workingTree", filePath: "src/[name].ts" })).toMatchObject(
-      {
-        cwd: "/repo",
-        scope: "workingTree",
-        filePath: "src/[name].ts",
-      },
-    );
-    expect(decode({ cwd: "/repo" })).not.toHaveProperty("filePath");
-  });
-});
-
-describe("GitCreateWorktreeInput", () => {
-  it("accepts omitted newBranch for existing-branch worktrees", () => {
+describe("VcsCreateWorktreeInput", () => {
+  it("accepts omitted newRefName for existing-refName worktrees", () => {
     const parsed = decodeCreateWorktreeInput({
       cwd: "/repo",
-      branch: "feature/existing",
+      refName: "feature/existing",
       path: "/tmp/worktree",
     });
 
-    expect(parsed.newBranch).toBeUndefined();
-    expect(parsed.branch).toBe("feature/existing");
+    expect(parsed.newRefName).toBeUndefined();
+    expect(parsed.refName).toBe("feature/existing");
   });
-});
 
-describe("GitHandoffThreadInput", () => {
-  it("carries durable orchestration identity with the Git handoff", () => {
-    const parsed = decodeHandoffThreadInput({
-      commandId: "command-handoff-1",
-      threadId: "thread-handoff-1",
+  it("accepts baseRefName metadata for a new worktree ref", () => {
+    const parsed = decodeCreateWorktreeInput({
       cwd: "/repo",
-      targetMode: "worktree",
-      currentBranch: "main",
-      worktreePath: null,
-      associatedWorktreePath: null,
-      associatedWorktreeBranch: null,
-      associatedWorktreeRef: null,
-      preferredLocalBranch: "main",
-      preferredWorktreeBaseBranch: "main",
-      preferredNewWorktreeName: "worktree/handoff",
+      refName: "0123456789abcdef",
+      newRefName: "feature/new",
+      baseRefName: "origin/main",
+      path: "/tmp/worktree",
     });
 
-    expect(parsed.commandId).toBe("command-handoff-1");
-    expect(parsed.threadId).toBe("thread-handoff-1");
+    expect(parsed.baseRefName).toBe("origin/main");
   });
 });
 
@@ -80,6 +53,19 @@ describe("GitPreparePullRequestThreadInput", () => {
     expect(parsed.reference).toBe("#42");
     expect(parsed.mode).toBe("worktree");
   });
+
+  it("accepts an isolated worktree for an owned thread", () => {
+    const parsed = decodePreparePullRequestThreadInput({
+      cwd: "/repo",
+      reference: "#42",
+      mode: "worktree",
+      threadId: "thread-review-42",
+      isolateWorktree: true,
+    });
+
+    expect(parsed.threadId).toBe("thread-review-42");
+    expect(parsed.isolateWorktree).toBe(true);
+  });
 });
 
 describe("GitResolvePullRequestResult", () => {
@@ -88,74 +74,68 @@ describe("GitResolvePullRequestResult", () => {
       pullRequest: {
         number: 42,
         title: "PR threads",
-        url: "https://github.com/example-org/sample-repo/pull/42",
+        url: "https://github.com/pingdotgg/codething-mvp/pull/42",
         baseBranch: "main",
         headBranch: "feature/pr-threads",
         state: "open",
-        isDraft: true,
-        mergeability: "conflicting",
-        additions: 38,
-        deletions: 36,
-        changedFiles: 3,
       },
     });
 
     expect(parsed.pullRequest.number).toBe(42);
     expect(parsed.pullRequest.headBranch).toBe("feature/pr-threads");
-    expect(parsed.pullRequest.isDraft).toBe(true);
-    expect(parsed.pullRequest.mergeability).toBe("conflicting");
-    expect(parsed.pullRequest.additions).toBe(38);
   });
 });
 
 describe("GitRunStackedActionInput", () => {
-  it("requires a client-provided actionId for progress correlation", () => {
+  it("accepts explicit stacked actions and requires a client-provided actionId", () => {
     const parsed = decodeRunStackedActionInput({
       actionId: "action-1",
       cwd: "/repo",
-      action: "commit",
+      action: "create_pr",
     });
 
     expect(parsed.actionId).toBe("action-1");
-    expect(parsed.action).toBe("commit");
-  });
-
-  it("accepts an optional codexHomePath for git text generation", () => {
-    const parsed = decodeRunStackedActionInput({
-      actionId: "action-2",
-      cwd: "/repo",
-      action: "commit_push",
-      codexHomePath: "/tmp/custom-codex-home",
-    });
-
-    expect(parsed.codexHomePath).toBe("/tmp/custom-codex-home");
-  });
-
-  it("accepts an optional textGenerationModelSelection for provider routing", () => {
-    const parsed = decodeRunStackedActionInput({
-      actionId: "action-3",
-      cwd: "/repo",
-      action: "commit",
-      textGenerationModelSelection: {
-        provider: "opencode",
-        model: "openrouter/gpt-oss-120b",
-      },
-    });
-
-    expect(parsed.textGenerationModelSelection?.provider).toBe("opencode");
-    expect(parsed.textGenerationModelSelection?.model).toBe("openrouter/gpt-oss-120b");
+    expect(parsed.action).toBe("create_pr");
   });
 });
 
-describe("GitSummarizeDiffInput", () => {
-  it("accepts an optional codexHomePath for diff summaries", () => {
-    const parsed = decodeSummarizeDiffInput({
-      cwd: "/repo",
-      scope: "staged",
-      codexHomePath: "/tmp/custom-codex-home",
+describe("GitRunStackedActionResult", () => {
+  it("decodes a server-authored completion toast", () => {
+    const parsed = decodeRunStackedActionResult({
+      action: "commit_push",
+      branch: {
+        status: "created",
+        name: "feature/server-owned-toast",
+      },
+      commit: {
+        status: "created",
+        commitSha: "89abcdef01234567",
+        subject: "feat: move toast state into git manager",
+      },
+      push: {
+        status: "pushed",
+        branch: "feature/server-owned-toast",
+        upstreamBranch: "origin/feature/server-owned-toast",
+      },
+      pr: {
+        status: "skipped_not_requested",
+      },
+      toast: {
+        title: "Pushed 89abcde to origin/feature/server-owned-toast",
+        description: "feat: move toast state into git manager",
+        cta: {
+          kind: "run_action",
+          label: "Create PR",
+          action: {
+            kind: "create_pr",
+          },
+        },
+      },
     });
 
-    expect(parsed.codexHomePath).toBe("/tmp/custom-codex-home");
-    expect(parsed.scope).toBe("staged");
+    expect(parsed.toast.cta.kind).toBe("run_action");
+    if (parsed.toast.cta.kind === "run_action") {
+      expect(parsed.toast.cta.action.kind).toBe("create_pr");
+    }
   });
 });

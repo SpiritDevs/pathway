@@ -1,323 +1,429 @@
-// FILE: OpenInPicker.tsx
-// Purpose: Render the chat/file header "Open In" controls for the active editor target.
-// Layer: Chat header action
-// Depends on: shared editor metadata, native shell bridge, and preferred editor state.
-
-import { type EditorId, type ResolvedKeybindingsConfig } from "@synara/contracts";
-import { useQuery } from "@tanstack/react-query";
-import { useState, type ReactNode } from "react";
-import { useEditorLaunchers, type EditorLaunchers } from "~/hooks/useEditorLaunchers";
-import { ChevronDownIcon } from "~/lib/icons";
-import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
-import { cn } from "~/lib/utils";
 import {
-  Menu,
-  MenuRadioGroup,
-  MenuRadioItem,
-  MenuShortcut,
-  MenuTrigger,
-  MenuItem,
-  MenuSeparator,
-} from "../ui/menu";
-import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
+  EditorId,
+  type EnvironmentId,
+  type ResolvedKeybindingsConfig,
+} from "@spiritdevs/contracts";
+import { memo, useCallback, useMemo, useRef, useState } from "react";
+import { shortcutLabelForCommand } from "../../keybindings";
+import { usePreferredEditor } from "../../editorPreferences";
+import { usePrimarySettings } from "../../hooks/useSettings";
+import { GhosttyIcon } from "../GhosttyIcon";
+import { ChevronDownIcon, FolderClosedIcon, TerminalIcon } from "lucide-react";
+import { Button } from "../ui/button";
+import { Collapsible, CollapsiblePanel } from "../ui/collapsible";
+import { Group, GroupSeparator } from "../ui/group";
+import { Menu, MenuItem, MenuPopup, MenuShortcut, MenuTrigger } from "../ui/menu";
 import {
-  ChatHeaderButton,
-  ChatHeaderIconButton,
-  ChatHeaderSplitDivider,
-  ChatHeaderSplitGroup,
-  CHAT_HEADER_SPLIT_LEADING_CLASS_NAME,
-  CHAT_HEADER_SPLIT_TRAILING_CLASS_NAME,
-} from "./chatHeaderControls";
+  AntigravityIcon,
+  CursorIcon,
+  Icon,
+  KiroIcon,
+  TraeIcon,
+  VisualStudioCode,
+  VisualStudioCodeInsiders,
+  VSCodium,
+  Zed,
+} from "../Icons";
+import {
+  AquaIcon,
+  CLionIcon,
+  DataGripIcon,
+  DataSpellIcon,
+  GoLandIcon,
+  IntelliJIdeaIcon,
+  PhpStormIcon,
+  PyCharmIcon,
+  RiderIcon,
+  RubyMineIcon,
+  RustRoverIcon,
+  WebStormIcon,
+} from "../JetBrainsIcons";
+import { cn, isMacPlatform, isWindowsPlatform } from "~/lib/utils";
+import { shellEnvironment } from "~/state/shell";
+import { useAtomCommand } from "~/state/use-atom-command";
+import {
+  THREAD_DETAILS_PANEL_CHEVRON_CLASS,
+  THREAD_DETAILS_PANEL_ICON_CLASS,
+  THREAD_DETAILS_PANEL_ROW_POPUP_CLASS,
+  THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS,
+  THREAD_DETAILS_PANEL_SPLIT_PRIMARY_CLASS,
+  THREAD_DETAILS_PANEL_SPLIT_SECONDARY_CLASS,
+  THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS,
+} from "./threadDetailsPanelStyles";
 
-const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
-const EMPTY_AVAILABLE_EDITORS: ReadonlyArray<EditorId> = [];
-
-interface OpenInPickerPrimaryAction {
-  onClick: () => void;
-  disabled?: boolean;
-  icon?: ReactNode;
-}
-
-interface OpenInPickerProps {
-  // Editor config is optional: callers that already hold it (e.g. the chat
-  // header) pass it through, while standalone surfaces (file-preview headers)
-  // omit it and let the picker self-fetch.
-  keybindings?: ResolvedKeybindingsConfig;
-  availableEditors?: ReadonlyArray<EditorId>;
-  openInTarget: string | null;
-  // "responsive" (default) hides the "Open" label until the `header-actions`
-  // inline-size container (declared on an ancestor — the chat header and the
-  // file-preview header both do) is wide enough; "always" keeps it visible
-  // regardless, for surfaces that don't establish that container.
-  labelMode?: "responsive" | "always";
-  // "split" (default) renders the bordered chat-header split button; "compact"
-  // renders quiet icon-only ghost buttons for dense per-row surfaces (e.g. the
-  // changed-file rows), where labelMode is ignored and the label stays sr-only.
-  variant?: "split" | "compact";
-  // Pins the primary "Open" action to a specific editor for this surface without
-  // mutating the shared preferred-editor setting. The PDF viewer uses this to default
-  // to the OS viewer (e.g. Preview) while still listing installed editors.
-  defaultEditor?: EditorId;
-  // Lets a file surface reuse the installed-editor menu while its main action
-  // stays in-app. Omitting this preserves the normal preferred-editor action.
-  primaryAction?: OpenInPickerPrimaryAction;
-  // Surface-specific actions appended after the shared installed-editor list.
-  // OpenInPicker owns the separator so callers cannot create malformed menus.
-  additionalMenuItems?: ReactNode;
-  /** Optional surface-specific display priority; unlisted installed editors follow in catalog order. */
-  menuEditorOrder?: ReadonlyArray<EditorId>;
-  groupLabel?: string;
-  menuLabel?: string;
-}
-
-type OpenInPickerContentProps = OpenInPickerProps & {
-  keybindings: ResolvedKeybindingsConfig;
-  availableEditors: ReadonlyArray<EditorId>;
+type OpenInOption = {
+  label: string;
+  Icon: Icon;
+  value: EditorId;
+  kind: "brand" | "generic";
 };
 
-export function OpenInPicker(props: OpenInPickerProps) {
-  if (props.keybindings !== undefined && props.availableEditors !== undefined) {
-    return (
-      <OpenInPickerContent
-        {...props}
-        keybindings={props.keybindings}
-        availableEditors={props.availableEditors}
-      />
-    );
-  }
-  return <OpenInPickerWithConfig {...props} />;
+const resolveOptions = (platform: string, availableEditors: ReadonlyArray<EditorId>) => {
+  const baseOptions: ReadonlyArray<OpenInOption> = [
+    {
+      label: "Cursor",
+      Icon: CursorIcon,
+      value: "cursor",
+      kind: "brand",
+    },
+    {
+      label: "Trae",
+      Icon: TraeIcon,
+      value: "trae",
+      kind: "brand",
+    },
+    {
+      label: "Kiro",
+      Icon: KiroIcon,
+      value: "kiro",
+      kind: "brand",
+    },
+    {
+      label: "VS Code",
+      Icon: VisualStudioCode,
+      value: "vscode",
+      kind: "brand",
+    },
+    {
+      label: "VS Code Insiders",
+      Icon: VisualStudioCodeInsiders,
+      value: "vscode-insiders",
+      kind: "brand",
+    },
+    {
+      label: "VSCodium",
+      Icon: VSCodium,
+      value: "vscodium",
+      kind: "brand",
+    },
+    {
+      label: "Zed",
+      Icon: Zed,
+      value: "zed",
+      kind: "brand",
+    },
+    {
+      label: "Antigravity",
+      Icon: AntigravityIcon,
+      value: "antigravity",
+      kind: "brand",
+    },
+    {
+      label: "IntelliJ IDEA",
+      Icon: IntelliJIdeaIcon,
+      value: "idea",
+      kind: "brand",
+    },
+    {
+      label: "Aqua",
+      Icon: AquaIcon,
+      value: "aqua",
+      kind: "brand",
+    },
+    {
+      label: "CLion",
+      Icon: CLionIcon,
+      value: "clion",
+      kind: "brand",
+    },
+    {
+      label: "DataGrip",
+      Icon: DataGripIcon,
+      value: "datagrip",
+      kind: "brand",
+    },
+    {
+      label: "DataSpell",
+      Icon: DataSpellIcon,
+      value: "dataspell",
+      kind: "brand",
+    },
+    {
+      label: "GoLand",
+      Icon: GoLandIcon,
+      value: "goland",
+      kind: "brand",
+    },
+    {
+      label: "PhpStorm",
+      Icon: PhpStormIcon,
+      value: "phpstorm",
+      kind: "brand",
+    },
+    {
+      label: "PyCharm",
+      Icon: PyCharmIcon,
+      value: "pycharm",
+      kind: "brand",
+    },
+    {
+      label: "Rider",
+      Icon: RiderIcon,
+      value: "rider",
+      kind: "brand",
+    },
+    {
+      label: "RubyMine",
+      Icon: RubyMineIcon,
+      value: "rubymine",
+      kind: "brand",
+    },
+    {
+      label: "RustRover",
+      Icon: RustRoverIcon,
+      value: "rustrover",
+      kind: "brand",
+    },
+    {
+      label: "WebStorm",
+      Icon: WebStormIcon,
+      value: "webstorm",
+      kind: "brand",
+    },
+    {
+      label: isMacPlatform(platform)
+        ? "Finder"
+        : isWindowsPlatform(platform)
+          ? "Explorer"
+          : "Files",
+      Icon: FolderClosedIcon,
+      value: "file-manager",
+      kind: "generic",
+    },
+  ];
+  const availableEditorSet = new Set(availableEditors);
+  return baseOptions.filter((option) => availableEditorSet.has(option.value));
+};
+
+function getOpenInIconClass(kind: OpenInOption["kind"]) {
+  return cn(kind === "brand" ? "text-foreground opacity-100" : "text-muted-foreground");
 }
 
-function OpenInPickerWithConfig(props: OpenInPickerProps) {
-  // The query-owning wrapper mounts only for standalone surfaces. Rows that
-  // receive config from ChatView avoid both the subscription and a QueryClient
-  // dependency in isolated rendering/tests.
-  const serverConfigQuery = useQuery(serverConfigQueryOptions());
-  return (
-    <OpenInPickerContent
-      {...props}
-      keybindings={props.keybindings ?? serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS}
-      availableEditors={
-        props.availableEditors ??
-        serverConfigQuery.data?.availableEditors ??
-        EMPTY_AVAILABLE_EDITORS
-      }
-    />
+export const OpenInPicker = memo(function OpenInPicker({
+  environmentId,
+  keybindings,
+  availableEditors,
+  openInCwd,
+  compact = false,
+  variant = "toolbar",
+  displayMode = "toolbar",
+}: {
+  environmentId: EnvironmentId;
+  keybindings: ResolvedKeybindingsConfig;
+  availableEditors: ReadonlyArray<EditorId>;
+  openInCwd: string | null;
+  compact?: boolean;
+  variant?: "toolbar" | "card";
+  displayMode?: "toolbar" | "panel";
+}) {
+  const isPanel = displayMode === "panel";
+  const ActionGroup = isPanel ? "div" : Group;
+  const panelAnchorRef = useRef<HTMLDivElement | null>(null);
+  const openInEditorMutation = useAtomCommand(shellEnvironment.openInEditor, "open in editor");
+  const [preferredEditor, setPreferredEditor] = usePreferredEditor(availableEditors);
+  const { preferredTerminal } = usePrimarySettings();
+  const TerminalAppIcon = preferredTerminal === "ghostty" ? GhosttyIcon : TerminalIcon;
+  const terminalLabel = preferredTerminal === "ghostty" ? "Open in Ghostty" : "Open in Terminal";
+  const canOpenTerminal = availableEditors.includes(preferredTerminal) && !!openInCwd;
+  const openTerminal = () => {
+    if (!openInCwd) return;
+    setEditorOptionsOpen(false);
+    return openInEditorMutation({
+      environmentId,
+      input: { cwd: openInCwd, editor: preferredTerminal },
+    });
+  };
+  const [editorOptionsOpen, setEditorOptionsOpen] = useState(false);
+  const options = useMemo(
+    () => resolveOptions(navigator.platform, availableEditors),
+    [availableEditors],
   );
-}
+  const primaryOption = options.find(({ value }) => value === preferredEditor) ?? null;
+  const secondaryOptions = options.filter(({ value }) => value !== preferredEditor);
 
-function OpenInPickerContent({ primaryAction, ...props }: OpenInPickerContentProps) {
-  return primaryAction ? (
-    <PrimaryActionOpenInPicker {...props} primaryAction={primaryAction} />
-  ) : (
-    <EditorActionOpenInPicker {...props} />
+  const openInEditor = useCallback(
+    (editorId: EditorId | null) => {
+      if (!openInCwd) return;
+      const editor = editorId ?? preferredEditor;
+      if (!editor) return;
+      const result = openInEditorMutation({
+        environmentId,
+        input: {
+          cwd: openInCwd,
+          editor,
+        },
+      });
+      setPreferredEditor(editor);
+      setEditorOptionsOpen(false);
+      return result;
+    },
+    [environmentId, openInCwd, openInEditorMutation, preferredEditor, setPreferredEditor],
   );
-}
 
-interface OpenInPickerFrameProps {
-  labelMode: "responsive" | "always";
-  variant: "split" | "compact";
-  groupLabel: string;
-  menuLabel: string;
-  primaryAction: OpenInPickerPrimaryAction;
-  onMenuOpenChange?: (open: boolean) => void;
-  menuContent: ReactNode;
-}
+  const openFavoriteEditorShortcutLabel = useMemo(
+    () => shortcutLabelForCommand(keybindings, "editor.openFavorite"),
+    [keybindings],
+  );
+  const primaryLabel = isPanel ? `Open in ${primaryOption?.label ?? "editor"}` : "Open";
 
-// Quiet square ghost button shared by both compact controls so the pair reads as
-// one unit; `data-popup-open` keeps the menu trigger highlighted while its menu is up.
-const COMPACT_ACTION_BUTTON_CLASS_NAME =
-  "inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-50 data-popup-open:bg-[var(--color-background-button-secondary-hover)] data-popup-open:text-foreground";
+  if (variant === "card") {
+    if (!primaryOption) {
+      return (
+        <p className="px-2 py-1.5 text-sm text-muted-foreground">No installed editors found</p>
+      );
+    }
 
-function OpenInPickerFrame(props: OpenInPickerFrameProps) {
-  if (props.variant === "compact") {
+    const PrimaryIcon = primaryOption.Icon;
+
     return (
-      <div
-        role="group"
-        aria-label={props.groupLabel}
-        className="flex shrink-0 items-center gap-0.5"
-      >
-        <button
-          type="button"
-          className={COMPACT_ACTION_BUTTON_CLASS_NAME}
-          disabled={props.primaryAction.disabled ?? false}
-          onClick={props.primaryAction.onClick}
-        >
-          {props.primaryAction.icon ?? null}
-          <span className="sr-only">Open</span>
-        </button>
-        <Menu {...(props.onMenuOpenChange ? { onOpenChange: props.onMenuOpenChange } : {})}>
-          <MenuTrigger
-            render={
-              <button
-                type="button"
-                aria-label={props.menuLabel}
-                className={COMPACT_ACTION_BUTTON_CLASS_NAME}
-              />
-            }
+      <Collapsible open={editorOptionsOpen} onOpenChange={setEditorOptionsOpen}>
+        <div className="flex items-center gap-0.5">
+          <button
+            type="button"
+            disabled={!openInCwd}
+            className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={() => openInEditor(primaryOption.value)}
           >
-            <ChevronDownIcon aria-hidden="true" className="size-3.5" />
-          </MenuTrigger>
-          {props.menuContent}
-        </Menu>
-      </div>
+            <PrimaryIcon
+              aria-hidden="true"
+              className={cn("size-4 shrink-0", getOpenInIconClass(primaryOption.kind))}
+            />
+            <span className="truncate">Open in {primaryOption.label}</span>
+            {openFavoriteEditorShortcutLabel ? (
+              <span className="ml-auto text-[11px] text-muted-foreground">
+                {openFavoriteEditorShortcutLabel}
+              </span>
+            ) : null}
+          </button>
+          {secondaryOptions.length > 0 || canOpenTerminal ? (
+            <button
+              type="button"
+              data-keep-action-card-open
+              aria-label={editorOptionsOpen ? "Hide other editors" : "Show other editors"}
+              aria-expanded={editorOptionsOpen}
+              className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={() => setEditorOptionsOpen((open) => !open)}
+            >
+              <ChevronDownIcon
+                aria-hidden="true"
+                className={cn(
+                  "size-4 transition-transform duration-200 motion-reduce:transition-none",
+                  editorOptionsOpen && "rotate-180",
+                )}
+              />
+            </button>
+          ) : null}
+        </div>
+        <CollapsiblePanel>
+          <div className="space-y-0.5 pt-0.5">
+            <button
+              type="button"
+              disabled={!canOpenTerminal}
+              onClick={openTerminal}
+              className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent disabled:opacity-50"
+            >
+              <TerminalAppIcon aria-hidden="true" className="size-4 shrink-0" />
+              {terminalLabel}
+            </button>
+            {secondaryOptions.map(({ label, Icon, value, kind }) => (
+              <button
+                key={value}
+                type="button"
+                disabled={!openInCwd}
+                className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={() => openInEditor(value)}
+              >
+                <Icon
+                  aria-hidden="true"
+                  className={cn("size-4 shrink-0", getOpenInIconClass(kind))}
+                />
+                <span className="truncate">Open in {label}</span>
+              </button>
+            ))}
+          </div>
+        </CollapsiblePanel>
+      </Collapsible>
     );
   }
+
   return (
-    <ChatHeaderSplitGroup label={props.groupLabel}>
-      <ChatHeaderButton
-        tone="outline"
-        className={CHAT_HEADER_SPLIT_LEADING_CLASS_NAME}
-        disabled={props.primaryAction.disabled ?? false}
-        onClick={props.primaryAction.onClick}
+    <ActionGroup
+      aria-label="Open in editor"
+      role="group"
+      {...(isPanel
+        ? { className: THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS, ref: panelAnchorRef }
+        : {})}
+    >
+      <Button
+        aria-label={compact ? "Open file in preferred editor" : primaryLabel}
+        size={isPanel ? "sm" : "xs"}
+        variant={isPanel ? "ghost" : "outline"}
+        className={isPanel ? THREAD_DETAILS_PANEL_SPLIT_PRIMARY_CLASS : undefined}
+        disabled={!preferredEditor || !openInCwd}
+        onClick={() => openInEditor(preferredEditor)}
       >
-        {props.primaryAction.icon ?? null}
+        {primaryOption?.Icon && (
+          <primaryOption.Icon
+            aria-hidden="true"
+            className={cn(
+              isPanel ? THREAD_DETAILS_PANEL_ICON_CLASS : "size-3.5",
+              getOpenInIconClass(primaryOption.kind),
+            )}
+          />
+        )}
         <span
           className={cn(
-            "font-normal",
-            props.labelMode === "always"
-              ? "ml-0.5"
-              : "sr-only @sm/header-actions:not-sr-only @sm/header-actions:ml-0.5",
+            compact
+              ? "sr-only"
+              : "sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5",
+            isPanel && "not-sr-only ml-0.5 min-w-0 truncate",
           )}
         >
-          Open
+          {primaryLabel}
         </span>
-      </ChatHeaderButton>
-      <ChatHeaderSplitDivider />
-      <Menu {...(props.onMenuOpenChange ? { onOpenChange: props.onMenuOpenChange } : {})}>
+      </Button>
+      {isPanel ? (
+        <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
+      ) : (
+        <GroupSeparator {...(!compact ? { className: "hidden @3xl/header-actions:block" } : {})} />
+      )}
+      <Menu>
         <MenuTrigger
           render={
-            <ChatHeaderIconButton
-              label={props.menuLabel}
-              tone="outline"
-              className={CHAT_HEADER_SPLIT_TRAILING_CLASS_NAME}
+            <Button
+              aria-label="Choose editor"
+              size={isPanel ? "sm" : "icon-xs"}
+              variant={isPanel ? "ghost" : "outline"}
+              className={isPanel ? THREAD_DETAILS_PANEL_SPLIT_SECONDARY_CLASS : undefined}
             />
           }
         >
-          <ChevronDownIcon aria-hidden="true" className="size-3.5" />
+          <ChevronDownIcon
+            aria-hidden="true"
+            className={isPanel ? THREAD_DETAILS_PANEL_CHEVRON_CLASS : "size-4"}
+          />
         </MenuTrigger>
-        {props.menuContent}
+        <MenuPopup
+          align="end"
+          {...(isPanel ? { anchor: panelAnchorRef } : {})}
+          className={isPanel ? THREAD_DETAILS_PANEL_ROW_POPUP_CLASS : undefined}
+        >
+          {options.length === 0 && <MenuItem disabled>No installed editors found</MenuItem>}
+          {options.map(({ label, Icon, value, kind }) => (
+            <MenuItem key={value} onClick={() => openInEditor(value)}>
+              <Icon aria-hidden="true" className={getOpenInIconClass(kind)} />
+              {label}
+              {value === preferredEditor && openFavoriteEditorShortcutLabel && (
+                <MenuShortcut>{openFavoriteEditorShortcutLabel}</MenuShortcut>
+              )}
+            </MenuItem>
+          ))}
+          <MenuItem disabled={!canOpenTerminal} onClick={openTerminal}>
+            <TerminalAppIcon aria-hidden="true" />
+            {terminalLabel}
+          </MenuItem>
+        </MenuPopup>
       </Menu>
-    </ChatHeaderSplitGroup>
+    </ActionGroup>
   );
-}
-
-function EditorActionOpenInPicker(props: OpenInPickerContentProps) {
-  const launchers = useEditorLaunchers(props);
-  const PrimaryIcon = launchers.primaryOption?.Icon;
-
-  return (
-    <OpenInPickerFrame
-      labelMode={props.labelMode ?? "responsive"}
-      variant={props.variant ?? "split"}
-      groupLabel={props.groupLabel ?? "Open in editor"}
-      menuLabel={props.menuLabel ?? "Editor options"}
-      primaryAction={{
-        disabled: !launchers.preferredEditor || !props.openInTarget,
-        icon: PrimaryIcon ? <PrimaryIcon aria-hidden="true" className="size-3.5" /> : null,
-        onClick: () => launchers.openInEditor(launchers.preferredEditor),
-      }}
-      menuContent={
-        <OpenInPickerMenuPopup
-          launchers={launchers}
-          openInTarget={props.openInTarget}
-          additionalMenuItems={props.additionalMenuItems}
-          menuEditorOrder={props.menuEditorOrder}
-        />
-      }
-    />
-  );
-}
-
-type PrimaryActionOpenInPickerProps = OpenInPickerContentProps & {
-  primaryAction: OpenInPickerPrimaryAction;
-};
-
-function PrimaryActionOpenInPicker({ primaryAction, ...props }: PrimaryActionOpenInPickerProps) {
-  const [launcherMenuMounted, setLauncherMenuMounted] = useState(false);
-
-  return (
-    <OpenInPickerFrame
-      labelMode={props.labelMode ?? "responsive"}
-      variant={props.variant ?? "split"}
-      groupLabel={props.groupLabel ?? "Open in editor"}
-      menuLabel={props.menuLabel ?? "Editor options"}
-      primaryAction={primaryAction}
-      onMenuOpenChange={(open) => {
-        if (open) setLauncherMenuMounted(true);
-      }}
-      menuContent={launcherMenuMounted ? <OpenInPickerMenuWithLaunchers {...props} /> : null}
-    />
-  );
-}
-
-function OpenInPickerMenuWithLaunchers(props: OpenInPickerContentProps) {
-  const launchers = useEditorLaunchers(props);
-  return (
-    <OpenInPickerMenuPopup
-      launchers={launchers}
-      openInTarget={props.openInTarget}
-      additionalMenuItems={props.additionalMenuItems}
-      menuEditorOrder={props.menuEditorOrder}
-    />
-  );
-}
-
-function OpenInPickerMenuPopup({
-  launchers,
-  openInTarget,
-  additionalMenuItems,
-  menuEditorOrder,
-}: {
-  launchers: EditorLaunchers;
-  openInTarget: string | null;
-  additionalMenuItems: ReactNode;
-  menuEditorOrder: ReadonlyArray<EditorId> | undefined;
-}) {
-  const { options, preferredEditor, openFavoriteShortcutLabel, setDefaultEditor, openInEditor } =
-    launchers;
-  const displayedOptions = menuEditorOrder
-    ? [
-        ...menuEditorOrder.flatMap((editorId) => options.filter(({ value }) => value === editorId)),
-        ...options.filter(({ value }) => !menuEditorOrder.includes(value)),
-      ]
-    : options;
-
-  return (
-    <ComposerPickerMenuPopup align="end" side="bottom" className="w-44 min-w-44">
-      {displayedOptions.length === 0 && <MenuItem disabled>No installed editors found</MenuItem>}
-      <MenuRadioGroup
-        value={preferredEditor ?? ""}
-        onValueChange={(value) => setDefaultEditor(value as EditorId)}
-      >
-        {displayedOptions.map(({ label, Icon, value }) => (
-          <MenuRadioItem
-            key={value}
-            preserveChildLayout
-            trailing={
-              value === preferredEditor && openFavoriteShortcutLabel ? (
-                <MenuShortcut>{openFavoriteShortcutLabel}</MenuShortcut>
-              ) : null
-            }
-            value={value}
-            disabled={!openInTarget}
-            onClick={() => openInEditor(value)}
-          >
-            <span className="flex min-w-0 items-center gap-2">
-              <span className="shrink-0">
-                <Icon aria-hidden="true" className="size-3.5 text-muted-foreground" />
-              </span>
-              <span className="truncate">{label}</span>
-            </span>
-          </MenuRadioItem>
-        ))}
-      </MenuRadioGroup>
-      {additionalMenuItems ? (
-        <>
-          <MenuSeparator />
-          {additionalMenuItems}
-        </>
-      ) : null}
-    </ComposerPickerMenuPopup>
-  );
-}
+});

@@ -1,12 +1,13 @@
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
-import { Effect, Layer, Schema, Struct } from "effect";
-import * as SchemaGetter from "effect/SchemaGetter";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import * as Struct from "effect/Struct";
 
-import { ModelSelection, ProjectScript } from "@synara/contracts";
+import { ModelSelection, ProjectScript } from "@spiritdevs/contracts";
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
-  ClearProjectionProjectSpaceAssignmentsInput,
   DeleteProjectionProjectInput,
   GetProjectionProjectInput,
   ProjectionProject,
@@ -14,18 +15,10 @@ import {
   type ProjectionProjectRepositoryShape,
 } from "../Services/ProjectionProjects.ts";
 
-const SqliteBoolean = Schema.Number.pipe(
-  Schema.decodeTo(Schema.Boolean, {
-    decode: SchemaGetter.transform((value) => value !== 0),
-    encode: SchemaGetter.transform((value) => (value ? 1 : 0)),
-  }),
-);
-
 const ProjectionProjectDbRow = ProjectionProject.mapFields(
   Struct.assign({
     defaultModelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
-    isPinned: SqliteBoolean,
   }),
 );
 type ProjectionProjectDbRow = typeof ProjectionProjectDbRow.Type;
@@ -39,39 +32,42 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
       sql`
         INSERT INTO projection_projects (
           project_id,
-          kind,
           title,
+          title_is_custom,
           workspace_root,
+          internal_workspace_root,
           default_model_selection_json,
+          default_thread_env_mode,
+          favicon_path,
           scripts_json,
-          is_pinned,
-          space_id,
           created_at,
           updated_at,
           deleted_at
         )
         VALUES (
           ${row.projectId},
-          ${row.kind},
           ${row.title},
+          ${row.titleIsCustom ?? 0},
           ${row.workspaceRoot},
+          ${row.internalWorkspaceRoot ?? null},
           ${row.defaultModelSelection !== null ? JSON.stringify(row.defaultModelSelection) : null},
+          ${row.defaultThreadEnvMode},
+          ${row.faviconPath ?? null},
           ${JSON.stringify(row.scripts)},
-          ${row.isPinned ? 1 : 0},
-          ${row.spaceId},
           ${row.createdAt},
           ${row.updatedAt},
           ${row.deletedAt}
         )
         ON CONFLICT (project_id)
         DO UPDATE SET
-          kind = excluded.kind,
           title = excluded.title,
+          title_is_custom = excluded.title_is_custom,
           workspace_root = excluded.workspace_root,
+          internal_workspace_root = excluded.internal_workspace_root,
           default_model_selection_json = excluded.default_model_selection_json,
+          default_thread_env_mode = excluded.default_thread_env_mode,
+          favicon_path = excluded.favicon_path,
           scripts_json = excluded.scripts_json,
-          is_pinned = excluded.is_pinned,
-          space_id = excluded.space_id,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at,
           deleted_at = excluded.deleted_at
@@ -85,13 +81,14 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
       sql`
         SELECT
           project_id AS "projectId",
-          kind,
           title,
+          title_is_custom AS "titleIsCustom",
           workspace_root AS "workspaceRoot",
+          internal_workspace_root AS "internalWorkspaceRoot",
           default_model_selection_json AS "defaultModelSelection",
+          default_thread_env_mode AS "defaultThreadEnvMode",
+          favicon_path AS "faviconPath",
           scripts_json AS "scripts",
-          is_pinned AS "isPinned",
-          space_id AS "spaceId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -107,13 +104,14 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
       sql`
         SELECT
           project_id AS "projectId",
-          kind,
           title,
+          title_is_custom AS "titleIsCustom",
           workspace_root AS "workspaceRoot",
+          internal_workspace_root AS "internalWorkspaceRoot",
           default_model_selection_json AS "defaultModelSelection",
+          default_thread_env_mode AS "defaultThreadEnvMode",
+          favicon_path AS "faviconPath",
           scripts_json AS "scripts",
-          is_pinned AS "isPinned",
-          space_id AS "spaceId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -128,18 +126,6 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
       sql`
         DELETE FROM projection_projects
         WHERE project_id = ${projectId}
-      `,
-  });
-
-  const clearProjectionProjectSpaceAssignments = SqlSchema.void({
-    Request: ClearProjectionProjectSpaceAssignmentsInput,
-    execute: ({ spaceId, updatedAt }) =>
-      sql`
-        UPDATE projection_projects
-        SET
-          space_id = NULL,
-          updated_at = CASE WHEN updated_at > ${updatedAt} THEN updated_at ELSE ${updatedAt} END
-        WHERE space_id = ${spaceId}
       `,
   });
 
@@ -163,21 +149,11 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
       Effect.mapError(toPersistenceSqlError("ProjectionProjectRepository.deleteById:query")),
     );
 
-  const clearSpaceAssignments: ProjectionProjectRepositoryShape["clearSpaceAssignments"] = (
-    input,
-  ) =>
-    clearProjectionProjectSpaceAssignments(input).pipe(
-      Effect.mapError(
-        toPersistenceSqlError("ProjectionProjectRepository.clearSpaceAssignments:query"),
-      ),
-    );
-
   return {
     upsert,
     getById,
     listAll,
     deleteById,
-    clearSpaceAssignments,
   } satisfies ProjectionProjectRepositoryShape;
 });
 

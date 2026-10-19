@@ -1,4 +1,4 @@
-import { getNavigatorPlatform, isMacPlatform } from "./lib/utils";
+import { isMacPlatform } from "./lib/utils";
 
 export type TerminalLinkKind = "url" | "path";
 
@@ -36,9 +36,9 @@ export interface WrappedTerminalLinkLine {
   segments: ReadonlyArray<WrappedTerminalLinkLineSegment>;
 }
 
-const URL_PATTERN = /https?:\/\/[^\s"'`<>]+/g;
+const URL_PATTERN = /https?:\/\/[^\s"'`<>]+/giu;
 const FILE_PATH_PATTERN =
-  /(?:~\/|\.{1,2}\/|\/|[A-Za-z]:\\|\\\\)[^\s"'`<>]+|[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+(?::\d+){0,2}/g;
+  /(?:~\/|\.{1,2}\/|\/|[A-Za-z]:[\\/]|\\\\)[^\s"'`<>]+|[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+(?::\d+){0,2}/g;
 const TRAILING_PUNCTUATION_PATTERN = /[.,;!?]+$/;
 
 function trimClosingDelimiters(value: string): string {
@@ -80,7 +80,7 @@ function collectMatches(
 
     const trimmed = trimClosingDelimiters(raw);
     if (trimmed.length === 0) continue;
-    if (kind === "path" && /^https?:\/\//i.test(trimmed)) continue;
+    if (kind === "path" && isTerminalUrl(trimmed)) continue;
 
     const candidate: TerminalLinkMatch = {
       kind,
@@ -137,7 +137,7 @@ function inferHomeFromCwd(cwd: string): string | undefined {
   return undefined;
 }
 
-function splitPathAndPosition(value: string): {
+export function splitPathAndPosition(value: string): {
   path: string;
   line: string | undefined;
   column: string | undefined;
@@ -170,6 +170,10 @@ export function extractTerminalLinks(line: string): TerminalLinkMatch[] {
   const urlMatches = collectMatches(line, "url", URL_PATTERN, []);
   const pathMatches = collectMatches(line, "path", FILE_PATH_PATTERN, urlMatches);
   return [...urlMatches, ...pathMatches].toSorted((a, b) => a.start - b.start);
+}
+
+export function isTerminalUrl(value: string): boolean {
+  return /^https?:\/\//iu.test(value);
 }
 
 export function collectWrappedTerminalLinkLine(
@@ -258,7 +262,7 @@ export function wrappedTerminalLinkRangeIntersectsBufferLine(
 
 export function isTerminalLinkActivation(
   event: Pick<MouseEvent, "metaKey" | "ctrlKey">,
-  platform = getNavigatorPlatform(),
+  platform = typeof navigator === "undefined" ? "" : navigator.platform,
 ): boolean {
   if (platform.length === 0) return false;
   return isMacPlatform(platform)

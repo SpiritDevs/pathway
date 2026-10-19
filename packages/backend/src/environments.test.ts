@@ -1,0 +1,1671 @@
+import { readCompanySyncVersion } from "../convex/lib/companySyncHead.ts";
+import { heartbeat as registryHeartbeat } from "../convex/environments.ts";
+import {
+  readEnvironmentPresence,
+  readEnvironmentRuntime,
+  patchEnvironmentRuntime,
+} from "../convex/lib/environmentRuntime.ts";
+// @effect-diagnostics globalDate:off -- Test fixtures mirror Convex documents and use epoch milliseconds.
+/** End-to-end company environment registry, authorization, feed, and bootstrap coverage. */
+import { convexTest } from "convex-test";
+import { describe, expect, it, vi } from "vite-plus/test";
+
+import { api } from "../convex/_generated/api.js";
+import type { MutationCtx } from "../convex/_generated/server.js";
+import { appendCompanyChanges, encodeEnvironmentBinding } from "../convex/lib/companyApply.ts";
+import schema from "../convex/schema.ts";
+import { reconcile as reconcileThreads } from "../convex/agentThreads.ts";
+import { reconcile as reconcileEmails } from "../convex/capturedEmails.ts";
+import { PUBLISHER_RECONCILIATION_INTERVAL_MS } from "../convex/lib/publisherReconciliation.ts";
+import { functionHandler, measureDatabaseReads } from "./testDatabaseReads.ts";
+
+const RELAY_ISSUER = "https://relay.example.test";
+process.env.PATHWAY_RELAY_JWT_ISSUER = RELAY_ISSUER;
+process.env.PATHWAY_RELAY_JWKS_URL = `${RELAY_ISSUER}/.well-known/jwks.json`;
+
+const modules = {
+  "../convex/_generated/api.js": () => import("../convex/_generated/api.js"),
+  "../convex/_generated/server.js": () => import("../convex/_generated/server.js"),
+  "../convex/agentThreads.ts": () => import("../convex/agentThreads.ts"),
+  "../convex/capturedEmails.ts": () => import("../convex/capturedEmails.ts"),
+  "../convex/emailTags.ts": () => import("../convex/emailTags.ts"),
+  "../convex/trustedEmailSenders.ts": () => import("../convex/trustedEmailSenders.ts"),
+  "../convex/cloudProjects.ts": () => import("../convex/cloudProjects.ts"),
+  "../convex/environments.ts": () => import("../convex/environments.ts"),
+  "../convex/sync.ts": () => import("../convex/sync.ts"),
+};
+
+const COMPANY_ID = "0198f900-0000-7000-8000-000000000001";
+const COMPANY_TWO_ID = "0198f900-0000-7000-8000-000000000002";
+const COMPANY_THREE_ID = "0198f900-0000-7000-8000-000000000003";
+const MANAGER_MEMBERSHIP_ID = "0198f900-0000-7000-8000-000000000101";
+const READER_MEMBERSHIP_ID = "0198f900-0000-7000-8000-000000000102";
+const BLIND_MEMBERSHIP_ID = "0198f900-0000-7000-8000-000000000103";
+const MANAGER_ROLE_ID = "0198f900-0000-7000-8000-000000000201";
+const READER_ROLE_ID = "0198f900-0000-7000-8000-000000000202";
+const BLIND_ROLE_ID = "0198f900-0000-7000-8000-000000000203";
+const ENVIRONMENT_ID = "environment-registry-one";
+const ENVIRONMENT_TWO = "environment-registry-two";
+const REGISTRATION_ID = "0198f900-0000-7000-8000-000000000301";
+const REVOKED_REGISTRATION_ID = "0198f900-0000-7000-8000-000000000302";
+const PROJECT_ID = "0198f900-0000-7000-8000-000000000401";
+const BINDING_ID = "0198f900-0000-7000-8000-000000000501";
+const TRUSTED_SENDER_ID = "0198f900-0000-7000-8000-000000000701";
+const THUMBPRINT = "thumbprint-registry-one";
+const REPOSITORY_IDENTITY = {
+  canonicalKey: "github.com/spiritdevs/pathway",
+  locator: {
+    source: "git-remote" as const,
+    remoteName: "origin",
+    remoteUrl: "https://github.com/spiritdevs/pathway.git",
+  },
+  rootPath: "/workspace/pathway",
+  displayName: "spiritdevs/pathway",
+  provider: "github",
+  owner: "spiritdevs",
+  name: "pathway",
+};
+
+const descriptor = (
+  environmentId = ENVIRONMENT_ID,
+  label = "Registry machine",
+  projectDirectoryInspection = true,
+) => ({
+  environmentId,
+  applicationId: "pathway" as const,
+  label,
+  platform: { os: "darwin" as const, arch: "arm64" as const },
+  serverVersion: "1.2.3",
+  capabilities: {
+    repositoryIdentity: true,
+    projectDirectoryInspection,
+    connectionProbe: true,
+    attachmentUploads: true,
+    fileAttachments: { maxUploadBytes: 52_428_800 },
+    threadPullRequestAttachments: true,
+    pushAutoSettlement: true,
+    threadSettleAfterCompletion: true,
+  },
+});
+
+function harness() {
+  return convexTest(schema, modules);
+}
+
+type Harness = ReturnType<typeof harness>;
+
+function asUser(t: Harness, subject: string) {
+  return t.withIdentity({
+    issuer: "https://clerk.example.test",
+    subject,
+    tokenIdentifier: `https://clerk.example.test|${subject}`,
+    email: `${subject}@example.test`,
+    name: subject,
+  });
+}
+
+function asEnvironment(t: Harness, thumbprint = THUMBPRINT) {
+  return t.withIdentity({
+    issuer: RELAY_ISSUER,
+    subject: ENVIRONMENT_ID,
+    tokenIdentifier: `${RELAY_ISSUER}|${ENVIRONMENT_ID}`,
+    cnf: { jkt: thumbprint },
+  });
+}
+
+async function seed(t: Harness, workspaceKind?: "personal" | "organization") {
+  return await t.run(async (ctx) => {
+    const now = 1_700_000_000_000;
+    const companyDocId = await ctx.db.insert("companies", {
+      id: COMPANY_ID,
+      name: "Registry Test Co",
+      ...(workspaceKind === undefined ? {} : { workspaceKind }),
+      issueKeyPrefix: "REG",
+      nextIssueNumber: 1,
+      lifecycleState: "active",
+      deletionScheduledAt: null,
+      purgeAfter: null,
+      authorizationEpoch: 1,
+      syncVersion: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const addMember = async (
+      subject: string,
+      id: string,
+      roleDomainId: string,
+      permissions: string[],
+    ) => {
+      const userId = await ctx.db.insert("users", {
+        clerkSubject: subject,
+        email: `${subject}@example.test`,
+        displayName: subject,
+        imageUrl: null,
+        createdAt: now,
+        updatedAt: now,
+      });
+      const membershipId = await ctx.db.insert("memberships", {
+        id,
+        companyId: companyDocId,
+        userId,
+        state: "active",
+        displayNameSnapshot: subject,
+        emailSnapshot: `${subject}@example.test`,
+        invitedByMembershipId: null,
+        joinedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      });
+      const roleId = await ctx.db.insert("roles", {
+        id: roleDomainId,
+        companyId: companyDocId,
+        name: `${subject} role`,
+        description: "",
+        permissions,
+        seeded: false,
+        createdAt: now,
+        updatedAt: now,
+      });
+      await ctx.db.insert("roleAssignments", {
+        id: `${id}-assignment`,
+        companyId: companyDocId,
+        membershipId,
+        roleId,
+        scope: "company",
+        teamId: null,
+        createdAt: now,
+      });
+      return membershipId;
+    };
+
+    await addMember("manager", MANAGER_MEMBERSHIP_ID, MANAGER_ROLE_ID, [
+      "environments.read",
+      "environments.manage",
+      "projects.manage",
+    ]);
+    await addMember("reader", READER_MEMBERSHIP_ID, READER_ROLE_ID, ["environments.read"]);
+    await addMember("blind", BLIND_MEMBERSHIP_ID, BLIND_ROLE_ID, ["issues.read"]);
+    return { companyDocId, now };
+  });
+}
+
+async function seedRegistration(t: Harness, state: "active" | "revoked" = "active") {
+  const seeded = await seed(t);
+  await t.run(async (ctx) => {
+    await ctx.db.insert("environmentRegistrations", {
+      id: REGISTRATION_ID,
+      companyId: seeded.companyDocId,
+      environmentId: ENVIRONMENT_ID,
+      publicKeyThumbprint: THUMBPRINT,
+      descriptor: descriptor(ENVIRONMENT_ID, "Before publish"),
+      relayLinkState: "linked",
+      managedEndpointAvailable: true,
+      lastSeenAt: null,
+      serviceRoleIds: [],
+      teamIds: [],
+      state,
+      registeredByMembershipId: null,
+      createdAt: seeded.now,
+      updatedAt: seeded.now,
+    });
+  });
+  return seeded;
+}
+
+async function publish(t: Harness, label = "Registry machine", projectDirectoryInspection = true) {
+  await asEnvironment(t).mutation(api.environments.register, {
+    companyId: COMPANY_ID,
+    environmentId: ENVIRONMENT_ID,
+    descriptor: descriptor(ENVIRONMENT_ID, label, projectDirectoryInspection),
+    relayLinkState: "linked",
+    managedEndpointAvailable: true,
+  });
+}
+
+async function feedRows(t: Harness) {
+  return await t.run(async (ctx) =>
+    (await ctx.db.query("syncChanges").collect()).slice().sort((a, b) => a.version - b.version),
+  );
+}
+
+interface BootstrapPage {
+  readonly entities: { entityKind: string; entityId: string; payload: unknown }[];
+  readonly cursor: string | null;
+  readonly isDone: boolean;
+}
+
+describe("environment registry", () => {
+  it("rejects registrations from an unmarked legacy application", async () => {
+    const t = harness();
+    await seed(t);
+    const { applicationId: _applicationId, ...legacyDescriptor } = descriptor();
+
+    await expect(
+      asUser(t, "manager").mutation(api.environments.register, {
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+        publicKeyThumbprint: THUMBPRINT,
+        descriptor: legacyDescriptor,
+        relayLinkState: "linked",
+        managedEndpointAvailable: true,
+        serviceRoleIds: [],
+      }),
+    ).rejects.toThrow("Only Pathway environments may publish");
+  });
+
+  it("takes ownership of a project whose environment the company has not registered", async () => {
+    const t = harness();
+    await seed(t);
+
+    const args = {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: PROJECT_ID,
+      localWorkspaceRoot: "/workspace/pathway",
+      name: "Pathway",
+    };
+    expect(
+      await asUser(t, "manager").mutation(api.cloudProjects.ensureEnvironmentProject, args),
+    ).toBe(PROJECT_ID);
+
+    // The project is the company's; only the claim about where it is checked out waits for the
+    // environment the company has yet to admit.
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("cloudProjects").collect()).toHaveLength(1);
+      expect(await ctx.db.query("environmentBindings").collect()).toEqual([]);
+    });
+    expect((await feedRows(t)).map((row) => row.entityKind)).toEqual(["cloudProject"]);
+
+    await t.run(async (ctx) => {
+      const company = await ctx.db
+        .query("companies")
+        .withIndex("by_domain_id", (q) => q.eq("id", COMPANY_ID))
+        .unique();
+      if (company === null) throw new Error("The seeded company vanished.");
+      await ctx.db.insert("environmentRegistrations", {
+        id: REGISTRATION_ID,
+        companyId: company._id,
+        environmentId: ENVIRONMENT_ID,
+        publicKeyThumbprint: THUMBPRINT,
+        descriptor: descriptor(),
+        relayLinkState: "linked",
+        managedEndpointAvailable: true,
+        lastSeenAt: null,
+        serviceRoleIds: [],
+        teamIds: [],
+        state: "active",
+        registeredByMembershipId: null,
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_000_000,
+      });
+    });
+
+    // Registering is what the deferred binding was waiting for: the next publish attaches it to
+    // the project that is already there, rather than minting a second one.
+    await asUser(t, "manager").mutation(api.cloudProjects.ensureEnvironmentProject, args);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("cloudProjects").collect()).toHaveLength(1);
+      expect(await ctx.db.query("environmentBindings").collect()).toMatchObject([
+        {
+          environmentId: ENVIRONMENT_ID,
+          localProjectId: PROJECT_ID,
+          localWorkspaceRoot: "/workspace/pathway",
+          status: "active",
+        },
+      ]);
+    });
+  });
+
+  it("makes a local environment project available to cloud issues exactly once", async () => {
+    const t = harness();
+    await seedRegistration(t);
+
+    const args = {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: PROJECT_ID,
+      localWorkspaceRoot: "/workspace/pathway",
+      name: "Pathway",
+    };
+    expect(
+      await asUser(t, "manager").mutation(api.cloudProjects.ensureEnvironmentProject, args),
+    ).toBe(PROJECT_ID);
+
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("cloudProjects").collect()).toHaveLength(1);
+      const bindings = await ctx.db.query("environmentBindings").collect();
+      expect(bindings).toHaveLength(1);
+      expect(bindings[0]).toMatchObject({
+        environmentId: ENVIRONMENT_ID,
+        localProjectId: PROJECT_ID,
+        localWorkspaceRoot: "/workspace/pathway",
+        status: "active",
+      });
+    });
+    expect((await feedRows(t)).map((row) => row.entityKind)).toEqual([
+      "cloudProject",
+      "environmentBinding",
+    ]);
+
+    await asUser(t, "manager").mutation(api.cloudProjects.ensureEnvironmentProject, args);
+    expect(await feedRows(t)).toHaveLength(2);
+
+    await asUser(t, "manager").mutation(api.cloudProjects.ensureEnvironmentProject, {
+      ...args,
+      localWorkspaceRoot: "/workspace/pathway-next",
+      name: "Pathway Next",
+    });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("cloudProjects").first()).toMatchObject({ name: "Pathway Next" });
+      expect(await ctx.db.query("environmentBindings").first()).toMatchObject({
+        localWorkspaceRoot: "/workspace/pathway-next",
+        status: "active",
+      });
+    });
+    expect((await feedRows(t)).slice(2).map((row) => row.entityKind)).toEqual([
+      "cloudProject",
+      "environmentBinding",
+    ]);
+
+    await asUser(t, "manager").mutation(api.cloudProjects.releaseEnvironmentProject, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: PROJECT_ID,
+    });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("environmentBindings").first()).toMatchObject({
+        status: "revoked",
+      });
+      expect(await ctx.db.query("cloudProjects").first()).toMatchObject({
+        preferredBindingId: null,
+      });
+    });
+
+    const versionAfterRelease = (await feedRows(t)).length;
+    await asUser(t, "manager").mutation(api.cloudProjects.releaseEnvironmentProject, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: PROJECT_ID,
+    });
+    expect(await feedRows(t)).toHaveLength(versionAfterRelease);
+  });
+
+  it("reconnects a recreated checkout to its repository's existing company project", async () => {
+    const t = harness();
+    await seedRegistration(t);
+    const owner = asUser(t, "manager");
+    const original = {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: PROJECT_ID,
+      localWorkspaceRoot: "/workspace/pathway",
+      repositoryIdentity: REPOSITORY_IDENTITY,
+      name: "Pathway",
+    };
+
+    await owner.mutation(api.cloudProjects.ensureEnvironmentProject, original);
+    await owner.mutation(api.cloudProjects.releaseEnvironmentProject, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: PROJECT_ID,
+    });
+
+    const recreatedProjectId = "0198f900-0000-7000-8000-000000000402";
+    expect(
+      await owner.mutation(api.cloudProjects.ensureEnvironmentProject, {
+        ...original,
+        localProjectId: recreatedProjectId,
+        localWorkspaceRoot: "/different/checkout/pathway",
+      }),
+    ).toBe(PROJECT_ID);
+
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("cloudProjects").collect()).toHaveLength(1);
+      expect(await ctx.db.query("environmentBindings").collect()).toMatchObject([
+        {
+          cloudProjectId: expect.any(String),
+          localProjectId: PROJECT_ID,
+          repositoryKey: REPOSITORY_IDENTITY.canonicalKey,
+          status: "revoked",
+        },
+        {
+          cloudProjectId: expect.any(String),
+          localProjectId: recreatedProjectId,
+          repositoryKey: REPOSITORY_IDENTITY.canonicalKey,
+          status: "active",
+        },
+      ]);
+    });
+  });
+
+  it("persists the preferred environment binding for future project work", async () => {
+    const t = harness();
+    await seedRegistration(t);
+    await asUser(t, "manager").mutation(api.cloudProjects.ensureEnvironmentProject, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: PROJECT_ID,
+      localWorkspaceRoot: "/workspace/pathway",
+      name: "Pathway",
+    });
+    await t.run(async (ctx) => {
+      const project = await ctx.db.query("cloudProjects").first();
+      if (project === null) throw new Error("Missing project fixture.");
+      await ctx.db.insert("environmentBindings", {
+        id: BINDING_ID,
+        companyId: project.companyId,
+        cloudProjectId: project._id,
+        environmentId: ENVIRONMENT_TWO,
+        localProjectId: "project-on-second-environment",
+        localWorkspaceRoot: "/workspace/pathway",
+        status: "active",
+        lastSeenAt: 1_700_000_000_000,
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_000_000,
+      });
+    });
+
+    await asUser(t, "manager").mutation(api.cloudProjects.setPreferredEnvironmentBinding, {
+      companyId: COMPANY_ID,
+      cloudProjectId: PROJECT_ID,
+      bindingId: BINDING_ID,
+    });
+
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("cloudProjects").first()).toMatchObject({
+        preferredBindingId: BINDING_ID,
+      });
+    });
+    expect((await feedRows(t)).at(-1)).toMatchObject({ entityKind: "cloudProject" });
+  });
+
+  it("publishes a registration to members with environments.read and withholds it without that grant", async () => {
+    const t = harness();
+    await seedRegistration(t);
+    await publish(t);
+
+    const visible = await asUser(t, "reader").query(api.sync.listChanges, {
+      companyId: COMPANY_ID,
+      cursor: 0,
+    });
+    expect(visible).toMatchObject({ _tag: "Changes", cursor: 1 });
+    if (visible._tag !== "Changes") return;
+    expect(visible.changes).toHaveLength(1);
+    expect(visible.changes[0]).toMatchObject({
+      version: 1,
+      entityKind: "environmentRegistration",
+      entityId: REGISTRATION_ID,
+      changeKind: "upsert",
+      payload: {
+        id: REGISTRATION_ID,
+        environmentId: ENVIRONMENT_ID,
+        descriptor: { label: "Registry machine" },
+        lastSeenAt: expect.any(Number),
+      },
+    });
+
+    const hidden = await asUser(t, "blind").query(api.sync.listChanges, {
+      companyId: COMPANY_ID,
+      cursor: 0,
+    });
+    expect(hidden).toMatchObject({ _tag: "Changes", changes: [], cursor: 1 });
+  });
+
+  it("lets environments.read list and inspect active registrations and refuses callers without it", async () => {
+    const t = harness();
+    await seedRegistration(t);
+    await publish(t);
+
+    await expect(
+      asUser(t, "reader").query(api.environments.list, { companyId: COMPANY_ID }),
+    ).resolves.toMatchObject([
+      {
+        id: REGISTRATION_ID,
+        environmentId: ENVIRONMENT_ID,
+        descriptor: { label: "Registry machine" },
+      },
+    ]);
+    await expect(
+      asUser(t, "reader").query(api.environments.get, {
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+      }),
+    ).resolves.toMatchObject({ id: REGISTRATION_ID, lastSeenAt: expect.any(Number) });
+    await expect(
+      asUser(t, "blind").query(api.environments.list, { companyId: COMPANY_ID }),
+    ).rejects.toThrow("Missing permission environments.read");
+  });
+
+  it("lets an environment discover every active proof-key-bound company registration", async () => {
+    const t = harness();
+    await seedRegistration(t);
+    await t.run(async (ctx) => {
+      const insertCompany = async (
+        id: string,
+        name: string,
+        lifecycleState: "active" | "deletionScheduled",
+      ) =>
+        await ctx.db.insert("companies", {
+          id,
+          name,
+          issueKeyPrefix: name.slice(0, 3).toUpperCase(),
+          nextIssueNumber: 1,
+          lifecycleState,
+          deletionScheduledAt: lifecycleState === "active" ? null : 1_700_000_000_000,
+          purgeAfter: lifecycleState === "active" ? null : 1_700_086_400_000,
+          authorizationEpoch: 1,
+          syncVersion: 0,
+          createdAt: 1_700_000_000_000,
+          updatedAt: 1_700_000_000_000,
+        });
+      const insertRegistration = async (input: {
+        companyId: Awaited<ReturnType<typeof insertCompany>>;
+        id: string;
+        publicKeyThumbprint: string;
+        state?: "active" | "revoked";
+      }) => {
+        const state = input.state ?? "active";
+        await ctx.db.insert("environmentRegistrations", {
+          id: input.id,
+          companyId: input.companyId,
+          environmentId: ENVIRONMENT_ID,
+          publicKeyThumbprint: input.publicKeyThumbprint,
+          descriptor: descriptor(ENVIRONMENT_ID, input.id),
+          relayLinkState: state === "active" ? "linked" : "revoked",
+          managedEndpointAvailable: state === "active",
+          lastSeenAt: null,
+          serviceRoleIds: [],
+          teamIds: [],
+          state,
+          registeredByMembershipId: null,
+          createdAt: 1_700_000_000_000,
+          updatedAt: 1_700_000_000_000,
+        });
+      };
+
+      const companyTwo = await insertCompany(COMPANY_TWO_ID, "Second Company", "active");
+      await insertRegistration({
+        companyId: companyTwo,
+        id: "0198f900-0000-7000-8000-000000000303",
+        publicKeyThumbprint: THUMBPRINT,
+      });
+      const companyThree = await insertCompany(
+        COMPANY_THREE_ID,
+        "Deleting Company",
+        "deletionScheduled",
+      );
+      await insertRegistration({
+        companyId: companyThree,
+        id: "0198f900-0000-7000-8000-000000000304",
+        publicKeyThumbprint: THUMBPRINT,
+      });
+      const wrongKeyCompany = await insertCompany(
+        "0198f900-0000-7000-8000-000000000004",
+        "Wrong Key Company",
+        "active",
+      );
+      await insertRegistration({
+        companyId: wrongKeyCompany,
+        id: "0198f900-0000-7000-8000-000000000305",
+        publicKeyThumbprint: "somebody-elses-thumbprint",
+      });
+      const revokedCompany = await insertCompany(
+        "0198f900-0000-7000-8000-000000000005",
+        "Revoked Company",
+        "active",
+      );
+      await insertRegistration({
+        companyId: revokedCompany,
+        id: "0198f900-0000-7000-8000-000000000306",
+        publicKeyThumbprint: THUMBPRINT,
+        state: "revoked",
+      });
+    });
+
+    await expect(
+      asEnvironment(t).query(api.environments.listRegisteredCompanies, {}),
+    ).resolves.toEqual([COMPANY_ID, COMPANY_TWO_ID]);
+  });
+
+  it("refuses company-registration discovery to humans and unauthenticated callers", async () => {
+    const t = harness();
+    await seedRegistration(t);
+
+    await expect(
+      asUser(t, "reader").query(api.environments.listRegisteredCompanies, {}),
+    ).rejects.toThrow("Only an environment can discover its company registrations");
+    await expect(t.query(api.environments.listRegisteredCompanies, {})).rejects.toThrow(
+      "authenticated identity",
+    );
+  });
+
+  it("refuses discovery rather than silently truncating an oversized environment registry", async () => {
+    const t = harness();
+    const seeded = await seedRegistration(t);
+    await t.run(async (ctx) => {
+      for (let index = 1; index <= 2_000; index += 1) {
+        await ctx.db.insert("environmentRegistrations", {
+          id: `0198f901-0000-7000-8000-${String(index).padStart(12, "0")}`,
+          companyId: seeded.companyDocId,
+          environmentId: ENVIRONMENT_ID,
+          publicKeyThumbprint: THUMBPRINT,
+          descriptor: descriptor(ENVIRONMENT_ID, `Registry machine ${index}`),
+          relayLinkState: "linked",
+          managedEndpointAvailable: true,
+          lastSeenAt: null,
+          serviceRoleIds: [],
+          teamIds: [],
+          state: "active",
+          registeredByMembershipId: null,
+          createdAt: seeded.now,
+          updatedAt: seeded.now,
+        });
+      }
+    });
+
+    await expect(
+      asEnvironment(t).query(api.environments.listRegisteredCompanies, {}),
+    ).rejects.toThrow("more than 2000 company registrations");
+  });
+
+  it("delivers environment bindings through the environments.read feed gate", async () => {
+    const t = harness();
+    const seeded = await seedRegistration(t);
+    await t.run(async (ctx: MutationCtx) => {
+      const projectDocId = await ctx.db.insert("cloudProjects", {
+        id: PROJECT_ID,
+        companyId: seeded.companyDocId,
+        name: "Registry project",
+        description: "",
+        teamIds: [],
+        defaultWorkflowOwner: null,
+        preferredBindingId: null,
+        archivedAt: null,
+        createdAt: seeded.now,
+        updatedAt: seeded.now,
+        deletedAt: null,
+      });
+      const bindingDocId = await ctx.db.insert("environmentBindings", {
+        id: BINDING_ID,
+        companyId: seeded.companyDocId,
+        cloudProjectId: projectDocId,
+        environmentId: ENVIRONMENT_ID,
+        localProjectId: "local-project",
+        localWorkspaceRoot: "/workspace/project",
+        status: "active",
+        lastSeenAt: seeded.now,
+        createdAt: seeded.now,
+        updatedAt: seeded.now,
+      });
+      const binding = await ctx.db.get(bindingDocId);
+      if (binding === null) throw new Error("seed the binding first");
+      await appendCompanyChanges(ctx, {
+        companyId: seeded.companyDocId,
+        actor: { kind: "member", membershipId: MANAGER_MEMBERSHIP_ID },
+        changes: [
+          {
+            entityKind: "environmentBinding",
+            entityId: binding.id,
+            changeKind: "upsert",
+            versionDocId: bindingDocId,
+            payload: await encodeEnvironmentBinding(ctx, binding),
+          },
+        ],
+      });
+    });
+
+    const visible = await asUser(t, "reader").query(api.sync.listChanges, {
+      companyId: COMPANY_ID,
+      cursor: 0,
+    });
+    expect(visible).toMatchObject({
+      _tag: "Changes",
+      cursor: 1,
+      changes: [
+        {
+          entityKind: "environmentBinding",
+          entityId: BINDING_ID,
+          payload: { cloudProjectId: PROJECT_ID, localWorkspaceRoot: "/workspace/project" },
+        },
+      ],
+    });
+    await expect(
+      asUser(t, "blind").query(api.sync.listChanges, { companyId: COMPANY_ID, cursor: 0 }),
+    ).resolves.toMatchObject({ _tag: "Changes", changes: [], cursor: 1 });
+  });
+
+  it("lets a manager create the company binding with a minted registration id", async () => {
+    const t = harness();
+    await seed(t);
+    await asUser(t, "manager").mutation(api.environments.register, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      publicKeyThumbprint: THUMBPRINT,
+      descriptor: descriptor(),
+      relayLinkState: "linked",
+      managedEndpointAvailable: true,
+    });
+
+    const rows = await feedRows(t);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.entityId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+    );
+    await expect(
+      asEnvironment(t).query(api.sync.latestVersion, { companyId: COMPANY_ID }),
+    ).resolves.toMatchObject({ version: 1, authorizationEpoch: 2 });
+    await t.run(async (ctx) => {
+      const company = await ctx.db
+        .query("companies")
+        .withIndex("by_domain_id", (q) => q.eq("id", COMPANY_ID))
+        .unique();
+      expect(company).toMatchObject({ updatedAt: 1_700_000_000_000, syncVersion: 0 });
+      expect(await readCompanySyncVersion(ctx, company!)).toBe(1);
+    });
+  });
+
+  it("keeps environment registration available to a personal workspace", async () => {
+    const t = harness();
+    await seed(t, "personal");
+
+    await asUser(t, "manager").mutation(api.environments.register, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      publicKeyThumbprint: THUMBPRINT,
+      descriptor: descriptor(),
+      relayLinkState: "linked",
+      managedEndpointAvailable: true,
+    });
+
+    await expect(
+      asUser(t, "manager").query(api.environments.list, { companyId: COMPANY_ID }),
+    ).resolves.toMatchObject([
+      {
+        environmentId: ENVIRONMENT_ID,
+        descriptor: { label: "Registry machine" },
+      },
+    ]);
+  });
+
+  it("does not append a change for last-seen-only heartbeats but does for descriptor updates", async () => {
+    const t = harness();
+    await seedRegistration(t);
+    await publish(t);
+    expect(await feedRows(t)).toHaveLength(1);
+
+    await asEnvironment(t).mutation(api.environments.heartbeat, {
+      companyId: COMPANY_ID,
+      relayLinkState: "linked",
+      managedEndpointAvailable: true,
+    });
+    expect(await feedRows(t)).toHaveLength(1);
+    await t.run(async (ctx) => {
+      const company = await ctx.db
+        .query("companies")
+        .withIndex("by_domain_id", (q) => q.eq("id", COMPANY_ID))
+        .unique();
+      if (company === null) throw new Error("seed the company first");
+      const registration = await ctx.db
+        .query("environmentRegistrations")
+        .withIndex("by_company_and_environment", (q) =>
+          q.eq("companyId", company._id).eq("environmentId", ENVIRONMENT_ID),
+        )
+        .unique();
+      expect(registration).toMatchObject({ lastSeenAt: null, version: 1 });
+      expect(await readEnvironmentPresence(ctx, registration!)).toMatchObject({
+        lastSeenAt: expect.any(Number),
+      });
+    });
+
+    await publish(t, "Registry machine renamed");
+    const rows = await feedRows(t);
+    expect(rows).toHaveLength(2);
+    expect(rows[1]).toMatchObject({
+      entityKind: "environmentRegistration",
+      changeKind: "upsert",
+      payload: { descriptor: { label: "Registry machine renamed" } },
+    });
+
+    await publish(t, "Registry machine renamed", false);
+    const capabilityRows = await feedRows(t);
+    expect(capabilityRows).toHaveLength(3);
+    expect(capabilityRows[2]).toMatchObject({
+      entityKind: "environmentRegistration",
+      changeKind: "upsert",
+      payload: {
+        descriptor: { capabilities: { projectDirectoryInspection: false } },
+      },
+    });
+  });
+
+  it("delivers a delete-shaped change when a manager deactivates a registration", async () => {
+    const t = harness();
+    await seedRegistration(t);
+    await publish(t);
+    await t.run(async (ctx) => {
+      const company = await ctx.db
+        .query("companies")
+        .withIndex("by_domain_id", (q) => q.eq("id", COMPANY_ID))
+        .unique();
+      const integrationId = await ctx.db.insert("slackIntegrations", {
+        id: "0198f900-0000-7000-8000-000000000801",
+        companyId: company!._id,
+        workspaceId: "T-REVOKE",
+        workspaceName: "Revocation test",
+        workspaceDomain: null,
+        botUserId: null,
+        botId: null,
+        state: "active",
+        credentialPresent: true,
+        preferredEnvironmentId: ENVIRONMENT_ID,
+        backupEnvironmentIds: [],
+        configurationRevision: 1,
+        lastPollAt: null,
+        currentError: null,
+        blockedReason: null,
+        healthHistory: [],
+        watchCount: 0,
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_000_000,
+      });
+      await ctx.db.insert("slackCoordinatorLeases", {
+        companyId: company!._id,
+        integrationId,
+        holderEnvironmentId: ENVIRONMENT_ID,
+        generation: 4,
+        expiresAt: 1_900_000_000_000,
+        preferredHealthyHeartbeats: 2,
+        updatedAt: 1_700_000_000_000,
+      });
+    });
+    await asUser(t, "manager").mutation(api.environments.deactivate, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+    });
+
+    const page = await asUser(t, "reader").query(api.sync.listChanges, {
+      companyId: COMPANY_ID,
+      cursor: 1,
+    });
+    expect(page).toMatchObject({ _tag: "Changes", cursor: 2 });
+    if (page._tag !== "Changes") return;
+    expect(page.changes).toEqual([
+      {
+        version: 2,
+        entityKind: "environmentRegistration",
+        entityId: REGISTRATION_ID,
+        changeKind: "tombstone",
+        payload: null,
+      },
+    ]);
+    await expect(
+      asUser(t, "reader").query(api.environments.get, {
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+      }),
+    ).resolves.toBeNull();
+    await t.run(async (ctx) => {
+      const lease = await ctx.db.query("slackCoordinatorLeases").first();
+      expect(lease).toMatchObject({
+        holderEnvironmentId: null,
+        generation: 5,
+        expiresAt: null,
+      });
+    });
+  });
+
+  it("bootstraps active registrations before environment bindings and skips revoked registrations", async () => {
+    const t = harness();
+    const seeded = await seedRegistration(t);
+    await t.run(async (ctx) => {
+      await ctx.db.insert("environmentRegistrations", {
+        id: REVOKED_REGISTRATION_ID,
+        companyId: seeded.companyDocId,
+        environmentId: ENVIRONMENT_TWO,
+        publicKeyThumbprint: "thumbprint-two",
+        descriptor: descriptor(ENVIRONMENT_TWO, "Revoked machine"),
+        relayLinkState: "revoked",
+        managedEndpointAvailable: false,
+        lastSeenAt: null,
+        serviceRoleIds: [],
+        teamIds: [],
+        state: "revoked",
+        registeredByMembershipId: null,
+        createdAt: seeded.now,
+        updatedAt: seeded.now,
+      });
+      const projectDocId = await ctx.db.insert("cloudProjects", {
+        id: PROJECT_ID,
+        companyId: seeded.companyDocId,
+        name: "Registry project",
+        description: "",
+        teamIds: [],
+        defaultWorkflowOwner: null,
+        preferredBindingId: null,
+        archivedAt: null,
+        createdAt: seeded.now,
+        updatedAt: seeded.now,
+        deletedAt: null,
+      });
+      await ctx.db.insert("environmentBindings", {
+        id: BINDING_ID,
+        companyId: seeded.companyDocId,
+        cloudProjectId: projectDocId,
+        environmentId: ENVIRONMENT_ID,
+        localProjectId: "local-project",
+        localWorkspaceRoot: "/workspace/project",
+        status: "active",
+        lastSeenAt: seeded.now,
+        createdAt: seeded.now,
+        updatedAt: seeded.now,
+      });
+    });
+
+    const entities: { entityKind: string; entityId: string; payload: unknown }[] = [];
+    let cursor: string | null = null;
+    for (let pageNumber = 0; pageNumber < 32; pageNumber += 1) {
+      const page: BootstrapPage = await asUser(t, "reader").query(api.sync.bootstrap, {
+        companyId: COMPANY_ID,
+        cursor,
+        pageSize: 2,
+      });
+      entities.push(...page.entities);
+      cursor = page.cursor;
+      if (page.isDone) break;
+    }
+    const registry = entities.filter((entity) => entity.entityKind.startsWith("environment"));
+    expect(registry.map((entity) => [entity.entityKind, entity.entityId])).toEqual([
+      ["environmentRegistration", REGISTRATION_ID],
+      ["environmentBinding", BINDING_ID],
+    ]);
+    expect(registry[1]?.payload).toMatchObject({ cloudProjectId: PROJECT_ID });
+  });
+
+  it("refuses registration publishing when the relay token proof key does not match", async () => {
+    const t = harness();
+    await seedRegistration(t);
+    await expect(
+      asEnvironment(t, "somebody-elses-thumbprint").mutation(api.environments.register, {
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+        descriptor: descriptor(),
+        relayLinkState: "linked",
+        managedEndpointAvailable: true,
+      }),
+    ).rejects.toThrow("not bound to the key");
+    expect(await feedRows(t)).toHaveLength(0);
+  });
+
+  it.each([
+    "questionAttachments",
+    "storageManagement",
+    "durableThreadQueue",
+    "desktopAppUpdate",
+    "userInputDismissal",
+  ] as const)("accepts and republishes %s capability changes", async (capability) => {
+    const t = harness();
+    await seedRegistration(t);
+    const base = descriptor();
+    const args = {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      descriptor: { ...base, capabilities: { ...base.capabilities, [capability]: true } },
+      relayLinkState: "linked" as const,
+      managedEndpointAvailable: true,
+    };
+    await asEnvironment(t).mutation(api.environments.register, args);
+    const firstFeedCount = (await feedRows(t)).length;
+    await asEnvironment(t).mutation(api.environments.register, args);
+    expect(await feedRows(t)).toHaveLength(firstFeedCount);
+    await asEnvironment(t).mutation(api.environments.register, {
+      ...args,
+      descriptor: { ...base, capabilities: { ...base.capabilities, [capability]: false } },
+    });
+    expect(await feedRows(t)).toHaveLength(firstFeedCount + 1);
+    expect((await feedRows(t)).at(-1)).toMatchObject({
+      entityKind: "environmentRegistration",
+      payload: { descriptor: { capabilities: { [capability]: false } } },
+    });
+  });
+
+  it("publishes conversation capability changes to existing environment registrations", async () => {
+    const t = harness();
+    await seedRegistration(t);
+    const base = descriptor();
+    await asEnvironment(t).mutation(api.environments.register, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      descriptor: base,
+      relayLinkState: "linked",
+      managedEndpointAvailable: true,
+    });
+    await asEnvironment(t).mutation(api.environments.register, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      descriptor: { ...base, capabilities: { ...base.capabilities, threadConversations: true } },
+      relayLinkState: "linked",
+      managedEndpointAvailable: true,
+    });
+    expect((await feedRows(t)).at(-1)).toMatchObject({
+      entityKind: "environmentRegistration",
+      payload: { descriptor: { capabilities: { threadConversations: true } } },
+    });
+  });
+
+  it("publishes redacted Agent Thread metadata once for an active project binding", async () => {
+    const t = harness();
+    await seedRegistration(t);
+    await t.run(async (ctx) => {
+      const registration = await ctx.db.query("environmentRegistrations").unique();
+      if (registration === null) throw new Error("missing environment fixture");
+      await ctx.db.patch(registration._id, { serviceRoleIds: [MANAGER_ROLE_ID] });
+    });
+    await asUser(t, "manager").mutation(api.cloudProjects.ensureEnvironmentProject, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: PROJECT_ID,
+      localWorkspaceRoot: "/workspace/pathway",
+      name: "Pathway",
+    });
+    const shell = {
+      id: "thread-one",
+      projectId: PROJECT_ID,
+      title: "Cloud-visible thread",
+      settleAfterCompletion: false,
+      latestVisibleMessage: {
+        id: "message-one",
+        role: "assistant",
+        updatedAt: "2026-08-17T00:00:00.000Z",
+      },
+    };
+
+    await asEnvironment(t).mutation(api.agentThreads.upsert, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      threadId: "thread-one",
+      localProjectId: PROJECT_ID,
+      shell,
+    });
+    const feedCount = (await feedRows(t)).length;
+    await asEnvironment(t).mutation(api.agentThreads.upsert, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      threadId: "thread-one",
+      localProjectId: PROJECT_ID,
+      shell,
+    });
+
+    expect(await feedRows(t)).toHaveLength(feedCount);
+    const thread = await t.run(async (ctx) => await ctx.db.query("agentThreads").unique());
+    expect(thread).toMatchObject({
+      id: `${ENVIRONMENT_ID}:thread-one`,
+      environmentId: ENVIRONMENT_ID,
+      cloudProjectId: expect.anything(),
+      localProjectId: PROJECT_ID,
+      threadId: "thread-one",
+      shell,
+    });
+    expect((await feedRows(t)).at(-1)).toMatchObject({
+      entityKind: "agentThread",
+      entityId: `${ENVIRONMENT_ID}:thread-one`,
+      changeKind: "upsert",
+      payload: { shell },
+    });
+
+    await expect(
+      asEnvironment(t).mutation(api.agentThreads.upsert, {
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+        threadId: "thread-one",
+        localProjectId: PROJECT_ID,
+        shell: {
+          ...shell,
+          latestVisibleMessage: { ...shell.latestVisibleMessage, text: "secret transcript" },
+        },
+      }),
+    ).rejects.toThrow("may not contain message text");
+  });
+
+  it("reports an unbound project as an outcome instead of failing the upsert", async () => {
+    const t = harness();
+    await seedRegistration(t);
+    await t.run(async (ctx) => {
+      const registration = await ctx.db.query("environmentRegistrations").unique();
+      if (registration === null) throw new Error("missing environment fixture");
+      await ctx.db.patch(registration._id, { serviceRoleIds: [MANAGER_ROLE_ID] });
+    });
+    const shell = {
+      id: "thread-one",
+      projectId: "project-never-assigned",
+      title: "Local-only thread",
+      settleAfterCompletion: false,
+      latestVisibleMessage: null,
+    };
+
+    // A checkout that was never assigned to this company has no binding; environments publish
+    // every local thread regardless, so this is a routine answer, not an error to log.
+    await expect(
+      asEnvironment(t).mutation(api.agentThreads.upsert, {
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+        threadId: "thread-one",
+        localProjectId: "project-never-assigned",
+        shell,
+      }),
+    ).resolves.toEqual({ outcome: "unbound" });
+    expect(await t.run(async (ctx) => await ctx.db.query("agentThreads").collect())).toEqual([]);
+    expect(await feedRows(t)).toHaveLength(0);
+
+    await asUser(t, "manager").mutation(api.cloudProjects.ensureEnvironmentProject, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: "project-never-assigned",
+      localWorkspaceRoot: "/workspace/assigned",
+      name: "Assigned later",
+    });
+    await expect(
+      asEnvironment(t).mutation(api.agentThreads.upsert, {
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+        threadId: "thread-one",
+        localProjectId: "project-never-assigned",
+        shell,
+      }),
+    ).resolves.toEqual({ outcome: "published" });
+    await expect(
+      asEnvironment(t).mutation(api.agentThreads.upsert, {
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+        threadId: "thread-one",
+        localProjectId: "project-never-assigned",
+        shell,
+      }),
+    ).resolves.toEqual({ outcome: "unchanged" });
+  });
+
+  it("publishes a projectless conversation only to its selected company and removes its nullable references", async () => {
+    const t = harness();
+    await seedRegistration(t);
+    await t.run(async (ctx) => {
+      const registration = await ctx.db.query("environmentRegistrations").unique();
+      if (registration === null) throw new Error("missing environment fixture");
+      await ctx.db.patch(registration._id, { serviceRoleIds: [MANAGER_ROLE_ID] });
+    });
+    const args = {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      threadId: "conversation",
+      localProjectId: null,
+      shell: {
+        id: "conversation",
+        projectId: null,
+        conversationCompanyId: COMPANY_ID,
+        conversationPath: "/environment/userdata/conversations/one",
+        temporary: true,
+        title: "Conversation",
+      },
+    };
+    await expect(
+      asEnvironment(t).mutation(api.agentThreads.upsert, {
+        ...args,
+        shell: { ...args.shell, conversationCompanyId: COMPANY_TWO_ID },
+      }),
+    ).rejects.toThrow("owning company");
+    await expect(asEnvironment(t).mutation(api.agentThreads.upsert, args)).resolves.toEqual({
+      outcome: "published",
+    });
+    await expect(asEnvironment(t).mutation(api.agentThreads.upsert, args)).resolves.toEqual({
+      outcome: "unchanged",
+    });
+    expect((await feedRows(t)).at(-1)).toMatchObject({
+      entityKind: "agentThread",
+      payload: { cloudProjectId: null, shell: args.shell },
+    });
+    const rows = await t.run(async (ctx) => await ctx.db.query("agentThreads").collect());
+    expect(rows).toMatchObject([{ localProjectId: null, cloudProjectId: null }]);
+    await asEnvironment(t).mutation(api.agentThreads.remove, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      threadId: "conversation",
+    });
+    expect(await t.run(async (ctx) => await ctx.db.query("agentThreads").collect())).toEqual([]);
+    expect((await feedRows(t)).at(-1)).toMatchObject({
+      entityKind: "agentThread",
+      changeKind: "tombstone",
+    });
+  });
+
+  it("moves conversation discovery to its attached project without retaining the old company's visibility", async () => {
+    const t = harness();
+    await seedRegistration(t);
+    await t.run(async (ctx) => {
+      const registration = await ctx.db.query("environmentRegistrations").unique();
+      if (registration === null) throw new Error("missing environment fixture");
+      await ctx.db.patch(registration._id, { serviceRoleIds: [MANAGER_ROLE_ID] });
+    });
+    const args = {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      threadId: "conversation",
+      localProjectId: null,
+      shell: {
+        id: "conversation",
+        projectId: null,
+        conversationCompanyId: COMPANY_ID,
+        conversationPath: "/userdata/conversation",
+        title: "Conversation",
+      },
+    };
+    await asEnvironment(t).mutation(api.agentThreads.upsert, args);
+    await expect(
+      asEnvironment(t).mutation(api.agentThreads.upsert, {
+        ...args,
+        localProjectId: "unbound-project",
+        shell: { ...args.shell, projectId: "unbound-project" },
+      }),
+    ).resolves.toEqual({ outcome: "unbound" });
+    expect(await t.run(async (ctx) => await ctx.db.query("agentThreads").collect())).toEqual([]);
+    expect((await feedRows(t)).at(-1)).toMatchObject({
+      entityKind: "agentThread",
+      changeKind: "tombstone",
+    });
+  });
+
+  it("lets a project manager remove a confirmed-missing Agent Thread shell", async () => {
+    const t = harness();
+    await seedRegistration(t);
+    await t.run(async (ctx) => {
+      const registration = await ctx.db.query("environmentRegistrations").unique();
+      if (registration === null) throw new Error("missing environment fixture");
+      await ctx.db.patch(registration._id, { serviceRoleIds: [MANAGER_ROLE_ID] });
+    });
+    await asUser(t, "manager").mutation(api.cloudProjects.ensureEnvironmentProject, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: PROJECT_ID,
+      localWorkspaceRoot: "/workspace/pathway",
+      name: "Pathway",
+    });
+    await asEnvironment(t).mutation(api.agentThreads.upsert, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      threadId: "thread-missing",
+      localProjectId: PROJECT_ID,
+      shell: { id: "thread-missing", projectId: PROJECT_ID, title: "Missing thread" },
+    });
+
+    await expect(
+      asUser(t, "reader").mutation(api.agentThreads.removeMissing, {
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+        threadId: "thread-missing",
+      }),
+    ).rejects.toThrow("projects.manage");
+
+    await asUser(t, "manager").mutation(api.agentThreads.removeMissing, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      threadId: "thread-missing",
+    });
+
+    expect(await t.run(async (ctx) => await ctx.db.query("agentThreads").collect())).toEqual([]);
+    expect((await feedRows(t)).at(-1)).toMatchObject({
+      entityKind: "agentThread",
+      entityId: `${ENVIRONMENT_ID}:thread-missing`,
+      changeKind: "tombstone",
+    });
+  });
+
+  it("publishes parsed captured mail with source provenance and reconciles retention", async () => {
+    const t = harness();
+    await seedRegistration(t);
+    await t.run(async (ctx) => {
+      const registration = await ctx.db.query("environmentRegistrations").unique();
+      if (registration === null) throw new Error("missing environment fixture");
+      await ctx.db.patch(registration._id, { serviceRoleIds: [MANAGER_ROLE_ID] });
+    });
+    await asUser(t, "manager").mutation(api.cloudProjects.ensureEnvironmentProject, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: PROJECT_ID,
+      localWorkspaceRoot: "/workspace/pathway",
+      name: "Pathway",
+    });
+    const message = {
+      id: "email-one",
+      attribution: {
+        projectId: PROJECT_ID,
+        mailSlug: "pathway",
+        matchedBy: "auth-username",
+        matchedValue: "pathway",
+      },
+      envelope: {
+        mailFrom: "sender@example.test",
+        rcptTo: ["pathway@example.test"],
+        authUsername: "pathway",
+        helo: "localhost",
+        remoteAddress: "127.0.0.1",
+      },
+      parsedHeaders: {
+        subject: "Build finished",
+        messageId: "<email-one@example.test>",
+        date: "2026-08-17T00:00:00.000Z",
+        from: [{ address: "sender@example.test", name: "Sender" }],
+        to: [{ address: "pathway@example.test", name: null }],
+        cc: [],
+        bcc: [],
+        replyTo: [],
+        headers: [{ name: "Subject", value: "Build finished" }],
+      },
+      textBody: "The build finished.",
+      htmlBody: "<p>The build finished.</p>",
+      attachments: [],
+      smtpTransactionLog: [],
+      timings: {
+        connectedAt: "2026-08-17T00:00:00.000Z",
+        messageReceivedAt: "2026-08-17T00:00:00.100Z",
+        parsedAt: "2026-08-17T00:00:00.200Z",
+        storedAt: "2026-08-17T00:00:00.300Z",
+        parseDurationMs: 100,
+        totalDurationMs: 300,
+      },
+      sizeBytes: 128,
+      isRead: false,
+      detectedCode: null,
+      deliverability: {
+        version: 1,
+        checks: [],
+        metrics: {
+          subjectLength: 14,
+          imageCount: 0,
+          visibleTextCharacters: 19,
+          imageToTextRatio: 0,
+          trackingPixelCount: 0,
+        },
+        htmlCompatibilityWarnings: [],
+      },
+    };
+
+    await asEnvironment(t).mutation(api.capturedEmails.upsert, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      messageId: message.id,
+      localProjectId: PROJECT_ID,
+      message,
+    });
+
+    expect(await t.run(async (ctx) => await ctx.db.query("capturedEmails").unique())).toMatchObject(
+      {
+        id: `${ENVIRONMENT_ID}:${message.id}`,
+        environmentId: ENVIRONMENT_ID,
+        localProjectId: PROJECT_ID,
+        messageId: message.id,
+        message,
+      },
+    );
+    expect((await feedRows(t)).at(-1)).toMatchObject({
+      entityKind: "capturedEmail",
+      entityId: `${ENVIRONMENT_ID}:${message.id}`,
+      changeKind: "upsert",
+      payload: { environmentId: ENVIRONMENT_ID, message },
+    });
+
+    const tagId = "0198f900-0000-7000-8000-000000000601";
+    await asUser(t, "manager").mutation(api.emailTags.create, {
+      companyId: COMPANY_ID,
+      id: tagId,
+      name: "Authentication",
+      color: "#3b82f6",
+    });
+    await asUser(t, "manager").mutation(api.capturedEmails.setTag, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      messageId: message.id,
+      tagId,
+      present: true,
+    });
+    expect(await t.run(async (ctx) => await ctx.db.query("capturedEmails").unique())).toMatchObject(
+      {
+        tagIds: [tagId],
+      },
+    );
+    expect((await feedRows(t)).at(-1)).toMatchObject({
+      entityKind: "capturedEmail",
+      payload: { tagIds: [tagId] },
+    });
+
+    await asUser(t, "manager").mutation(api.capturedEmails.remove, {
+      companyId: COMPANY_ID,
+      messages: [{ environmentId: ENVIRONMENT_ID, messageId: message.id }],
+    });
+    expect(await t.run(async (ctx) => await ctx.db.query("capturedEmails").unique())).toBeNull();
+    expect(
+      await t.run(async (ctx) => await ctx.db.query("capturedEmailDeletions").unique()),
+    ).toMatchObject({ id: `${ENVIRONMENT_ID}:${message.id}` });
+    expect(
+      await asEnvironment(t).mutation(api.capturedEmails.upsert, {
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+        messageId: message.id,
+        localProjectId: PROJECT_ID,
+        message,
+      }),
+    ).toBe(false);
+
+    await asEnvironment(t).mutation(api.capturedEmails.reconcile, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      currentMessageIds: [],
+    });
+    expect(await t.run(async (ctx) => await ctx.db.query("capturedEmails").unique())).toBeNull();
+    expect((await feedRows(t)).at(-1)).toMatchObject({
+      entityKind: "capturedEmail",
+      entityId: `${ENVIRONMENT_ID}:${message.id}`,
+      changeKind: "tombstone",
+      payload: null,
+    });
+  });
+
+  it("replicates exact trusted email senders and removes them everywhere", async () => {
+    const t = harness();
+    await seed(t);
+
+    await asUser(t, "manager").mutation(api.trustedEmailSenders.trust, {
+      companyId: COMPANY_ID,
+      id: TRUSTED_SENDER_ID,
+      address: "  Alerts@Example.TEST ",
+    });
+    expect(
+      await t.run(async (ctx) => await ctx.db.query("trustedEmailSenders").unique()),
+    ).toMatchObject({ id: TRUSTED_SENDER_ID, address: "alerts@example.test" });
+    expect((await feedRows(t)).at(-1)).toMatchObject({
+      entityKind: "trustedEmailSender",
+      entityId: TRUSTED_SENDER_ID,
+      changeKind: "upsert",
+      payload: { id: TRUSTED_SENDER_ID, address: "alerts@example.test" },
+    });
+
+    // Trusting the same normalized address from another environment is idempotent.
+    await asUser(t, "manager").mutation(api.trustedEmailSenders.trust, {
+      companyId: COMPANY_ID,
+      id: "0198f900-0000-7000-8000-000000000702",
+      address: "alerts@example.test",
+    });
+    expect(
+      await t.run(async (ctx) => await ctx.db.query("trustedEmailSenders").collect()),
+    ).toHaveLength(1);
+
+    await asUser(t, "manager").mutation(api.trustedEmailSenders.remove, {
+      companyId: COMPANY_ID,
+      trustedSenderId: TRUSTED_SENDER_ID,
+    });
+    expect(
+      await t.run(async (ctx) => await ctx.db.query("trustedEmailSenders").unique()),
+    ).toBeNull();
+    expect((await feedRows(t)).at(-1)).toMatchObject({
+      entityKind: "trustedEmailSender",
+      entityId: TRUSTED_SENDER_ID,
+      changeKind: "tombstone",
+      payload: null,
+    });
+  });
+});
+
+describe("publisher reconciliation read budget", () => {
+  it.each(["threads", "emails"] as const)(
+    "skips unchanged %s inventories, repairs missed removals, and rechecks permission",
+    async (kind) => {
+      const t = harness();
+      const { companyDocId } = await seedRegistration(t);
+      const inventory = Array.from({ length: 300 }, (_, i) => `item-${i}`);
+      await t.run(async (ctx) => {
+        const registration = (await ctx.db.query("environmentRegistrations").unique())!;
+        await ctx.db.patch(registration._id, { serviceRoleIds: [MANAGER_ROLE_ID] });
+        for (const id of inventory) {
+          const shared = {
+            id: `${ENVIRONMENT_ID}:${id}`,
+            companyId: companyDocId,
+            environmentId: ENVIRONMENT_ID,
+            localProjectId: null,
+            cloudProjectId: null,
+            updatedAt: Date.now(),
+          };
+          if (kind === "threads")
+            await ctx.db.insert("agentThreads", {
+              ...shared,
+              threadId: id,
+              shell: { title: "x".repeat(1000) },
+            });
+          else
+            await ctx.db.insert("capturedEmails", {
+              ...shared,
+              messageId: id,
+              message: { textBody: "x".repeat(1000) },
+            });
+        }
+      });
+      const call = (ids: string[]) =>
+        asEnvironment(t).run(async (ctx) => {
+          const meter = measureDatabaseReads(ctx.db);
+          if (kind === "threads")
+            await functionHandler(reconcileThreads)(
+              { ...ctx, db: meter.db },
+              { companyId: COMPANY_ID, environmentId: ENVIRONMENT_ID, currentThreadIds: ids },
+            );
+          else
+            await functionHandler(reconcileEmails)(
+              { ...ctx, db: meter.db },
+              { companyId: COMPANY_ID, environmentId: ENVIRONMENT_ID, currentMessageIds: ids },
+            );
+          return {
+            scanned:
+              meter.documents.get(kind === "threads" ? "agentThreads" : "capturedEmails") ?? 0,
+            bytes: meter.bytes(),
+          };
+        });
+      const initial = await call(inventory);
+      expect(initial.scanned).toBe(300);
+      const idle = await call(inventory.toReversed().concat(inventory[0]!));
+      expect(idle.scanned).toBe(0);
+      expect(idle.bytes).toBeLessThan(initial.bytes / 20);
+      // A changed inventory must repair immediately rather than wait for the idle cooldown.
+      expect((await call(inventory.slice(1))).scanned).toBe(300);
+      const table = kind === "threads" ? "agentThreads" : "capturedEmails";
+      expect(await t.run(async (ctx) => (await ctx.db.query(table).collect()).length)).toBe(299);
+      await t.run(async (ctx) => {
+        const registration = (await ctx.db.query("environmentRegistrations").unique())!;
+        const key =
+          kind === "threads" ? "agentThreadReconciliation" : "capturedEmailReconciliation";
+        const checkpoint = (await readEnvironmentRuntime(ctx, registration))[key]!;
+        await patchEnvironmentRuntime(ctx, registration, {
+          [key]: { ...checkpoint, completedAt: Date.now() - PUBLISHER_RECONCILIATION_INTERVAL_MS },
+        });
+      });
+      expect((await call(inventory.slice(1))).scanned).toBe(299);
+      await t.run(async (ctx) => {
+        const registration = (await ctx.db.query("environmentRegistrations").unique())!;
+        await ctx.db.patch(registration._id, { serviceRoleIds: [] });
+      });
+      await expect(call(inventory.slice(1))).rejects.toThrow("projects.manage");
+    },
+  );
+
+  it("drains more than one removal batch before starting the idle cooldown", async () => {
+    const t = harness();
+    const { companyDocId } = await seedRegistration(t);
+    await t.run(async (ctx) => {
+      const registration = (await ctx.db.query("environmentRegistrations").unique())!;
+      await ctx.db.patch(registration._id, { serviceRoleIds: [MANAGER_ROLE_ID] });
+      for (let i = 0; i < 201; i++)
+        await ctx.db.insert("agentThreads", {
+          id: `${ENVIRONMENT_ID}:stale-${i}`,
+          companyId: companyDocId,
+          environmentId: ENVIRONMENT_ID,
+          threadId: `stale-${i}`,
+          localProjectId: null,
+          cloudProjectId: null,
+          shell: {},
+          updatedAt: Date.now(),
+        });
+    });
+    for (const remaining of [101, 1, 0]) {
+      await asEnvironment(t).mutation(api.agentThreads.reconcile, {
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+        currentThreadIds: [],
+      });
+      expect(
+        await t.run(async (ctx) => (await ctx.db.query("agentThreads").collect()).length),
+      ).toBe(remaining);
+    }
+  });
+});
+
+it("keeps heartbeats off the authorization row while discovery stays fresh", async () => {
+  const t = harness();
+  await seedRegistration(t);
+  const beat = () =>
+    asEnvironment(t).mutation(api.environments.heartbeat, {
+      companyId: COMPANY_ID,
+      relayLinkState: "linked",
+      managedEndpointAvailable: true,
+    });
+  await beat();
+  const before = await t.run((ctx) => ctx.db.query("environmentRegistrations").first());
+  await t.run(async (ctx) => {
+    const presence = (await ctx.db.query("environmentPresence").first())!;
+    await ctx.db.patch(presence._id, { lastSeenAt: 1 });
+  });
+  const presenceWrites = await asEnvironment(t).run(async (ctx) => {
+    const writes = vi.spyOn(ctx.db, "patch");
+    try {
+      await functionHandler(registryHeartbeat)(ctx, {
+        companyId: COMPANY_ID,
+        relayLinkState: "linked",
+        managedEndpointAvailable: true,
+      });
+      expect(writes.mock.calls.some(([id]) => id === before!._id)).toBe(false);
+      return writes.mock.calls.length;
+    } finally {
+      writes.mockRestore();
+    }
+  });
+  expect(presenceWrites).toBe(1);
+  expect(await t.run((ctx) => ctx.db.query("environmentRegistrations").first())).toEqual(before);
+  expect(
+    await asUser(t, "manager").query(api.environments.get, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+    }),
+  ).toMatchObject({ lastSeenAt: expect.any(Number) });
+  expect(
+    await t.run(async (ctx) => (await ctx.db.query("environmentPresence").first())!.lastSeenAt),
+  ).toBeGreaterThan(1);
+  expect(await feedRows(t)).toEqual([]);
+  await asUser(t, "manager").mutation(api.environments.deactivate, {
+    companyId: COMPANY_ID,
+    environmentId: ENVIRONMENT_ID,
+  });
+  await expect(beat()).rejects.toThrow();
+});

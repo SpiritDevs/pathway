@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { cuaActionDiagnosticMessage, parseCuaActionDiagnostics } from "./cuaActionDiagnostics";
+import { describe, expect, it } from "@effect/vitest";
+import { cuaActionDiagnosticMessage, parseCuaActionDiagnostics } from "./cuaActionDiagnostics.ts";
 
 describe("persisted native action diagnostics", () => {
   it("keeps finite measured scroll evidence without trusting prose", () => {

@@ -1,4 +1,33 @@
-import type { OrchestrationMessage } from "@synara/contracts";
+/**
+ * Whether the user asked, in their own words, to see the desktop during the
+ * current computer task. Pure functions over the thread's messages.
+ *
+ * @module computer/computerVisibleUse
+ */
+
+/**
+ * The parts of a thread message this module reads. Pathway's
+ * `OrchestrationMessage` satisfies it; the provenance fields it does not carry
+ * yet are optional, and a missing `source` reads as `native`, the value a
+ * persisted message without one decodes to.
+ */
+export interface ComputerVisibleUseMessage {
+  readonly id: string;
+  readonly role: "user" | "assistant" | "system";
+  readonly text: string;
+  readonly streaming: boolean;
+  readonly source?: "native" | "async-user-input" | "handoff-import" | "fork-import";
+  /** Who dispatched a user-role message; only `user` (or absent) is a person. */
+  readonly dispatchOrigin?: "user" | "automation" | "agent";
+  readonly attachments?: readonly unknown[];
+  readonly skills?: readonly unknown[];
+  readonly mentions?: readonly unknown[];
+  /** A structured question card on an assistant message, and the reply that answered it. */
+  readonly asyncUserInput?: {
+    readonly questions: readonly { readonly title: string; readonly options?: readonly string[] }[];
+    readonly response?: { readonly messageId: string; readonly answers: readonly string[] };
+  };
+}
 
 /**
  * Whether one computer task may move a window in front of the user.
@@ -7,8 +36,9 @@ import type { OrchestrationMessage } from "@synara/contracts";
  * task that said "use Helium" was never asked to *show* Helium, yet the run
  * raised it, then ran twenty-one foreground excursions through it while the
  * user was typing. Raising is therefore opt-in per task, and the opt-in is the
- * user's own request or direct confirmation — not the model's judgment, not
- * the approval mode, not `full-access`.
+ * user's own request or direct confirmation — not the model's judgment. Only
+ * `full-access` autonomy skips the request (ADR 0043); the caller decides that
+ * before asking here, and the user-interaction guards still apply.
  *
  * The answer is reconstructed from durable human messages in this task.
  * Explicit consent survives a chain of routine continuations; a new task,
@@ -129,25 +159,27 @@ function asksVisibleUsePermission(text: string, context: ComputerForegroundConte
   return action !== undefined && messageRequestsVisibleUse(action, context);
 }
 
-function isLocalHumanMessage(message: OrchestrationMessage): boolean {
+function isLocalHumanMessage(message: ComputerVisibleUseMessage): boolean {
   return (
     message.role === "user" &&
     message.dispatchOrigin !== "automation" &&
     message.dispatchOrigin !== "agent" &&
-    (message.source === "native" || message.source === "async-user-input")
+    ((message.source ?? "native") === "native" || message.source === "async-user-input")
   );
 }
 
 function isLocalAssistantMessage(
-  message: OrchestrationMessage | undefined,
-): message is OrchestrationMessage {
-  return message?.role === "assistant" && message.source === "native" && !message.streaming;
+  message: ComputerVisibleUseMessage | undefined,
+): message is ComputerVisibleUseMessage {
+  return (
+    message?.role === "assistant" && (message.source ?? "native") === "native" && !message.streaming
+  );
 }
 
 /** A short affirmative answers one direct visibility question, never quoted page text. */
 function confirmsVisibleUse(
-  reply: OrchestrationMessage,
-  preceding: OrchestrationMessage | undefined,
+  reply: ComputerVisibleUseMessage,
+  preceding: ComputerVisibleUseMessage | undefined,
   context: ComputerForegroundContext,
 ): boolean {
   return (
@@ -159,7 +191,7 @@ function confirmsVisibleUse(
 
 /** The persisted answer names its exact response message; generated question text is not consent. */
 function confirmsStructuredVisibleUse(
-  messages: readonly OrchestrationMessage[],
+  messages: readonly ComputerVisibleUseMessage[],
   replyIndex: number,
   context: ComputerForegroundContext,
 ): boolean {
@@ -182,7 +214,7 @@ function confirmsStructuredVisibleUse(
 }
 
 /** Only a whole, scope-preserving reply may carry earlier consent into this turn. */
-function isRoutineContinuation(message: OrchestrationMessage): boolean {
+function isRoutineContinuation(message: ComputerVisibleUseMessage): boolean {
   if (message.attachments?.length || message.skills?.length || message.mentions?.length)
     return false;
   return /^(?:(?:ok(?:ay)?|yes|s[iì])[, ]+)?(?:please[, ]+)?(?:continue(?: (?:working|with (?:the |this |our )?(?:same |current )?(?:task|work|plan)))?|keep (?:going|working)|carry on|go (?:on|ahead)|proceed(?: with (?:the |this |our )?(?:same |current )?(?:task|work|plan))?|(?:try|retry)(?: (?:again|that|it|the same step))?|continua(?: pure)?|prosegui|procedi|vai|riprova)(?:[, ]+(?:please|per favore))?[.!]*$/iu.test(
@@ -196,8 +228,8 @@ function isRoutineContinuation(message: OrchestrationMessage): boolean {
  * skipped: only a person's own words can authorize visible use.
  */
 export function latestUserAuthoredMessage(
-  messages: readonly OrchestrationMessage[],
-): OrchestrationMessage | undefined {
+  messages: readonly ComputerVisibleUseMessage[],
+): ComputerVisibleUseMessage | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]!;
     if (message.role !== "user") continue;
@@ -214,7 +246,7 @@ export function latestUserAuthoredMessage(
  * "continue" cannot recover consent from an unrelated historical task.
  */
 export function computerForegroundAuthorizationForMessages(
-  messages: readonly OrchestrationMessage[],
+  messages: readonly ComputerVisibleUseMessage[],
   context: ComputerForegroundContext = {},
 ): ComputerForegroundAuthorization {
   for (let index = messages.length - 1; index >= 0; index -= 1) {

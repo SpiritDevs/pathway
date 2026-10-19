@@ -3,6 +3,8 @@
 // Layer: Chat surface UI
 // Depends on: computerPreviewStore session machine, computerStateStore thread
 //             state, useComputerImageStream, ComputerPanel.logic helpers.
+// Exports: ComputerPreviewPopover, and ComputerPreviewRail, the chat column
+//          overlay that hosts it.
 //
 // View-only: the card follows the driven content, with a compact activity
 // label and a visible error if its first frame cannot arrive. Close
@@ -12,23 +14,31 @@
 // dynamic: the card fits the space its slot offers while keeping the live
 // content's aspect, never a fixed box.
 
-import type { ThreadId } from "@synara/contracts";
+import { scopedThreadKey } from "@spiritdevs/client-runtime/environment";
+import type { ClientSettings, ScopedThreadRef } from "@spiritdevs/contracts";
+import { Maximize2Icon, Minimize2Icon, XIcon } from "lucide-react";
 import { type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
-import { useAppSettings } from "../../appSettings";
 import {
   selectThreadComputerPreviewFloating,
   selectThreadComputerPreviewSession,
   useComputerPreviewStore,
 } from "../../computerPreviewStore";
-import { selectThreadComputerState, useComputerStateStore } from "../../computerStateStore";
-import { useComputerDesktopControl } from "../../hooks/useComputerDesktopControl";
+import {
+  selectThreadComputerState,
+  useComputerInputStopped,
+  useComputerStateStore,
+} from "../../computerStateStore";
+import { useComputerSupport } from "../../hooks/useComputerSupport";
+import { useClientSettings } from "../../hooks/useSettings";
 import { useThreadComputerStateSeed } from "../../hooks/useThreadComputerStateSeed";
-import { disclosurePopClassName } from "../../lib/disclosureMotion";
-import { PanelCollapseIcon, PanelExpandIcon, XIcon } from "../../lib/icons";
 import { cn } from "../../lib/utils";
-import { computerCanvasLabel, shouldSubscribeToComputerStream } from "../ComputerPanel.logic";
+import { usePrimaryEnvironmentId } from "../../state/environments";
+import {
+  computerCanvasLabel,
+  shouldSubscribeToComputerStream,
+} from "../computer/ComputerPanel.logic";
 import { useComputerImageStream } from "../computer/useComputerImageStream";
 import {
   type ComputerPreviewFloat,
@@ -36,6 +46,7 @@ import {
 } from "../computer/useComputerPreviewFloat";
 import { useComputerPreviewTap } from "../computer/useComputerPreviewTap";
 import {
+  computerPreviewBudgetPx,
   computerPreviewCardCaps,
   computerPreviewCardFitWidth,
   computerPreviewCardOpen,
@@ -51,8 +62,61 @@ const FALLBACK_ASPECT_RATIO = "16 / 10";
 const SLOT_FALLBACK_WIDTH_PX = 320;
 const SLOT_FALLBACK_HEIGHT_PX = 616;
 
+// The card's open/close pop: a one-shot transition, never a loop.
+const POP_MOTION_CLASS =
+  "origin-top-right transition-[opacity,transform] duration-280 ease-out motion-reduce:transition-none";
+const POP_OPEN_CLASS = "translate-y-0 scale-100 opacity-100";
+const POP_CLOSED_CLASS = "translate-y-1.5 scale-[0.97] opacity-0 pointer-events-none duration-160";
+
+function disclosurePopClassName(open: boolean) {
+  return cn(POP_MOTION_CLASS, open ? POP_OPEN_CLASS : POP_CLOSED_CLASS);
+}
+
+const selectAutoOpenComputerPane = (settings: ClientSettings) => settings.autoOpenComputerPane;
+const selectComputerPreviewSize = (settings: ClientSettings): ComputerPreviewCardSize =>
+  settings.computerPreviewSize === "large" ? "large" : "compact";
+
+/**
+ * The ambient rail: a top-right overlay in the chat column that hosts the
+ * owning thread's card. It renders nothing (and observes nothing) until the
+ * thread has a preview session. The chat keeps its full width; the card
+ * floats over the transcript's right edge, sized from the column's width.
+ */
+export function ComputerPreviewRail(props: { readonly threadRef: ScopedThreadRef }) {
+  // The rail mounts for the open thread whether or not a preview shows, so it
+  // seeds that thread's state: the preview arms from it and a send pins its
+  // Computer intent to the generation it carries.
+  const supported = useComputerSupport(props.threadRef.environmentId);
+  useThreadComputerStateSeed(supported ? props.threadRef : null);
+  const session = useComputerPreviewStore(selectThreadComputerPreviewSession(props.threadRef));
+  const autoOpenComputerPane = useClientSettings(selectAutoOpenComputerPane);
+  if (!autoOpenComputerPane || session === undefined) {
+    return null;
+  }
+  return <ComputerPreviewRailSlot key={scopedThreadKey(props.threadRef)} {...props} />;
+}
+
+function ComputerPreviewRailSlot(props: { readonly threadRef: ScopedThreadRef }) {
+  const railRef = useRef<HTMLDivElement | null>(null);
+  const size = useClientSettings(selectComputerPreviewSize);
+  const column = useObservedSize(railRef, { parent: true });
+  const budgetPx = computerPreviewBudgetPx({
+    mainContentWidthPx: column.width > 0 ? column.width : Number.MAX_SAFE_INTEGER,
+    environmentInsetPx: 0,
+    caps: computerPreviewCardCaps(size),
+  });
+  return (
+    <div
+      ref={railRef}
+      className="pointer-events-none absolute inset-y-0 right-0 z-20 flex flex-col items-end gap-3 overflow-y-auto p-3"
+    >
+      <ComputerPreviewPopover threadRef={props.threadRef} maxWidthPx={budgetPx} size={size} />
+    </div>
+  );
+}
+
 export function ComputerPreviewPopover(props: {
-  readonly threadId: ThreadId;
+  readonly threadRef: ScopedThreadRef;
   /**
    * Rail budget: the widest the card may grow, set by the host ChatView from
    * the gutter it freed via content inset. Defaults to the size cap;
@@ -65,16 +129,16 @@ export function ComputerPreviewPopover(props: {
    */
   readonly size?: ComputerPreviewCardSize | undefined;
 }) {
-  const session = useComputerPreviewStore(selectThreadComputerPreviewSession(props.threadId));
+  const session = useComputerPreviewStore(selectThreadComputerPreviewSession(props.threadRef));
   // The "Open automatically" preference now governs the ambient preview, which
   // is what replaced the pane's auto-open. Manual opens are unaffected.
-  const { settings } = useAppSettings();
-  if (!settings.autoOpenComputerPane || session === undefined) {
+  const autoOpenComputerPane = useClientSettings(selectAutoOpenComputerPane);
+  if (!autoOpenComputerPane || session === undefined) {
     return null;
   }
   return (
     <ComputerPreviewPopoverCard
-      threadId={props.threadId}
+      threadRef={props.threadRef}
       session={session}
       maxWidthPx={props.maxWidthPx}
       size={props.size ?? "compact"}
@@ -83,25 +147,31 @@ export function ComputerPreviewPopover(props: {
 }
 
 function ComputerPreviewPopoverCard(props: {
-  readonly threadId: ThreadId;
+  readonly threadRef: ScopedThreadRef;
   readonly session: ComputerPreviewSession;
   readonly maxWidthPx?: number | undefined;
   readonly size?: ComputerPreviewCardSize | undefined;
 }) {
-  const { threadId, session } = props;
+  const { threadRef, session } = props;
+  const { environmentId, threadId } = threadRef;
+  const threadKey = scopedThreadKey(threadRef);
   const caps = computerPreviewCardCaps(props.size ?? "compact");
   const cardMaxWidth = Math.min(props.maxWidthPx ?? caps.maxWidthPx, caps.maxWidthPx);
   const open = computerPreviewCardOpen(session.phase);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
-  const threadState = useComputerStateStore(selectThreadComputerState(threadId));
+  const threadState = useComputerStateStore(selectThreadComputerState(threadRef));
   const markPreviewLive = useComputerPreviewStore((store) => store.markPreviewLive);
   const notePreviewLayout = useComputerPreviewStore((store) => store.notePreviewLayout);
-  const floating = useComputerPreviewStore(selectThreadComputerPreviewFloating(threadId));
-  const desktopControl = useComputerDesktopControl(threadId);
-  const inputStopped = useComputerStateStore((store) => store.inputStopped);
+  const floating = useComputerPreviewStore(selectThreadComputerPreviewFloating(threadRef));
+  // Ownership lasts for the turn, including model thinking between tool calls.
+  const agentActive =
+    threadState?.controlOwnerThreadId !== undefined || (threadState?.agentActive ?? false);
+  const visibleDesktop = threadState?.capabilities.visibleDesktop ?? false;
+  const inputStopped = useComputerInputStopped(threadRef.environmentId);
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const statusLabel = computerPreviewStatusLabel({
-    agentActive: desktopControl.agentActive,
+    agentActive,
     inputStopped: inputStopped || threadState?.inputStopped === true,
     currentActivity: threadState?.activity ?? null,
     lastActionLabel: session.lastActionLabel ?? null,
@@ -114,15 +184,13 @@ function ComputerPreviewPopoverCard(props: {
   // the shrink-fit wrapper cannot measure what the freed gutter will be.
   const slotSize = useObservedSize(cardRef, { offsetParent: true });
 
-  useThreadComputerStateSeed(threadId);
-
   // Mounting means the owning thread is on screen: an armed session goes live
   // here, which is also what animates the card in from its closed state.
   useEffect(() => {
     if (session.phase === "armed") {
-      markPreviewLive(threadId);
+      markPreviewLive({ environmentId, threadId });
     }
-  }, [markPreviewLive, session.phase, threadId]);
+  }, [environmentId, markPreviewLive, session.phase, threadId]);
 
   const streamWanted = shouldSubscribeToComputerStream({
     runtimeMode: "live",
@@ -132,8 +200,13 @@ function ComputerPreviewPopoverCard(props: {
   // The desktop app's native tap is the preferred source while it keeps
   // delivering frames; the server's window/tab stills own the canvas only
   // while the tap is quiet or absent, so the two never draw at the same time
-  // and neither can paint a desktop-wide image.
-  const tap = useComputerPreviewTap({ canvasRef, threadId, enabled: streamWanted });
+  // and neither can paint a desktop-wide image. The tap shows the desktop
+  // app's own host, so only the primary (local) environment may use it.
+  const tap = useComputerPreviewTap({
+    canvasRef,
+    threadRef,
+    enabled: streamWanted && threadRef.environmentId === primaryEnvironmentId,
+  });
   const frameSource = computerPreviewFrameSource({
     streamWanted,
     tapActive: tap.active,
@@ -141,6 +214,7 @@ function ComputerPreviewPopoverCard(props: {
   });
   const { status: streamStatus, dimensions } = useComputerImageStream({
     canvasRef,
+    environmentId: threadRef.environmentId,
     computerId: streamWanted && threadState ? threadState.computerId : null,
     enabled: frameSource === "stills",
   });
@@ -201,7 +275,7 @@ function ComputerPreviewPopoverCard(props: {
   // back on screen every render so a shrinking window can never strand the
   // card), the viewport drag, and the pop-out handoff.
   const float = useComputerPreviewFloat({
-    threadId,
+    threadRef,
     cardRef,
     cardWidthPx: fitWidth,
     cardHeightPx: frameDims ? fitWidth / frameAspect : fitWidth * 0.625,
@@ -211,13 +285,11 @@ function ComputerPreviewPopoverCard(props: {
   // frame sources always have a decode target; visibility alone is gated on
   // content, and hidden/ended keep rendering closed for the exit animation.
   useEffect(() => {
-    notePreviewLayout(threadId, {
-      hasFrame,
-      hasVisibleStatus,
-      width: fitWidth,
-      floating: floating !== undefined,
-    });
-  }, [notePreviewLayout, threadId, hasFrame, hasVisibleStatus, fitWidth, floating]);
+    notePreviewLayout(
+      { environmentId, threadId },
+      { hasFrame, hasVisibleStatus, width: fitWidth, floating: floating !== undefined },
+    );
+  }, [notePreviewLayout, environmentId, threadId, hasFrame, hasVisibleStatus, fitWidth, floating]);
   const card = (
     <div
       ref={cardRef}
@@ -225,7 +297,7 @@ function ComputerPreviewPopoverCard(props: {
       aria-label="Computer preview"
       aria-hidden={visuallyOpen ? undefined : true}
       inert={!visuallyOpen}
-      data-computer-preview-popover={threadId}
+      data-computer-preview-popover={threadKey}
       className={cn(
         "group pointer-events-auto flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-popover/95 text-foreground shadow-[0_16px_56px_-16px_rgb(0_0_0/0.5),0_2px_12px_-2px_rgb(0_0_0/0.3)] backdrop-blur-xl",
         floating !== undefined && "fixed z-50",
@@ -238,7 +310,7 @@ function ComputerPreviewPopoverCard(props: {
       }
     >
       <ComputerPreviewViewport
-        threadId={threadId}
+        threadRef={threadRef}
         floating={floating !== undefined}
         frameDims={frameDims}
         hasFrame={hasFrame}
@@ -250,7 +322,7 @@ function ComputerPreviewPopoverCard(props: {
           ref={canvasRef}
           aria-label={computerCanvasLabel({
             availability: threadState?.availability,
-            visibleDesktop: desktopControl.visibleDesktop,
+            visibleDesktop,
           })}
           tabIndex={-1}
           className="absolute inset-0 h-full w-full object-contain"
@@ -271,15 +343,22 @@ function ComputerPreviewPopoverCard(props: {
  * Element size that re-reads on every resize, starting at 0 until the first
  * observation. `offsetParent` measures the element's positioned ancestor
  * instead — the preview's slot is the ancestor, not the element itself.
+ * `parent` measures the direct parent: the rail sizes from the chat column.
  */
 function useObservedSize(
   ref: RefObject<HTMLElement | null>,
-  options?: { readonly offsetParent?: boolean },
+  options?: { readonly offsetParent?: boolean; readonly parent?: boolean },
 ) {
   const [size, setSize] = useState({ width: 0, height: 0 });
-  const measureParent = options?.offsetParent === true;
+  const measure =
+    options?.offsetParent === true ? "offsetParent" : options?.parent === true ? "parent" : "self";
   useEffect(() => {
-    const element = measureParent ? (ref.current?.offsetParent as HTMLElement | null) : ref.current;
+    const element =
+      measure === "offsetParent"
+        ? (ref.current?.offsetParent as HTMLElement | null)
+        : measure === "parent"
+          ? (ref.current?.parentElement ?? null)
+          : ref.current;
     if (!element) return;
     const update = () => {
       setSize((previous) => {
@@ -294,13 +373,13 @@ function useObservedSize(
     const observer = new ResizeObserver(update);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [ref, measureParent]);
+  }, [ref, measure]);
   return size;
 }
 
 function ComputerPreviewViewport(props: {
   readonly children: ReactNode;
-  readonly threadId: ThreadId;
+  readonly threadRef: ScopedThreadRef;
   readonly floating: boolean;
   readonly frameDims: { readonly width: number; readonly height: number } | undefined;
   readonly hasFrame: boolean;
@@ -308,7 +387,7 @@ function ComputerPreviewViewport(props: {
   readonly statusLabel: string | null;
   readonly float: ComputerPreviewFloat;
 }) {
-  const { children, threadId, floating, frameDims, hasFrame, streamStatus, statusLabel, float } =
+  const { children, threadRef, floating, frameDims, hasFrame, streamStatus, statusLabel, float } =
     props;
   return (
     <div
@@ -352,7 +431,7 @@ function ComputerPreviewViewport(props: {
         </div>
       ) : null}
       {statusLabel ? (
-        <div className="pointer-events-none absolute bottom-2 left-2 flex max-w-[calc(100%_-_1rem)] items-center gap-1.5 rounded-full border border-white/15 bg-black/55 px-2.5 py-1 text-ui-xs font-medium text-white shadow-sm backdrop-blur-md">
+        <div className="pointer-events-none absolute bottom-2 left-2 flex max-w-[calc(100%_-_1rem)] items-center gap-1.5 rounded-full border border-white/15 bg-black/55 px-2.5 py-1 text-xs font-medium text-white shadow-sm backdrop-blur-md">
           <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-muted-foreground" />
           <span className="truncate">{statusLabel}</span>
         </div>
@@ -368,7 +447,7 @@ function ComputerPreviewViewport(props: {
                 aria-label="Dock the computer preview back into the chat rail"
                 className="grid size-7 place-items-center rounded-full text-white drop-shadow-[0_1px_2px_rgb(0_0_0/0.6)] transition-colors duration-150 hover:bg-white/20 focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:outline-none"
               >
-                <PanelCollapseIcon className="size-4" />
+                <Minimize2Icon className="size-4" />
               </button>
             ) : (
               <button
@@ -378,10 +457,10 @@ function ComputerPreviewViewport(props: {
                 aria-label="Float the computer preview as a draggable window"
                 className="grid size-7 place-items-center rounded-full text-white drop-shadow-[0_1px_2px_rgb(0_0_0/0.6)] transition-colors duration-150 hover:bg-white/20 focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:outline-none"
               >
-                <PanelExpandIcon className="size-4" />
+                <Maximize2Icon className="size-4" />
               </button>
             )}
-            <ComputerPreviewHideButton threadId={threadId} />
+            <ComputerPreviewHideButton threadRef={threadRef} />
           </div>
         </div>
       </div>
@@ -389,12 +468,12 @@ function ComputerPreviewViewport(props: {
   );
 }
 
-function ComputerPreviewHideButton(props: { readonly threadId: ThreadId }) {
+function ComputerPreviewHideButton(props: { readonly threadRef: ScopedThreadRef }) {
   const hidePreviewForTask = useComputerPreviewStore((store) => store.hidePreviewForTask);
   return (
     <button
       type="button"
-      onClick={() => hidePreviewForTask(props.threadId)}
+      onClick={() => hidePreviewForTask(props.threadRef)}
       title="Hide the preview for the rest of this task"
       aria-label="Hide the computer preview for the rest of this task"
       className="grid size-7 place-items-center rounded-full text-white drop-shadow-[0_1px_2px_rgb(0_0_0/0.6)] transition-colors duration-150 hover:bg-white/20 focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:outline-none"
@@ -409,23 +488,23 @@ function ComputerPreviewStreamStatus(props: {
 }) {
   if (props.status.kind === "connecting") {
     return (
-      <span className="text-ui-sm text-muted-foreground" role="status">
+      <span className="text-xs text-muted-foreground" role="status">
         Connecting to the desktop…
       </span>
     );
   }
   if (props.status.kind === "unsupported") {
     return (
-      <span className="text-ui-sm text-muted-foreground">
+      <span className="text-xs text-muted-foreground">
         This browser cannot decode desktop frames.
       </span>
     );
   }
   if (props.status.kind === "error") {
-    return <span className="text-ui-sm text-muted-foreground">{props.status.message}</span>;
+    return <span className="text-xs text-muted-foreground">{props.status.message}</span>;
   }
   return (
-    <span className="text-ui-sm text-muted-foreground">
+    <span className="text-xs text-muted-foreground">
       Waiting for the window the agent is using…
     </span>
   );

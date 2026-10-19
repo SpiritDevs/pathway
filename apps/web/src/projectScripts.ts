@@ -3,8 +3,34 @@ import {
   SCRIPT_RUN_COMMAND_PATTERN,
   type KeybindingCommand,
   type ProjectScript,
-} from "@synara/contracts";
-import { Schema } from "effect";
+} from "@spiritdevs/contracts";
+import * as Schema from "effect/Schema";
+const isScriptRunCommand = Schema.is(SCRIPT_RUN_COMMAND_PATTERN);
+
+export interface ProjectScriptInput {
+  readonly name: ProjectScript["name"];
+  readonly command: ProjectScript["command"];
+  readonly icon: ProjectScript["icon"];
+  readonly runOnWorktreeCreate: ProjectScript["runOnWorktreeCreate"];
+  readonly previewUrl: Exclude<ProjectScript["previewUrl"], undefined> | null;
+  readonly autoOpenPreview: boolean;
+}
+
+export function buildProjectScript(id: string, input: ProjectScriptInput): ProjectScript {
+  return {
+    id,
+    name: input.name,
+    command: input.command,
+    icon: input.icon,
+    runOnWorktreeCreate: input.runOnWorktreeCreate,
+    ...(input.previewUrl === null
+      ? {}
+      : {
+          previewUrl: input.previewUrl,
+          autoOpenPreview: input.autoOpenPreview,
+        }),
+  };
+}
 
 function normalizeScriptId(value: string): string {
   const cleaned = value
@@ -22,11 +48,11 @@ function normalizeScriptId(value: string): string {
 }
 
 export const commandForProjectScript = (scriptId: string): KeybindingCommand =>
-  SCRIPT_RUN_COMMAND_PATTERN.makeUnsafe(`script.${scriptId}.run`);
+  SCRIPT_RUN_COMMAND_PATTERN.make(`script.${scriptId}.run`);
 
 export function projectScriptIdFromCommand(command: string): string | null {
   const trimmed = command.trim();
-  if (!Schema.is(SCRIPT_RUN_COMMAND_PATTERN)(trimmed)) {
+  if (!isScriptRunCommand(trimmed)) {
     return null;
   }
   const [prefix, , suffix] = SCRIPT_RUN_COMMAND_PATTERN.parts;
@@ -55,47 +81,7 @@ export function nextProjectScriptId(name: string, existingIds: Iterable<string>)
   return `${baseId}-${Date.now()}`.slice(0, MAX_SCRIPT_ID_LENGTH);
 }
 
-interface ProjectScriptRuntimeEnvInput {
-  project: {
-    cwd: string;
-  };
-  worktreePath?: string | null;
-  extraEnv?: Record<string, string>;
-}
-
-export interface ProjectScriptRunOptions {
-  cwd?: string;
-  env?: Record<string, string>;
-  worktreePath?: string | null;
-  preferNewTerminal?: boolean;
-  rememberAsLastInvoked?: boolean;
-  throwOnError?: boolean;
-}
-
-export interface ProjectScriptRunResult {
-  terminalId: string;
-}
-
-export function projectScriptRuntimeEnv(
-  input: ProjectScriptRuntimeEnvInput,
-): Record<string, string> {
-  const env: Record<string, string> = {
-    SYNARA_PROJECT_ROOT: input.project.cwd,
-  };
-  if (input.worktreePath) {
-    env.SYNARA_WORKTREE_PATH = input.worktreePath;
-  }
-  if (input.extraEnv) {
-    return { ...env, ...input.extraEnv };
-  }
-  return env;
-}
-
-export function primaryProjectScript(scripts: ProjectScript[]): ProjectScript | null {
+export function primaryProjectScript(scripts: ReadonlyArray<ProjectScript>): ProjectScript | null {
   const regular = scripts.find((script) => !script.runOnWorktreeCreate);
   return regular ?? scripts[0] ?? null;
-}
-
-export function setupProjectScript(scripts: ProjectScript[]): ProjectScript | null {
-  return scripts.find((script) => script.runOnWorktreeCreate) ?? null;
 }

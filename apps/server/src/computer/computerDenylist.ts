@@ -1,6 +1,7 @@
-import { basename } from "node:path";
+import { ComputerDenylistError } from "./computerErrors.ts";
 
-import { ComputerTargetError } from "./uiTreeTargeting.ts";
+/** The refusal every denylisted access raises; defined with the other computer errors. */
+export { ComputerDenylistError };
 
 /**
  * Surfaces computer control refuses to drive or inspect in this build:
@@ -69,10 +70,16 @@ export interface ComputerDenylistMatch {
   readonly matched: string;
 }
 
+/** The final `/`-separated segment, ignoring trailing slashes, as `path.basename` answers. */
+function lastPathSegment(path: string): string {
+  const trimmed = path.replace(/\/+$/, "");
+  return trimmed.slice(trimmed.lastIndexOf("/") + 1);
+}
+
 function normalizeComputerAppName(raw: string): string {
   let name = raw.trim();
   // A path names the executable or the .app bundle; both reduce to the app.
-  if (name.includes("/")) name = basename(name);
+  if (name.includes("/")) name = lastPathSegment(name);
   if (name.toLowerCase().endsWith(".app")) name = name.slice(0, -4);
   return name.toLowerCase().replace(/\s+/g, " ");
 }
@@ -113,26 +120,4 @@ export function computerDenylistMatch(identity: {
     return { app: identity.name ?? identity.bundleId ?? "the target app", matched: fromBundle };
   }
   return undefined;
-}
-
-/**
- * The typed refusal every denylisted access shares. It extends
- * `ComputerTargetError` so the gateway's existing target-error branch keeps
- * the code on the wire; `app` names the refused surface for the audit record
- * and the message without the caller re-deriving it.
- */
-export class ComputerDenylistError extends ComputerTargetError {
-  /** The displayable identity that was refused — name or bundle id. */
-  readonly app: string;
-
-  constructor(app: string, matched: string) {
-    super({
-      code: "computer_denylist_refused",
-      message:
-        `${app} is on the computer-control denylist (${matched}): password managers ` +
-        "and OS security surfaces are refused, with no override in this build.",
-    });
-    this.name = "ComputerDenylistError";
-    this.app = app;
-  }
 }

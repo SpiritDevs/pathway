@@ -1,19 +1,36 @@
-import type { ComputerId } from "@synara/contracts";
-import type { ComputerFrame } from "@synara/shared/computerFrame";
-import { useEffect, useRef, useState } from "react";
+import { RegistryContext } from "@effect/atom-react";
+import type { ComputerId, EnvironmentId } from "@spiritdevs/contracts";
+import { computerFrameMimeType, type ComputerFrame } from "@spiritdevs/shared/computerFrame";
+import { useContext, useEffect, useRef, useState } from "react";
 
 import {
   createComputerFrameGateState,
   stepComputerFrameGate,
   type ComputerFrameGateState,
-} from "../ComputerPanel.logic";
+} from "./ComputerPanel.logic";
 import {
   createComputerFrameSource,
   type ComputerFrameSource,
+  type ComputerFrameSourceClose,
   type ComputerFrameSourceResetReason,
 } from "~/lib/computerFrameSource";
+import { useConnectedGeneration } from "~/hooks/useComputerEventBridge";
+import type { ComputerFrameSocketUrl } from "@spiritdevs/client-runtime/state/computer-frame-socket";
+import { resolveComputerFrameSocketUrl } from "./computerFrameSocketUrl";
 
 const FRAME_RECONNECT_MAX_DELAY_MS = 5_000;
+/**
+ * Consecutive closes without a frame before the stream gives up. A browser
+ * cannot read a refused upgrade's status, so a missing route, a computer
+ * that went away and a refused ticket all look like this; the preview says
+ * so instead of spinning on "connecting".
+ */
+const FRAME_RECONNECT_MAX_ATTEMPTS = 5;
+/** A ticket this close to its expiry is replaced before the next connect. */
+const FRAME_TICKET_REFRESH_MARGIN_MS = 30_000;
+/** A policy close is a refusal a retry cannot change. */
+const POLICY_VIOLATION_CLOSE_CODE = 1008;
+export const COMPUTER_LIVE_VIEW_UNAVAILABLE = "Live view unavailable";
 
 export interface ComputerImageDimensions {
   readonly width: number;
@@ -43,19 +60,39 @@ export function mergeComputerImageStreamStatus(
   return previous;
 }
 
+/**
+ * The frame's payload as an image Blob of the format its header names: a Linux
+ * compositor streams JPEG, the other backends PNG.
+ *
+ * The payload is a view over that message's own buffer, and the Blob
+ * constructor copies the bytes it is given, so this is the only copy a
+ * multi-megabyte frame needs. The cast narrows the decoder's `ArrayBufferLike`
+ * to what `Blob` accepts: this buffer came from a WebSocket message, which is
+ * never shared memory.
+ */
+export function computerFrameImageBlob(frame: ComputerFrame): Blob {
+  const payload = frame.payload as Uint8Array<ArrayBuffer>;
+  return new Blob([payload], { type: computerFrameMimeType(frame.header) });
+}
+
 function isImageBitmapAvailable(): boolean {
   return typeof Blob === "function" && typeof globalThis.createImageBitmap === "function";
 }
 
 export function useComputerImageStream(input: {
   readonly canvasRef: React.RefObject<HTMLCanvasElement | null>;
+  readonly environmentId: EnvironmentId | null;
   readonly computerId: ComputerId | null;
   readonly enabled: boolean;
 }): {
   readonly status: ComputerImageStreamStatus;
   readonly dimensions: ComputerImageDimensions | null;
 } {
-  const { canvasRef, computerId, enabled } = input;
+  const { canvasRef, environmentId, computerId, enabled } = input;
+  const registry = useContext(RegistryContext);
+  // Frames flow only while the environment is connected; a new connection
+  // generation starts a fresh stream against it.
+  const connectedGeneration = useConnectedGeneration(environmentId);
   const [status, setStatus] = useState<ComputerImageStreamStatus>({ kind: "idle" });
   const [dimensions, setDimensions] = useState<ComputerImageDimensions | null>(null);
   const generationRef = useRef(0);
@@ -70,7 +107,13 @@ export function useComputerImageStream(input: {
   }, []);
 
   useEffect(() => {
-    if (!enabled || !pageVisible || computerId === null) {
+    if (
+      !enabled ||
+      !pageVisible ||
+      environmentId === null ||
+      computerId === null ||
+      connectedGeneration === null
+    ) {
       setStatus({ kind: "idle" });
       setDimensions(null);
       // The canvas keeps its last decoded frame: the tap (or this stream when
@@ -89,6 +132,11 @@ export function useComputerImageStream(input: {
     let gate: ComputerFrameGateState = createComputerFrameGateState();
     let source: ComputerFrameSource | null = null;
     let reconnectAttempts = 0;
+    // The resolved URL is reused until its ticket nears expiry: a ticket stays
+    // valid for minutes, and minting one is an HTTP round trip (with a DPoP
+    // proof on relay). A close cannot tell a refused ticket from a dropped
+    // connection, so no close replaces it.
+    let resolvedUrl: ComputerFrameSocketUrl | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let decoding = false;
     let pendingFrame: ComputerFrame | null = null;
@@ -103,13 +151,7 @@ export function useComputerImageStream(input: {
       decoding = true;
       let bitmap: ImageBitmap | null = null;
       try {
-        // The payload is a view over that message's own buffer, and the Blob
-        // constructor copies the bytes it is given, so this is the only copy a
-        // multi-megabyte frame needs. The cast narrows the decoder's
-        // `ArrayBufferLike` to what `Blob` accepts: this buffer came from a
-        // WebSocket message, which is never shared memory.
-        const payload = frame.payload as Uint8Array<ArrayBuffer>;
-        bitmap = await globalThis.createImageBitmap(new Blob([payload], { type: "image/png" }));
+        bitmap = await globalThis.createImageBitmap(computerFrameImageBlob(frame));
         if (!isCurrent() || disposed) return;
         const canvas = canvasRef.current;
         const context = canvas?.getContext("2d");
@@ -156,24 +198,63 @@ export function useComputerImageStream(input: {
       void decodeFrame(frame);
     };
 
-    const openFrameSource = () =>
-      createComputerFrameSource({
-        computerId,
+    const connect = (resolved: string) => {
+      source = createComputerFrameSource({
+        url: resolved,
         handlers: { onFrame: handleFrame, onReset: handleReset },
       });
+    };
 
-    const handleReset = (reason: ComputerFrameSourceResetReason) => {
+    const openFrameSource = () => {
+      if (
+        resolvedUrl !== null &&
+        (resolvedUrl.expiresAt === null ||
+          resolvedUrl.expiresAt - Date.now() > FRAME_TICKET_REFRESH_MARGIN_MS)
+      ) {
+        connect(resolvedUrl.url);
+        return;
+      }
+      void resolveComputerFrameSocketUrl(registry, environmentId, computerId).then((resolved) => {
+        if (disposed || !isCurrent()) return;
+        resolvedUrl = resolved;
+        if (resolved === null) {
+          handleReset("closed");
+          return;
+        }
+        connect(resolved.url);
+      });
+    };
+
+    const giveUp = () => {
+      source?.close();
+      source = null;
+      setCurrentStatus({ kind: "error", message: COMPUTER_LIVE_VIEW_UNAVAILABLE });
+    };
+
+    const handleReset = (
+      reason: ComputerFrameSourceResetReason,
+      close?: ComputerFrameSourceClose,
+    ) => {
       if (!isCurrent() || disposed) return;
       gate = createComputerFrameGateState();
       pendingFrame = null;
       if (reason === "closed") {
-        setCurrentStatus({ kind: "connecting" });
+        if (close?.code === POLICY_VIOLATION_CLOSE_CODE) {
+          giveUp();
+          return;
+        }
         reconnectAttempts += 1;
+        if (reconnectAttempts > FRAME_RECONNECT_MAX_ATTEMPTS) {
+          giveUp();
+          return;
+        }
+        setCurrentStatus({ kind: "connecting" });
         const delay = Math.min(500 * 2 ** (reconnectAttempts - 1), FRAME_RECONNECT_MAX_DELAY_MS);
         reconnectTimer = setTimeout(() => {
           if (disposed || !isCurrent()) return;
           source?.close();
-          source = openFrameSource();
+          source = null;
+          openFrameSource();
         }, delay);
         return;
       }
@@ -181,13 +262,13 @@ export function useComputerImageStream(input: {
         kind: "error",
         message:
           reason === "decode-failed"
-            ? "The computer stream sent a frame Synara could not read."
+            ? "The computer stream sent a frame Pathway could not read."
             : "The computer stream disconnected.",
       });
     };
 
     setStatus({ kind: "connecting" });
-    source = openFrameSource();
+    openFrameSource();
 
     return () => {
       disposed = true;
@@ -196,7 +277,7 @@ export function useComputerImageStream(input: {
       if (reconnectTimer !== null) clearTimeout(reconnectTimer);
       source?.close();
     };
-  }, [canvasRef, computerId, enabled, pageVisible]);
+  }, [canvasRef, computerId, connectedGeneration, enabled, environmentId, pageVisible, registry]);
 
   return { status, dimensions };
 }

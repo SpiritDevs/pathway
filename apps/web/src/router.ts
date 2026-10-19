@@ -1,32 +1,40 @@
-import { createElement } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { createRouter } from "@tanstack/react-router";
+import { createRouter, RouterHistory } from "@tanstack/react-router";
 
 import { routeTree } from "./routeTree.gen";
-import { StoreProvider } from "./store";
-
-type RouterHistory = NonNullable<Parameters<typeof createRouter>[0]["history"]>;
 
 export function getRouter(history: RouterHistory) {
-  const queryClient = new QueryClient();
-
-  return createRouter({
+  const router = createRouter({
     routeTree,
     history,
-    // Routes are auto-code-split and have no loaders, so intent preloading only
-    // fetches the route chunk on link hover/touch — first navigation skips the
-    // chunk download/parse wait.
-    defaultPreload: "intent",
-    context: {
-      queryClient,
-    },
-    Wrap: ({ children }) =>
-      createElement(
-        QueryClientProvider,
-        { client: queryClient },
-        createElement(StoreProvider, null, children),
-      ),
+    context: {},
   });
+
+  // #region DEBUG
+  history.subscribe(({ action, location }) => {
+    const stack = new Error().stack
+      ?.split("\n")
+      .slice(1, 9)
+      .map((line) => line.trim())
+      .join(" <- ");
+    void fetch("/api/__debug/cloud-sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        hypothesis: "H5",
+        event: "router-history-notified",
+        fields: {
+          action: action.type,
+          hashPresent: location.hash.length > 0,
+          pathname: location.pathname,
+          searchPresent: location.search.length > 0,
+          stack: stack ?? null,
+        },
+      }),
+    }).catch(() => undefined);
+  });
+  // #endregion DEBUG
+
+  return router;
 }
 
 export type AppRouter = ReturnType<typeof getRouter>;

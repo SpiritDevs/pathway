@@ -1,22 +1,21 @@
 import { useMemo } from "react";
+import { deriveThreadCheckpointSummaries } from "@spiritdevs/client-runtime/state/thread-checkpoints";
+import type { OrchestrationV2ThreadProjection } from "@spiritdevs/contracts";
+import { inferCheckpointTurnCountByRunId } from "../session-logic";
+import type { TurnDiffSummary } from "../types";
 
-import { inferCheckpointTurnCountByTurnId } from "../session-logic";
-import type { Thread } from "../types";
+export function useTurnDiffSummaries(projection: OrchestrationV2ThreadProjection | null) {
+  const turnDiffSummaries = useMemo<ReadonlyArray<TurnDiffSummary>>(() => {
+    if (projection === null) {
+      return [];
+    }
+    return deriveThreadCheckpointSummaries(projection);
+  }, [projection]);
 
-const EMPTY_TURN_DIFF_SUMMARIES: Thread["turnDiffSummaries"] = [];
-
-export function useTurnDiffSummaries(activeThread: Thread | undefined) {
-  const turnDiffSummaries = activeThread
-    ? activeThread.turnDiffSummaries
-    : EMPTY_TURN_DIFF_SUMMARIES;
-
-  // Memoized like DiffPanel: the inference copies and sorts every summary and
-  // returns a fresh object, which invalidated ChatView's downstream memos on
-  // every streamed flush even though summaries only change on turn completion.
-  const inferredCheckpointTurnCountByTurnId = useMemo(
-    () => inferCheckpointTurnCountByTurnId(turnDiffSummaries),
+  const inferredCheckpointTurnCountByRunId = useMemo(
+    () => inferCheckpointTurnCountByRunId(turnDiffSummaries),
     [turnDiffSummaries],
   );
 
-  return { turnDiffSummaries, inferredCheckpointTurnCountByTurnId };
+  return { turnDiffSummaries, inferredCheckpointTurnCountByRunId };
 }

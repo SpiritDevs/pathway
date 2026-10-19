@@ -1,25 +1,25 @@
-import { describe, expect, it } from "vitest";
-
+import { describe, expect, it } from "@effect/vitest";
 import {
   computerPermissionSetupMessage,
   computerStaleGrantAdvice,
-} from "@synara/shared/computerGrants";
+} from "@spiritdevs/shared/computerGrants";
+
 import { computerSetupSignal } from "./computerSetupSignal.ts";
 
-const BUNDLE_ID = "com.synara.test";
+const BUNDLE_ID = "com.pathway.test";
 
 describe("computer signature change", () => {
   it("an ad-hoc rebuild re-raises the missing grant with the stale-build explanation", () => {
     // macOS pins an ad-hoc grant to the binary's cdhash, so a rebuild
     // invalidates it while System Settings still shows the switch on.
     const message = computerPermissionSetupMessage(["accessibility"], "adhoc");
-    expect(message).toContain("Synara needs Accessibility");
+    expect(message).toContain("Pathway needs Accessibility");
     expect(message).toContain("earlier build");
     const withReset = computerPermissionSetupMessage(["screenRecording"], "adhoc", BUNDLE_ID);
-    expect(withReset).toContain("tccutil reset ScreenCapture com.synara.test");
+    expect(withReset).toContain("tccutil reset ScreenCapture com.pathway.test");
     expect(
       computerStaleGrantAdvice(["accessibility", "screenRecording"], "adhoc", BUNDLE_ID),
-    ).toContain("tccutil reset Accessibility com.synara.test");
+    ).toContain("tccutil reset Accessibility com.pathway.test");
   });
 
   it("a signed or unknown build never blames the cdhash", () => {
@@ -40,7 +40,7 @@ describe("computer signature change", () => {
       missing: ["accessibility"],
       buildSignature: "adhoc",
       bundleId: BUNDLE_ID,
-      message: "Synara needs Accessibility to control this Mac. Turn Synara on in…",
+      message: "Pathway needs Accessibility to control this Mac. Turn Pathway on in…",
     } as const;
     const first = computerSetupSignal({ availability, bundleId: BUNDLE_ID });
     expect(first).toMatchObject({

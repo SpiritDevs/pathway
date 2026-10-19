@@ -1,143 +1,148 @@
+import {
+  EMPTY_COMPUTER_CLIENT_STATE,
+  applyComputerWindowsChanged,
+  clearComputerEnvironment,
+  rebaseComputerEnvironment,
+  recordComputerAction,
+  removeComputerThreadState,
+  setComputerInputStopped,
+  upsertComputerThreadState,
+  type ComputerClientState,
+} from "@spiritdevs/client-runtime/state/computer-state";
+import { scopedThreadKey } from "@spiritdevs/client-runtime/environment";
 import type {
-  ComputerEvent,
+  ComputerActionEvent,
+  ComputerStatusResult,
   ComputerWindow,
+  EnvironmentId,
+  ScopedThreadRef,
   ThreadComputerState,
-  ThreadId,
-} from "@synara/contracts";
+} from "@spiritdevs/contracts";
+import * as Equal from "effect/Equal";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 
-type ComputerActionEvent = Extract<ComputerEvent, { type: "computer.action" }>;
-
-interface ComputerStateStore {
-  threadStatesByThreadId: Record<string, ThreadComputerState | undefined>;
-  /** Newest desktop action per thread, so one thread never reads another's. */
-  lastActionByThreadId: Record<string, ComputerActionEvent | undefined>;
+interface ComputerStateStore extends ComputerClientState {
   /**
-   * Host-wide physical-Escape kill latch, true after a `computer.input-stopped`
-   * push until the user's explicit re-arm. Kept beside the per-thread states
-   * because the press belongs to no thread — a conversation with no pane state
-   * still has to see input is stopped.
+   * The last `computer.getStatus` answer per environment, written by whichever
+   * surface fetched it. Reading status can start the desktop helper, so
+   * surfaces that only describe the desktop read this instead of asking.
    */
-  inputStopped: boolean;
-  upsertThreadState: (state: ThreadComputerState) => void;
-  applyWindowsChanged: (windows: readonly ComputerWindow[]) => void;
-  setInputStopped: (stopped: boolean) => void;
-  recordAction: (action: ComputerActionEvent) => void;
-  removeThreadState: (threadId: ThreadId) => void;
-  clear: () => void;
+  readonly statusByEnvironment: Readonly<Record<string, ComputerStatusResult>>;
+  readonly upsertThreadState: (environmentId: EnvironmentId, state: ThreadComputerState) => void;
+  readonly applyWindowsChanged: (
+    environmentId: EnvironmentId,
+    windows: readonly ComputerWindow[],
+  ) => void;
+  readonly setInputStopped: (environmentId: EnvironmentId, stopped: boolean) => void;
+  readonly recordAction: (environmentId: EnvironmentId, action: ComputerActionEvent) => void;
+  readonly removeThreadState: (ref: ScopedThreadRef) => void;
+  readonly setStatus: (environmentId: EnvironmentId, status: ComputerStatusResult) => void;
+  /**
+   * The connection dropped or was replaced: keep what shows, let snapshots
+   * replace it, and fence off answers requested before.
+   */
+  readonly rebaseEnvironment: (environmentId: EnvironmentId) => void;
+  /** The environment left: nothing of it may linger, nor land later. */
+  readonly clearEnvironment: (environmentId: EnvironmentId) => void;
+}
+
+// Bumped when an environment's connection drops or is replaced, and when it
+// is cleared, so an answer requested before cannot land after.
+const environmentEpochs = new Map<EnvironmentId, number>();
+
+function advanceEnvironmentEpoch(environmentId: EnvironmentId): void {
+  environmentEpochs.set(environmentId, (environmentEpochs.get(environmentId) ?? 0) + 1);
+}
+
+/**
+ * A check that an asynchronous Computer answer still belongs: false once the
+ * environment's connection dropped, was replaced, or the environment was
+ * cleared after the request went out. Every async write to either store
+ * checks one.
+ */
+export function computerEnvironmentFence(environmentId: EnvironmentId): () => boolean {
+  const epoch = environmentEpochs.get(environmentId) ?? 0;
+  return () => (environmentEpochs.get(environmentId) ?? 0) === epoch;
 }
 
 export const useComputerStateStore = create<ComputerStateStore>()((set) => ({
-  threadStatesByThreadId: {},
-  lastActionByThreadId: {},
-  inputStopped: false,
-  upsertThreadState: (state) =>
+  ...EMPTY_COMPUTER_CLIENT_STATE,
+  statusByEnvironment: {},
+  upsertThreadState: (environmentId, state) =>
+    set((current) => upsertComputerThreadState(current, environmentId, state)),
+  applyWindowsChanged: (environmentId, windows) =>
+    set((current) => applyComputerWindowsChanged(current, environmentId, windows)),
+  setInputStopped: (environmentId, stopped) =>
+    set((current) => setComputerInputStopped(current, environmentId, stopped)),
+  recordAction: (environmentId, action) =>
+    set((current) => recordComputerAction(current, environmentId, action)),
+  removeThreadState: (ref) => set((current) => removeComputerThreadState(current, ref)),
+  setStatus: (environmentId, status) =>
+    set((current) =>
+      // A periodic refresh usually answers the same thing; keep identity so
+      // subscribers to the whole record do not re-render.
+      Equal.equals(current.statusByEnvironment[environmentId], status)
+        ? current
+        : { statusByEnvironment: { ...current.statusByEnvironment, [environmentId]: status } },
+    ),
+  rebaseEnvironment: (environmentId) => {
+    advanceEnvironmentEpoch(environmentId);
+    set((current) => rebaseComputerEnvironment(current, environmentId));
+  },
+  clearEnvironment: (environmentId) =>
     set((current) => {
-      const previousState = current.threadStatesByThreadId[state.threadId];
-      if (previousState && previousState.version >= state.version) {
-        return current;
-      }
-      return {
-        ...current,
-        threadStatesByThreadId: {
-          ...current.threadStatesByThreadId,
-          [state.threadId]: state,
-        },
-      };
-    }),
-  applyWindowsChanged: (windows) =>
-    set((current) => {
-      let changed = false;
-      const nextStates = { ...current.threadStatesByThreadId };
-      for (const [threadId, state] of Object.entries(current.threadStatesByThreadId)) {
-        if (!state || state.windows === windows) {
-          continue;
-        }
-        nextStates[threadId] = { ...state, windows };
-        changed = true;
-      }
-      return changed ? { ...current, threadStatesByThreadId: nextStates } : current;
-    }),
-  setInputStopped: (stopped) =>
-    set((current) => {
-      if (current.inputStopped === stopped) return current;
-      // Stamp the flag onto every cached thread state too, so a pane reading
-      // only `ThreadComputerState.inputStopped` sees the transition without
-      // waiting for the server's republish — and a republish arriving first
-      // cannot leave the two disagreeing.
-      const nextStates: Record<string, ThreadComputerState | undefined> = {};
-      for (const [threadId, state] of Object.entries(current.threadStatesByThreadId)) {
-        nextStates[threadId] = state ? { ...state, inputStopped: stopped } : state;
-      }
-      return { ...current, inputStopped: stopped, threadStatesByThreadId: nextStates };
-    }),
-  recordAction: (action) =>
-    set((current) => {
-      // Unattributed pane input belongs to no thread, and nothing reads a
-      // cross-thread "newest action": keeping the state identical leaves every
-      // subscriber unnotified instead of re-rendering them for nobody.
-      const threadId = action.threadId;
-      if (!threadId) {
-        return current;
-      }
-      return {
-        ...current,
-        lastActionByThreadId: {
-          ...current.lastActionByThreadId,
-          [threadId]: action,
-        },
-      };
-    }),
-  removeThreadState: (threadId) =>
-    set((current) => {
-      const hasState = Object.hasOwn(current.threadStatesByThreadId, threadId);
-      const hasAction = Object.hasOwn(current.lastActionByThreadId, threadId);
-      if (!hasState && !hasAction) {
-        return current;
-      }
-      const nextThreadStatesByThreadId = { ...current.threadStatesByThreadId };
-      delete nextThreadStatesByThreadId[threadId];
-      const nextLastActionByThreadId = { ...current.lastActionByThreadId };
-      delete nextLastActionByThreadId[threadId];
-      return {
-        ...current,
-        threadStatesByThreadId: nextThreadStatesByThreadId,
-        lastActionByThreadId: nextLastActionByThreadId,
-      };
-    }),
-  clear: () =>
-    set({
-      threadStatesByThreadId: {},
-      lastActionByThreadId: {},
-      // A wholesale reset (server restart) cannot inherit the old latch: the
-      // new server's own `computer.input-stopped` state is the truth.
-      inputStopped: false,
+      advanceEnvironmentEpoch(environmentId);
+      const next = clearComputerEnvironment(current, environmentId);
+      if (!Object.hasOwn(current.statusByEnvironment, environmentId)) return next;
+      const statusByEnvironment = { ...current.statusByEnvironment };
+      delete statusByEnvironment[environmentId];
+      return { ...next, statusByEnvironment };
     }),
 }));
 
 export function selectThreadComputerState(
-  threadId: ThreadId,
+  ref: ScopedThreadRef,
 ): (store: ComputerStateStore) => ThreadComputerState | undefined {
-  return (store) => store.threadStatesByThreadId[threadId];
+  const key = scopedThreadKey(ref);
+  return (store) => store.threadStates[key];
 }
 
 export function selectThreadComputerAction(
-  threadId: ThreadId,
+  ref: ScopedThreadRef,
 ): (store: ComputerStateStore) => ComputerActionEvent | undefined {
-  return (store) => store.lastActionByThreadId[threadId];
+  const key = scopedThreadKey(ref);
+  return (store) => store.lastActions[key];
 }
 
-/** Composer availability does not change with desktop activity or geometry. */
-export function useThreadComputerAvailability(threadId: ThreadId) {
-  return useComputerStateStore(
-    useShallow((state) => state.threadStatesByThreadId[threadId]?.availability),
+export function useThreadComputerState(ref: ScopedThreadRef | null) {
+  return useComputerStateStore((state) =>
+    ref ? state.threadStates[scopedThreadKey(ref)] : undefined,
   );
 }
 
-/** Observe revocation only, without rerendering the composer for desktop actions. */
-export function useThreadComputerControlGeneration(threadId: ThreadId) {
+/** Composer availability does not change with desktop activity or geometry. */
+export function useThreadComputerAvailability(ref: ScopedThreadRef | null) {
   return useComputerStateStore(
-    (state) => state.threadStatesByThreadId[threadId]?.controlGeneration,
+    useShallow((state) =>
+      ref ? state.threadStates[scopedThreadKey(ref)]?.availability : undefined,
+    ),
+  );
+}
+
+/** The environment's host-wide Escape latch. */
+export function useComputerInputStopped(environmentId: EnvironmentId | null) {
+  return useComputerStateStore((state) =>
+    environmentId ? (state.inputStoppedByEnvironment[environmentId] ?? false) : false,
+  );
+}
+
+/**
+ * The desktop backend's status if some surface has already asked, without
+ * being the thing that asks.
+ */
+export function useCachedComputerStatus(environmentId: EnvironmentId | null) {
+  return useComputerStateStore((state) =>
+    environmentId ? state.statusByEnvironment[environmentId] : undefined,
   );
 }

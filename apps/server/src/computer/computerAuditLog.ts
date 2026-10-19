@@ -1,17 +1,3 @@
-import { appendFile, mkdir, rename, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
-import {
-  parseCuaActionDiagnostics,
-  type CuaActionDiagnostics,
-} from "@synara/shared/cuaActionDiagnostics";
-import type {
-  ComputerAuditEffect,
-  ComputerGetAuditHistoryInput,
-  ComputerGetAuditHistoryResult,
-} from "@synara/contracts";
-import { readComputerAuditHistory } from "./computerAuditHistory.ts";
-import { computerAuditTailLines, readComputerAuditFileTail } from "./computerAuditFile.ts";
-
 /**
  * Append-only local evidence for mutating `computer_*` calls.
  *
@@ -25,33 +11,52 @@ import { computerAuditTailLines, readComputerAuditFileTail } from "./computerAud
  *
  * Bounded two ways at once: at most {@link COMPUTER_AUDIT_MAX_ENTRIES} lines
  * and at most {@link COMPUTER_AUDIT_MAX_BYTES} bytes. Crossing either cap
- * compacts toward the newest half of both caps, written through temp-file + rename
- * `ComputerControlState` persists with, so a crash mid-compaction leaves the
- * old file intact rather than a truncated one. Legacy files are read from a
- * bounded tail, and a single oversized or unserializable record is omitted.
+ * compacts toward the newest half of both caps, written through the same
+ * temp-file + rename `ComputerControlState` persists with, so a crash
+ * mid-compaction leaves the old file intact rather than a truncated one.
+ * Legacy files are read from a bounded tail, and a single oversized or
+ * unserializable record is omitted.
  *
- * Writes are serialized on a private promise chain — the desktop operation
- * queue cannot serialize refusals that happen before an operation slot is
- * taken, and a `computer_run`'s steps all finish inside one slot. Every line
- * is a single `appendFile`, which local filesystems deliver atomically for
- * writes this size. A write failure is swallowed: evidence collection must
+ * Writes are serialized on a private queue drained by one fiber — the desktop
+ * operation queue cannot serialize refusals that happen before an operation
+ * slot is taken, and a `computer_run`'s steps all finish inside one slot.
+ * Every line is a single append, which local filesystems deliver atomically
+ * for writes this size. A write failure is swallowed: evidence collection must
  * never fail the action it records, and a caller told "the click failed" when
  * the click landed is a worse failure than a gap in the log.
+ *
+ * @module computer/computerAuditLog
  */
+import type {
+  ComputerAuditEffect,
+  ComputerGetAuditHistoryInput,
+  ComputerGetAuditHistoryResult,
+} from "@spiritdevs/contracts";
+import {
+  parseCuaActionDiagnostics,
+  type CuaActionDiagnostics,
+} from "@spiritdevs/shared/cuaActionDiagnostics";
+import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as Queue from "effect/Queue";
+import type * as Scope from "effect/Scope";
+
+import { computerAuditTailLines, readComputerAuditFileTail } from "./computerAuditFile.ts";
+import {
+  type ComputerAuditHistoryError,
+  readComputerAuditHistory,
+} from "./computerAuditHistory.ts";
+
+/** The audit log's file name inside the environment's state directory. */
+export const COMPUTER_AUDIT_LOG_FILE = "computer-audit.jsonl";
 export const COMPUTER_AUDIT_MAX_ENTRIES = 10_000;
 export const COMPUTER_AUDIT_MAX_BYTES = 2 * 1024 * 1024;
 /** Compaction keeps the newest half so the log stays bounded without churning. */
 const COMPUTER_AUDIT_COMPACT_TO = Math.floor(COMPUTER_AUDIT_MAX_ENTRIES / 2);
 const COMPUTER_AUDIT_COMPACT_BYTES = Math.floor(COMPUTER_AUDIT_MAX_BYTES / 2);
-
-/**
- * The effect side of one audit record. The first three are the delivery
- * taxonomy the wire result already reports; `refused` covers every typed
- * refusal (denylist, approval denied, control revoked, target errors), and
- * `error` is anything else that stopped the call — always with `code` naming
- * what refused or failed.
- */
-export type { ComputerAuditEffect } from "@synara/contracts";
 
 export interface ComputerAuditEntry {
   /** ISO timestamp; written by the log, not the caller. */
@@ -60,8 +65,8 @@ export interface ComputerAuditEntry {
   readonly tool: string;
   readonly threadId?: string;
   readonly turnId?: string;
-  /** Gateway JSON-RPC request identity; it is not a provider tool-item ID. */
-  readonly gatewayRequestId?: string;
+  /** MCP JSON-RPC request identity; it is not a provider tool-item ID. */
+  readonly mcpRequestId?: string;
   /** The resolved target when one is known — window id, pid, app, bundle id. */
   readonly target?: {
     readonly windowId?: string;
@@ -74,6 +79,12 @@ export interface ComputerAuditEntry {
    * sizes only for payload-bearing fields.
    */
   readonly args?: Record<string, unknown>;
+  /**
+   * The first three values are the delivery taxonomy the wire result already
+   * reports; `refused` covers every typed refusal (denylist, approval denied,
+   * control revoked, target errors), and `error` is anything else that stopped
+   * the call — always with `code` naming what refused or failed.
+   */
   readonly effect: ComputerAuditEffect;
   /** The typed refusal or error code when `effect` is `refused`/`error`. */
   readonly code?: string;
@@ -102,14 +113,14 @@ const COMPUTER_AUDIT_SENSITIVE_ARGS: ReadonlySet<string> = new Set([
 const COMPUTER_AUDIT_MAX_STRING = 256;
 
 /** Keep a bounded transport identity without inventing a provider call ID. */
-export function computerAuditGatewayRequestId(value: unknown): { gatewayRequestId?: string } {
+export function computerAuditMcpRequestId(value: unknown): { mcpRequestId?: string } {
   const id =
     typeof value === "string"
       ? value
       : typeof value === "number" && Number.isFinite(value)
         ? String(value)
         : undefined;
-  return id !== undefined && /^[A-Za-z0-9_.:-]{1,128}$/.test(id) ? { gatewayRequestId: id } : {};
+  return id !== undefined && /^[A-Za-z0-9_.:-]{1,128}$/.test(id) ? { mcpRequestId: id } : {};
 }
 
 /**
@@ -181,86 +192,45 @@ function summarizeComputerAuditValue(key: string, value: unknown): unknown {
   return `[${typeof value}]`;
 }
 
-export class ComputerAuditLog {
+export interface ComputerAuditLog {
+  /** Queue one record. Never fails and never waits: the log is fire-and-forget. */
+  readonly record: (entry: Omit<ComputerAuditEntry, "ts">) => Effect.Effect<void>;
+  /** Completes once every record queued before it — and any compaction — has been written. */
+  readonly flush: Effect.Effect<void>;
+  /** Reads the activity history after queued evidence lands. */
+  readonly readHistory: (
+    input: ComputerGetAuditHistoryInput,
+  ) => Effect.Effect<ComputerGetAuditHistoryResult, ComputerAuditHistoryError>;
+}
+
+type AuditWork =
+  | { readonly _tag: "append"; readonly line: string }
+  | { readonly _tag: "flush"; readonly done: Deferred.Deferred<void> };
+
+/**
+ * Opens the audit log at `filePath`; `undefined` turns auditing off and
+ * history reads report `disabled`. The writer fiber lives in the caller's
+ * scope, and closing the scope first writes everything already queued; later
+ * records are dropped.
+ */
+export const makeComputerAuditLog = Effect.fn("makeComputerAuditLog")(function* (
+  filePath: string | undefined,
+): Effect.fn.Return<ComputerAuditLog, never, FileSystem.FileSystem | Path.Path | Scope.Scope> {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const work = yield* Queue.unbounded<AuditWork>();
   /**
    * Estimated size/count of the file as this process sees it, loaded on the
    * first append so a pre-existing log counts toward the caps rather than
    * being measured only from this boot's writes.
    */
-  private entries = 0;
-  private bytes = 0;
-  private loaded = false;
-  private needsSeparator = false;
-  private chain: Promise<void> = Promise.resolve();
+  let entries = 0;
+  let bytes = 0;
+  let loaded = false;
+  let needsSeparator = false;
 
-  constructor(
-    private readonly filePath: string | undefined,
-    private readonly now: () => Date = () => new Date(),
-  ) {}
-
-  /** Queue one record. Never throws and never waits: the log is fire-and-forget. */
-  record(entry: Omit<ComputerAuditEntry, "ts">): void {
-    if (this.filePath === undefined) return;
-    try {
-      // Re-project at the persistence boundary, even if a caller supplied an
-      // object carrying extra native fields despite its static type.
-      const { diagnostics: suppliedDiagnostics, ...metadata } = entry;
-      const diagnostics = parseCuaActionDiagnostics({ diagnostics: suppliedDiagnostics });
-      const line = `${JSON.stringify({
-        ts: this.now().toISOString(),
-        ...metadata,
-        ...(diagnostics ? { diagnostics } : {}),
-      })}\n`;
-      if (Buffer.byteLength(line, "utf8") > COMPUTER_AUDIT_MAX_BYTES) return;
-      this.chain = this.chain.then(() => this.append(line));
-    } catch {
-      // A malformed evidence object must not make a delivered action fail.
-    }
-  }
-
-  /** Settles once every queued append — and any compaction — has finished. */
-  async flush(): Promise<void> {
-    await this.chain;
-  }
-
-  async readHistory(input: ComputerGetAuditHistoryInput): Promise<ComputerGetAuditHistoryResult> {
-    await this.flush();
-    return readComputerAuditHistory(this.filePath, input);
-  }
-
-  private async append(line: string): Promise<void> {
-    const filePath = this.filePath;
-    if (filePath === undefined) return;
-    try {
-      if (!this.loaded) {
-        const existing = await readComputerAuditFileTail(filePath, COMPUTER_AUDIT_MAX_BYTES);
-        if (existing !== null) {
-          this.bytes = existing.totalBytes;
-          this.needsSeparator = existing.contents.length > 0 && existing.contents.at(-1) !== 10;
-          this.entries = this.needsSeparator ? 1 : 0;
-          const lines = computerAuditTailLines(existing);
-          while (this.entries <= COMPUTER_AUDIT_MAX_ENTRIES && !lines.next().done) {
-            this.entries += 1;
-          }
-        }
-        this.loaded = true;
-      }
-      await mkdir(dirname(filePath), { recursive: true, mode: 0o700 });
-      const content = this.needsSeparator ? `\n${line}` : line;
-      await appendFile(filePath, content, { mode: 0o600 });
-      this.needsSeparator = false;
-      this.entries += 1;
-      this.bytes += Buffer.byteLength(content, "utf8");
-      if (this.entries > COMPUTER_AUDIT_MAX_ENTRIES || this.bytes > COMPUTER_AUDIT_MAX_BYTES) {
-        await this.compact(filePath);
-      }
-    } catch {
-      // Evidence collection must never fail the action it records.
-    }
-  }
-
-  private async compact(filePath: string): Promise<void> {
-    const existing = await readComputerAuditFileTail(filePath, COMPUTER_AUDIT_MAX_BYTES);
+  const compact = Effect.fn("ComputerAuditLog.compact")(function* (file: string) {
+    const existing = yield* readComputerAuditFileTail(file, COMPUTER_AUDIT_MAX_BYTES);
     if (existing === null) return;
     const kept: Buffer[] = [];
     let keptBytes = 0;
@@ -278,11 +248,90 @@ export class ComputerAuditLog {
       kept.push(line);
       keptBytes += line.length;
     }
-    const content = Buffer.concat(kept.reverse(), keptBytes);
-    const temporaryPath = `${filePath}.tmp`;
-    await writeFile(temporaryPath, content, { mode: 0o600 });
-    await rename(temporaryPath, filePath);
-    this.entries = kept.length;
-    this.bytes = content.length;
-  }
-}
+    const content = Buffer.concat(kept.toReversed(), keptBytes);
+    const temporaryPath = `${file}.tmp`;
+    yield* fs.writeFile(temporaryPath, content, { mode: 0o600 });
+    yield* fs.rename(temporaryPath, file);
+    entries = kept.length;
+    bytes = content.length;
+  });
+
+  const append = Effect.fn("ComputerAuditLog.append")(function* (file: string, line: string) {
+    if (!loaded) {
+      const existing = yield* readComputerAuditFileTail(file, COMPUTER_AUDIT_MAX_BYTES);
+      if (existing !== null) {
+        bytes = existing.totalBytes;
+        needsSeparator = existing.contents.length > 0 && existing.contents.at(-1) !== 10;
+        entries = needsSeparator ? 1 : 0;
+        const lines = computerAuditTailLines(existing);
+        while (entries <= COMPUTER_AUDIT_MAX_ENTRIES && !lines.next().done) entries += 1;
+      }
+      loaded = true;
+    }
+    yield* fs.makeDirectory(path.dirname(file), { recursive: true, mode: 0o700 });
+    const content = needsSeparator ? `\n${line}` : line;
+    yield* fs.writeFileString(file, content, { flag: "a", mode: 0o600 });
+    needsSeparator = false;
+    entries += 1;
+    bytes += Buffer.byteLength(content, "utf8");
+    if (entries > COMPUTER_AUDIT_MAX_ENTRIES || bytes > COMPUTER_AUDIT_MAX_BYTES) {
+      yield* compact(file);
+    }
+  });
+
+  const handle = (item: AuditWork): Effect.Effect<void> => {
+    if (item._tag === "flush") return Deferred.succeed(item.done, undefined).pipe(Effect.asVoid);
+    if (filePath === undefined) return Effect.void;
+    // Evidence collection must never fail the action it records, and one bad
+    // write must not stop the writer.
+    return append(filePath, item.line).pipe(
+      Effect.provideService(FileSystem.FileSystem, fs),
+      Effect.exit,
+      Effect.asVoid,
+    );
+  };
+
+  yield* Effect.forkScoped(Effect.forever(Effect.flatMap(Queue.take(work), handle)));
+
+  const flush: Effect.Effect<void> = Effect.suspend(() => {
+    const done = Deferred.makeUnsafe<void>();
+    return Queue.offerUnsafe(work, { _tag: "flush", done }) ? Deferred.await(done) : Effect.void;
+  });
+  // Runs after the final flush: a late record is refused and a late flush or
+  // history read returns at once instead of waiting on a writer that is gone.
+  yield* Effect.addFinalizer(() => Queue.shutdown(work));
+  yield* Effect.addFinalizer(() => flush);
+
+  const record = (entry: Omit<ComputerAuditEntry, "ts">): Effect.Effect<void> =>
+    filePath === undefined
+      ? Effect.void
+      : Effect.flatMap(DateTime.now, (now) =>
+          Effect.sync(() => {
+            try {
+              // Re-project at the persistence boundary, even if a caller supplied
+              // an object carrying extra native fields despite its static type.
+              const { diagnostics: suppliedDiagnostics, ...metadata } = entry;
+              const diagnostics = parseCuaActionDiagnostics({ diagnostics: suppliedDiagnostics });
+              // Evidence is caller-shaped JSON; an unserializable entry is dropped below.
+              // @effect-diagnostics-next-line preferSchemaOverJson:off
+              const line = `${JSON.stringify({
+                ts: DateTime.formatIso(now),
+                ...metadata,
+                ...(diagnostics ? { diagnostics } : {}),
+              })}\n`;
+              if (Buffer.byteLength(line, "utf8") > COMPUTER_AUDIT_MAX_BYTES) return;
+              Queue.offerUnsafe(work, { _tag: "append", line });
+            } catch {
+              // A malformed evidence object must not make a delivered action fail.
+            }
+          }),
+        );
+
+  const readHistory = (input: ComputerGetAuditHistoryInput) =>
+    flush.pipe(
+      Effect.andThen(readComputerAuditHistory(filePath, input)),
+      Effect.provideService(FileSystem.FileSystem, fs),
+    );
+
+  return { record, flush, readHistory } satisfies ComputerAuditLog;
+});

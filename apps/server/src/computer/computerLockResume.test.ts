@@ -1,7 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
 
-import { CuaComputerBackend } from "./CuaComputerBackend.ts";
-import type { cuaRequest } from "@synara/shared/cuaDriverProtocol";
+import { makeCuaComputerBackend, type CuaComputerBackend } from "./CuaComputerBackend.ts";
+import { fakeCuaRequest } from "./testing/FakeCuaRequest.ts";
 
 const PNG_400x200 = (() => {
   const header = Buffer.alloc(24);
@@ -15,34 +21,33 @@ const BOUNDS = { x: 0, y: 0, width: 200, height: 100 };
 
 interface LockableControls {
   /** Bump the desktop generation, as a lock/resume does. */
-  lock: () => void;
+  readonly lock: () => void;
   /**
    * Run one OS interruption cycle: bump the generation AND the interruption
    * count, with `pauses` as the reasons still active at observation time —
    * `[]` models a lock that already released before the next reply.
    */
-  interrupt: (pauses: string[]) => void;
+  readonly interrupt: (pauses: string[]) => void;
   /** Lift every pause reason while keeping the interruption count. */
-  resumeDesktop: () => void;
+  readonly resumeDesktop: () => void;
   /** Hold click replies until released, to straddle the lock. */
-  holdClicks: () => void;
-  releaseClicks: () => void;
+  readonly holdClicks: () => void;
+  readonly releaseClicks: () => void;
 }
 
 /** Scripted Cua stub: no Fake — Fake enforces no epoch or grounding. */
-function lockableFixture(): {
-  backend: CuaComputerBackend;
-  calls: Array<{ name?: string }>;
-  controls: LockableControls;
-} {
+const lockableFixture = Effect.fn(function* () {
   const calls: Array<{ name?: string }> = [];
+  /** Completed the first time a click request reaches the host. */
+  const clickSeen = yield* Deferred.make<void>();
   let desktopEpoch = 0;
   let interruptions = 0;
   let pauses: string[] = [];
   let clickGate: Promise<void> | undefined;
   let releaseClick = () => {};
-  const request = vi.fn(async (_endpoint: string, req: Record<string, unknown>) => {
-    calls.push({ ...(typeof req.name === "string" ? { name: req.name } : {}) });
+  const request = async (_endpoint: string, raw: unknown) => {
+    const req = raw as Record<string, unknown>;
+    calls.push(typeof req.name === "string" ? { name: req.name } : {});
     const method = req.method as string | undefined;
     const state = () => ({
       // The simulated native host is macOS regardless of the CI runner OS.
@@ -120,6 +125,7 @@ function lockableFixture(): {
         },
       };
     if (req.name === "click") {
+      Deferred.doneUnsafe(clickSeen, Effect.void);
       if (clickGate) await clickGate;
       // The reply carries the generation current at delivery, not at dispatch.
       return {
@@ -135,138 +141,149 @@ function lockableFixture(): {
       };
     }
     return { ok: true, ...state(), result: { structuredContent: {} } };
-  }) as unknown as typeof cuaRequest;
-  const backend = new CuaComputerBackend({ endpoint: "/lock-resume", request });
-  return {
-    backend,
-    calls,
-    controls: {
-      lock: () => {
-        desktopEpoch += 1;
-      },
-      interrupt: (active: string[]) => {
-        desktopEpoch += 1;
-        interruptions += 1;
-        pauses = active;
-      },
-      resumeDesktop: () => {
-        pauses = [];
-      },
-      holdClicks: () => {
-        clickGate = new Promise<void>((resolve) => {
-          releaseClick = resolve;
-        });
-      },
-      releaseClicks: () => releaseClick(),
-    },
   };
-}
+  const backend = yield* makeCuaComputerBackend({
+    endpoint: "/lock-resume",
+    request: fakeCuaRequest(request),
+  });
+  const controls: LockableControls = {
+    lock: () => {
+      desktopEpoch += 1;
+    },
+    interrupt: (active) => {
+      desktopEpoch += 1;
+      interruptions += 1;
+      pauses = active;
+    },
+    resumeDesktop: () => {
+      pauses = [];
+    },
+    holdClicks: () => {
+      clickGate = new Promise<void>((resolve) => {
+        releaseClick = resolve;
+      });
+    },
+    releaseClicks: () => releaseClick(),
+  };
+  return { backend, calls, controls, clickSeen };
+});
 
 const clickCount = (calls: Array<{ name?: string }>) =>
   calls.filter((call) => call.name === "click").length;
 
-describe("computer lock/resume", () => {
-  it("refuses an in-flight reply that straddles a lock without replaying it", async () => {
-    const { backend, calls, controls } = lockableFixture();
-    try {
-      await backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
-      controls.holdClicks();
-      const inFlight = backend.click({ x: 50, y: 50 }, "cua:10:20");
-      await vi.waitFor(() => expect(calls.some((call) => call.name === "click")).toBe(true));
-      // The desktop locks and resumes while the click is in flight; a metadata
-      // read observes the new generation before the reply lands.
-      controls.lock();
-      await backend.checkInputReady("cua:10:20");
-      controls.releaseClicks();
-      await expect(inFlight).rejects.toMatchObject({
-        effect: "dispatched-unknown",
-        code: "stale_desktop_epoch",
-      });
-      // Uncertain delivery is never replayed automatically.
-      expect(clickCount(calls)).toBe(1);
-    } finally {
-      await backend.dispose();
-    }
-  });
+/** Every `desktop-interrupted` event, queued in order from the moment this returns. */
+const interruptionEvents = Effect.fn(function* (backend: CuaComputerBackend) {
+  const queue = yield* Queue.unbounded<{ type: string; pauses?: readonly string[] }>();
+  yield* backend.events.pipe(
+    Stream.runForEach((event) =>
+      event.type === "desktop-interrupted" ? Queue.offer(queue, event) : Effect.void,
+    ),
+    Effect.forkScoped({ startImmediately: true }),
+  );
+  return queue;
+});
 
-  it("requires a fresh observation after resume and never auto-resumes", async () => {
-    const { backend, calls, controls } = lockableFixture();
-    try {
-      await backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
-      controls.lock();
-      // The resume invalidates the pre-lock grounding: stale, refused, nothing sent.
-      await expect(backend.click({ x: 50, y: 50 }, "cua:10:20")).rejects.toMatchObject({
-        effect: "not-dispatched",
-        code: "stale_geometry",
-      });
-      expect(clickCount(calls)).toBe(0);
-      // Read-only observation stays available but heals nothing: the next input
-      // is still refused until a fresh observation re-grounds it.
-      await expect(backend.getState({ windowId: "cua:10:20" })).resolves.toMatchObject({
-        computerId: "desktop",
-      });
-      await expect(backend.click({ x: 50, y: 50 }, "cua:10:20")).rejects.toMatchObject({
-        code: "stale_geometry",
-      });
-      expect(clickCount(calls)).toBe(0);
-      // A fresh observation re-grounds, and only then does input flow again.
-      await backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
-      await expect(backend.click({ x: 50, y: 50 }, "cua:10:20")).resolves.toBeDefined();
-      expect(clickCount(calls)).toBe(1);
-    } finally {
-      await backend.dispose();
-    }
-  });
+it.layer(NodeServices.layer)("computer lock/resume", (it) => {
+  it.effect("refuses an in-flight reply that straddles a lock without replaying it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { backend, calls, controls, clickSeen } = yield* lockableFixture();
+        yield* backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+        controls.holdClicks();
+        const inFlight = yield* Effect.forkChild(backend.click({ x: 50, y: 50 }, "cua:10:20"));
+        yield* Deferred.await(clickSeen);
+        expect(calls.some((call) => call.name === "click")).toBe(true);
+        // The desktop locks and resumes while the click is in flight; a metadata
+        // read observes the new generation before the reply lands.
+        controls.lock();
+        yield* backend.checkInputReady("cua:10:20");
+        controls.releaseClicks();
+        expect(yield* Effect.flip(Fiber.join(inFlight))).toMatchObject({
+          effect: "dispatched-unknown",
+          code: "stale_desktop_epoch",
+        });
+        // Uncertain delivery is never replayed automatically.
+        expect(clickCount(calls)).toBe(1);
+      }),
+    ),
+  );
 
-  it("announces an interruption cycle once, even when it ended between replies", async () => {
-    const { backend, controls } = lockableFixture();
-    const events: Array<{ type: string; pauses?: readonly string[] }> = [];
-    const unsubscribe = backend.onEvent((event) => {
-      if (event.type === "desktop-interrupted") events.push(event);
-    });
-    try {
-      await backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
-      // The first observed count only sets the baseline: consent cannot
-      // predate first contact, so nothing is announced.
-      expect(events).toEqual([]);
-      // A lock that engaged and released entirely between two replies still
-      // advanced the count — the cycle is reported exactly once, with the
-      // pauses already empty.
-      controls.interrupt([]);
-      await backend.checkInputReady("cua:10:20");
-      expect(events).toEqual([{ type: "desktop-interrupted", pauses: [] }]);
-      // A steady count reports nothing further.
-      await backend.checkInputReady("cua:10:20");
-      expect(events).toHaveLength(1);
-    } finally {
-      unsubscribe();
-      await backend.dispose();
-    }
-  });
+  it.effect("requires a fresh observation after resume and never auto-resumes", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { backend, calls, controls } = yield* lockableFixture();
+        yield* backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+        controls.lock();
+        // The resume invalidates the pre-lock grounding: stale, refused, nothing sent.
+        expect(yield* Effect.flip(backend.click({ x: 50, y: 50 }, "cua:10:20"))).toMatchObject({
+          effect: "not-dispatched",
+          code: "stale_geometry",
+        });
+        expect(clickCount(calls)).toBe(0);
+        // Read-only observation stays available but heals nothing: the next input
+        // is still refused until a fresh observation re-grounds it.
+        expect(yield* backend.getState({ windowId: "cua:10:20" })).toMatchObject({
+          computerId: "desktop",
+        });
+        expect(yield* Effect.flip(backend.click({ x: 50, y: 50 }, "cua:10:20"))).toMatchObject({
+          code: "stale_geometry",
+        });
+        expect(clickCount(calls)).toBe(0);
+        // A fresh observation re-grounds, and only then does input flow again.
+        yield* backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+        expect(yield* backend.click({ x: 50, y: 50 }, "cua:10:20")).toBeDefined();
+        expect(clickCount(calls)).toBe(1);
+      }),
+    ),
+  );
 
-  it("reports a still-active pause on the refusal reply it produces", async () => {
-    const { backend, controls } = lockableFixture();
-    const events: Array<{ type: string; pauses?: readonly string[] }> = [];
-    const unsubscribe = backend.onEvent((event) => {
-      if (event.type === "desktop-interrupted") events.push(event);
-    });
-    try {
-      await backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
-      controls.interrupt(["screen-lock"]);
-      // New admissions refuse while the desktop is locked, and the refusal
-      // reply itself is what carries the interruption news.
-      await expect(backend.checkInputReady("cua:10:20")).rejects.toMatchObject({
-        effect: "not-dispatched",
-        code: "computer_input_paused",
-      });
-      expect(events).toEqual([{ type: "desktop-interrupted", pauses: ["screen-lock"] }]);
-      // The pause lifting changes no count — resume is not an interruption.
-      controls.resumeDesktop();
-      await backend.checkInputReady("cua:10:20");
-      expect(events).toHaveLength(1);
-    } finally {
-      unsubscribe();
-      await backend.dispose();
-    }
-  });
+  it.effect("announces an interruption cycle once, even when it ended between replies", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { backend, controls } = yield* lockableFixture();
+        const events = yield* interruptionEvents(backend);
+        yield* backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+        // The first observed count only sets the baseline: consent cannot
+        // predate first contact, so nothing is announced.
+        yield* Effect.yieldNow;
+        expect(yield* Queue.size(events)).toBe(0);
+        // A lock that engaged and released entirely between two replies still
+        // advanced the count — the cycle is reported exactly once, with the
+        // pauses already empty.
+        controls.interrupt([]);
+        yield* backend.checkInputReady("cua:10:20");
+        expect(yield* Queue.take(events)).toEqual({ type: "desktop-interrupted", pauses: [] });
+        // A steady count reports nothing further.
+        yield* backend.checkInputReady("cua:10:20");
+        yield* Effect.yieldNow;
+        expect(yield* Queue.size(events)).toBe(0);
+      }),
+    ),
+  );
+
+  it.effect("reports a still-active pause on the refusal reply it produces", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { backend, controls } = yield* lockableFixture();
+        const events = yield* interruptionEvents(backend);
+        yield* backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+        controls.interrupt(["screen-lock"]);
+        // New admissions refuse while the desktop is locked, and the refusal
+        // reply itself is what carries the interruption news.
+        expect(yield* Effect.flip(backend.checkInputReady("cua:10:20"))).toMatchObject({
+          effect: "not-dispatched",
+          code: "computer_input_paused",
+        });
+        expect(yield* Queue.take(events)).toEqual({
+          type: "desktop-interrupted",
+          pauses: ["screen-lock"],
+        });
+        // The pause lifting changes no count — resume is not an interruption.
+        controls.resumeDesktop();
+        yield* backend.checkInputReady("cua:10:20");
+        yield* Effect.yieldNow;
+        expect(yield* Queue.size(events)).toBe(0);
+      }),
+    ),
+  );
 });

@@ -1,15 +1,59 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
+import {
+  projectScriptCwd,
+  projectScriptRuntimeEnv,
+  setupProjectScript,
+} from "@spiritdevs/shared/projectScripts";
 
 import {
+  buildProjectScript,
   commandForProjectScript,
   nextProjectScriptId,
   primaryProjectScript,
-  projectScriptRuntimeEnv,
   projectScriptIdFromCommand,
-  setupProjectScript,
 } from "./projectScripts";
 
 describe("projectScripts helpers", () => {
+  it("builds scripts with preview settings", () => {
+    expect(
+      buildProjectScript("dev", {
+        name: "Dev server",
+        command: "pnpm dev",
+        icon: "debug",
+        runOnWorktreeCreate: false,
+        previewUrl: "http://localhost:5733",
+        autoOpenPreview: true,
+      }),
+    ).toEqual({
+      id: "dev",
+      name: "Dev server",
+      command: "pnpm dev",
+      icon: "debug",
+      runOnWorktreeCreate: false,
+      previewUrl: "http://localhost:5733",
+      autoOpenPreview: true,
+    });
+  });
+
+  it("omits preview settings when no preview URL is configured", () => {
+    expect(
+      buildProjectScript("test", {
+        name: "Test",
+        command: "pnpm test",
+        icon: "test",
+        runOnWorktreeCreate: false,
+        previewUrl: null,
+        autoOpenPreview: false,
+      }),
+    ).toEqual({
+      id: "test",
+      name: "Test",
+      command: "pnpm test",
+      icon: "test",
+      runOnWorktreeCreate: false,
+    });
+  });
+
   it("builds and parses script run commands", () => {
     const command = commandForProjectScript("lint");
     expect(command).toBe("script.lint.run");
@@ -52,8 +96,8 @@ describe("projectScripts helpers", () => {
     });
 
     expect(env).toMatchObject({
-      SYNARA_PROJECT_ROOT: "/repo",
-      SYNARA_WORKTREE_PATH: "/repo/worktree-a",
+      PATHWAY_PROJECT_ROOT: "/repo",
+      PATHWAY_WORKTREE_PATH: "/repo/worktree-a",
     });
   });
 
@@ -61,13 +105,28 @@ describe("projectScripts helpers", () => {
     const env = projectScriptRuntimeEnv({
       project: { cwd: "/repo" },
       extraEnv: {
-        SYNARA_PROJECT_ROOT: "/custom-root",
+        PATHWAY_PROJECT_ROOT: "/custom-root",
         CUSTOM_FLAG: "1",
       },
     });
 
-    expect(env.SYNARA_PROJECT_ROOT).toBe("/custom-root");
+    expect(env.PATHWAY_PROJECT_ROOT).toBe("/custom-root");
     expect(env.CUSTOM_FLAG).toBe("1");
-    expect(env.SYNARA_WORKTREE_PATH).toBeUndefined();
+    expect(env.PATHWAY_WORKTREE_PATH).toBeUndefined();
+  });
+
+  it("prefers the worktree path for script cwd resolution", () => {
+    expect(
+      projectScriptCwd({
+        project: { cwd: "/repo" },
+        worktreePath: "/repo/worktree-a",
+      }),
+    ).toBe("/repo/worktree-a");
+    expect(
+      projectScriptCwd({
+        project: { cwd: "/repo" },
+        worktreePath: null,
+      }),
+    ).toBe("/repo");
   });
 });

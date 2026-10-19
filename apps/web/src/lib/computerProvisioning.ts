@@ -1,62 +1,59 @@
-// FILE: computerProvisioning.ts
-// Purpose: One vocabulary for "set up computer control" — the toasts the chat card
-//          raises, the inline note the settings panel renders, and the rule for what
-//          counts as done. Pure so both surfaces can be pinned by tests.
-// Layer: Web UI logic
-// Exports: computerProvisionOutcome, computerProvisionStartToast, computerProvisionResultToast,
-//          computerProvisionNote
-//
-// The card and the panel used to each own a private copy of this flow, and they
-// said different things about the same server call: one raised a toast the other
-// did not, one had no pending state, and the two could fire the underlying
-// provision concurrently. The state machine lives in `useProvisionComputer`; the
-// words live here.
+// One vocabulary for "set up computer control": the toasts the chat card raises,
+// the inline note the settings panel renders, and the rule for what counts as
+// done. Pure so every surface can be pinned by tests. The state machine lives in
+// `useProvisionComputer`; the words live here.
 
-import type {
-  ComputerPermission,
-  ComputerProvisionResult,
-  DesktopAppSnapPermissionKind,
-  DesktopAppSnapState,
-  DesktopBridge,
-} from "@synara/contracts";
 import {
-  COMPUTER_PERMISSION_KINDS,
+  type ComputerAvailability,
+  type ComputerHealth,
+  type ComputerPermission,
+  type ComputerProvisionResult,
+  type ComputerStatusResult,
+  type DesktopComputerBridge,
+  type DesktopComputerHelperState,
+  type DesktopComputerPermissionKind,
+} from "@spiritdevs/contracts";
+import {
+  COMPUTER_PERMISSIONS,
   listComputerPermissions,
-  missingComputerAppSnapPermissions,
-} from "@synara/shared/computerGrants";
+  missingComputerHelperPermissions,
+} from "@spiritdevs/shared/computerGrants";
 
-import { computerStatusNeedsSetup } from "~/components/ComputerPanel.logic";
-import { isLoopbackHostname } from "~/components/Sidebar.logic";
+import {
+  COMPUTER_RECONNECTING_NOTE,
+  computerBackendIsIdle,
+} from "../components/computer/ComputerPanel.logic";
 
-/** The desktop bridge identifies its live server; remote servers own their own grants. */
-export function readLocalComputerPermissionBridge(): DesktopBridge["appSnap"] | null {
-  // An injected NativeApi can target a different host than the desktop bridge.
-  if (globalThis.window?.nativeApi) return null;
-  const bridge = globalThis.window?.desktopBridge;
-  if (!bridge?.appSnap) return null;
-  try {
-    const endpoint = bridge.getWsUrl?.();
-    if (!endpoint) return null;
-    const url = new URL(endpoint);
-    return (url.protocol === "ws:" || url.protocol === "wss:") && isLoopbackHostname(url.hostname)
-      ? bridge.appSnap
-      : null;
-  } catch {
-    return null;
-  }
+/** The grant set the native helper is asked about for Computer control. */
+export const COMPUTER_PERMISSION_KINDS: readonly DesktopComputerPermissionKind[] =
+  COMPUTER_PERMISSIONS;
+
+/**
+ * The desktop app's native permission surface, when it can speak for the
+ * environment's host. Grants belong to the machine running the server, so only
+ * the desktop app's own primary environment qualifies; a remote environment,
+ * an SSH or WSL backend, or a plain browser sets its grants up on its host.
+ */
+export function readLocalComputerPermissionBridge(input: {
+  readonly environmentIsDesktopPrimary: boolean;
+}): DesktopComputerBridge | null {
+  if (!input.environmentIsDesktopPrimary) return null;
+  return globalThis.window?.desktopBridge?.computer ?? null;
 }
 
-export function computerPermissionSetupSupported(state: DesktopAppSnapState | null): boolean {
-  return state?.supported === true && state.platform === "macos";
+export function computerPermissionSetupSupported(
+  state: DesktopComputerHelperState | null,
+): boolean {
+  return state?.supported === true;
 }
 
 /** One fresh, explicit activation check; ordinary sends do not call this. */
 export async function prepareComputerPermissionGuide(input: {
   readonly getPermissionState?: (
-    permissions: readonly DesktopAppSnapPermissionKind[],
-  ) => Promise<DesktopAppSnapState>;
+    permissions: readonly DesktopComputerPermissionKind[],
+  ) => Promise<DesktopComputerHelperState>;
   readonly startPermissionSetup?: (
-    permissions: readonly DesktopAppSnapPermissionKind[],
+    permissions: readonly DesktopComputerPermissionKind[],
   ) => Promise<unknown>;
   readonly isCurrent: () => boolean;
 }): Promise<boolean> {
@@ -65,9 +62,136 @@ export async function prepareComputerPermissionGuide(input: {
   const state = await input.getPermissionState(COMPUTER_PERMISSION_KINDS);
   if (!input.isCurrent()) return false;
   if (!computerPermissionSetupSupported(state)) return true;
-  if (missingComputerAppSnapPermissions(state).length === 0) return true;
+  if (missingComputerHelperPermissions(state).length === 0) return true;
   await input.startPermissionSetup(COMPUTER_PERMISSION_KINDS);
   return false; // Preserve the draft; granting access never auto-sends the task.
+}
+
+export type ComputerAvailabilityView = {
+  readonly kind: "checking" | "ready" | "blocked";
+  readonly title: string;
+  readonly description: string;
+};
+
+/**
+ * `grantsConfirmed` is fresh evidence from the OS itself (the desktop app's
+ * native grant check) that every permission is granted. The server cannot know
+ * that before its backend starts, which happens only when something uses the
+ * desktop, so without it an idle backend stays "not checked".
+ */
+export function resolveComputerAvailabilityView(
+  availability: ComputerAvailability | undefined,
+  health?: ComputerHealth,
+  grantsConfirmed = false,
+): ComputerAvailabilityView {
+  // A pending retry is not a dead desktop: one of the two states ends by itself.
+  if (health?.status === "reconnecting") {
+    return {
+      kind: "checking",
+      title: "Reconnecting to the desktop",
+      description: health.lastFailure ? health.lastFailure.message : COMPUTER_RECONNECTING_NOTE,
+    };
+  }
+  if (!availability) {
+    return {
+      kind: "checking",
+      title: "Checking computer availability",
+      description: "Waiting for the desktop backend.",
+    };
+  }
+  if (availability.kind === "available") {
+    if (grantsConfirmed && computerBackendIsIdle(health)) {
+      return {
+        kind: "ready",
+        title: "All permissions granted",
+        description: "Pathway connects to the desktop the next time an agent uses it.",
+      };
+    }
+    if (health && health.status !== "connected") {
+      return {
+        kind: "checking",
+        title: "Computer access has not been checked",
+        description: "Choose Set up to check that Pathway can see and control the desktop.",
+      };
+    }
+    if (health?.captureAvailable === false) {
+      return {
+        kind: "blocked",
+        title: "Screen capture is unavailable",
+        description:
+          "Desktop input is connected, but Pathway cannot take screenshots. Choose Set up to check access.",
+      };
+    }
+    return {
+      kind: "ready",
+      title: "Connected to the desktop",
+      description: "Pathway can see and control the desktop through its computer tools.",
+    };
+  }
+  if (availability.kind === "checking") {
+    return {
+      kind: "checking",
+      title: "Checking computer availability",
+      description: availability.message,
+    };
+  }
+  if (availability.kind === "unsupported-platform") {
+    return {
+      kind: "blocked",
+      title: "Computer control is unavailable",
+      description: `This server is running on ${availability.platform}. Computer control needs macOS, or a Wayland desktop on Linux — KWin or Hyprland, or Pathway's own nested desktop.`,
+    };
+  }
+  // A withheld grant is the one blocked state with a name and a fix, so the
+  // title says which permission.
+  if (availability.kind === "permission-required") {
+    return {
+      kind: "blocked",
+      title: `Computer control needs ${listComputerPermissions(availability.missing)}`,
+      description: availability.message,
+    };
+  }
+  return {
+    kind: "blocked",
+    title: "Computer control is unavailable",
+    description: availability.message,
+  };
+}
+
+export type ComputerSetupProbe = Pick<
+  ComputerStatusResult,
+  "availability" | "health" | "capabilities" | "provisionable"
+>;
+
+/**
+ * Whether this desktop still needs something installed or granted: the test
+ * behind the settings panel's "Set up" button and the chat setup card's "did
+ * that work?" answer, which must agree. Keyed on live state, never on the
+ * static capability flags alone.
+ */
+export function computerStatusNeedsSetup(
+  status: ComputerSetupProbe | undefined,
+  grantsConfirmed = false,
+): boolean {
+  if (!status) return false;
+  // Nothing is known yet, so nothing can be owed; the answer arrives by itself.
+  if (
+    status.availability.kind === "unsupported-platform" ||
+    status.availability.kind === "checking"
+  ) {
+    return false;
+  }
+  // An idle backend's placeholder health proves nothing either way; only the
+  // OS's own answer that every grant is in place lets it skip Set up.
+  const idle = grantsConfirmed && computerBackendIsIdle(status.health);
+  return (
+    (status.provisionable === true && status.health.status !== "connected" && !idle) ||
+    status.availability.kind === "backend-unavailable" ||
+    status.availability.kind === "permission-required" ||
+    (status.health.captureAvailable === false && !idle) ||
+    !status.capabilities.input ||
+    !status.capabilities.capture
+  );
 }
 
 /** What the server's answer means for the user, once. */
@@ -90,14 +214,9 @@ export interface ComputerProvisionToast {
 }
 
 /**
- * Raised as the call starts, because the call's visible effect is a macOS
- * dialog appearing over Synara and the user needs to know Synara asked for it.
- *
- * The grants are named through `listComputerPermissions` rather than written
- * out, so this cannot drift out of the one fixed ordering every other surface
- * uses — a hand-written "Screen Recording and Accessibility" here against
- * "Accessibility and Screen Recording" in the card is exactly the divergence
- * that module exists to prevent.
+ * Raised as the call starts, because its visible effect is a macOS dialog over
+ * Pathway and the user needs to know Pathway asked for it. Grants are named via
+ * `listComputerPermissions` so the ordering matches every other surface.
  */
 export function computerProvisionStartToast(
   missing: readonly ComputerPermission[] = [],
@@ -108,8 +227,8 @@ export function computerProvisionStartToast(
     title: "Setting up computer control",
     description:
       labels.length > 0
-        ? `macOS may ask to allow ${labels} for Synara.`
-        : "Setting up the desktop may require installing a helper or allowing the permissions Synara needs.",
+        ? `macOS may ask to allow ${labels} for Pathway.`
+        : "Setting up the desktop may require installing a helper or allowing the permissions Pathway needs.",
   };
 }
 
@@ -141,7 +260,7 @@ export function provisionErrorMessage(error: unknown): string {
 }
 
 /**
- * The settings panel's inline status line — the same three states the toasts
+ * The settings panel's inline status line: the same three states the toasts
  * describe, for a surface that has room to keep them on screen.
  */
 export function computerProvisionNote(state: {
@@ -152,7 +271,7 @@ export function computerProvisionNote(state: {
 }): string | undefined {
   if (state.isPending) {
     if (state.missing?.length) {
-      return `Checking ${listComputerPermissions(state.missing)}. Allow access in the macOS prompt or System Settings, then return to Synara.`;
+      return `Checking ${listComputerPermissions(state.missing)}. Allow access in the macOS prompt or System Settings, then return to Pathway.`;
     }
     return (
       "Setting up the agent's desktop. This installs or builds whatever this machine still needs, " +

@@ -1,16 +1,79 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import {
+  attachmentMetadataMatchesStoredPath,
   createAttachmentId,
+  createIssueAttachmentId,
+  attachmentRelativePath,
+  parseIssueSegmentFromAttachmentId,
+  createDeterministicAttachmentId,
+  planAttachmentClaim,
   parseThreadSegmentFromAttachmentId,
   resolveAttachmentPathById,
 } from "./attachmentStore.ts";
 
 describe("attachmentStore", () => {
+  it("preserves safe file extensions and falls back for unknown ones", () => {
+    const base = {
+      type: "file" as const,
+      id: "thread-1-00000000-0000-4000-8000-000000000001",
+      mimeType: "application/octet-stream",
+      sizeBytes: 2,
+    };
+    expect(attachmentRelativePath({ ...base, name: "data.json" })).toMatch(/\.json$/);
+    expect(attachmentRelativePath({ ...base, name: "page.html" })).toMatch(/\.html$/);
+    expect(attachmentRelativePath({ ...base, name: "payload.exe" })).toMatch(/\.bin$/);
+  });
+
+  it("requires pending metadata to resolve to the stored extension", () => {
+    const base = {
+      type: "file" as const,
+      id: "pending-00000000-0000-4000-8000-000000000001-json",
+      name: "data.json",
+      mimeType: "application/json",
+      sizeBytes: 2,
+    };
+
+    expect(
+      attachmentMetadataMatchesStoredPath({
+        attachment: base,
+        storedPath: "/attachments/pending-upload.json",
+      }),
+    ).toBe(true);
+    expect(
+      attachmentMetadataMatchesStoredPath({
+        attachment: { ...base, name: "report.pdf", mimeType: "application/pdf" },
+        storedPath: "/attachments/pending-upload.json",
+      }),
+    ).toBe(false);
+  });
+
+  it("derives stable attachment ids for idempotent message retries", () => {
+    const first = createDeterministicAttachmentId("thread-1", "message-1:0");
+    const retry = createDeterministicAttachmentId("thread-1", "message-1:0");
+    const next = createDeterministicAttachmentId("thread-1", "message-1:1");
+
+    expect(first).toBe(retry);
+    expect(next).not.toBe(first);
+    expect(first && parseThreadSegmentFromAttachmentId(first)).toBe("thread-1");
+  });
+
+  it("keeps deterministic ids distinct when sanitized thread segments collide", () => {
+    const dotted = createDeterministicAttachmentId("thread.a", "message-1:0");
+    const dashed = createDeterministicAttachmentId("thread-a", "message-1:0");
+
+    expect(dotted).toBeTruthy();
+    expect(dashed).toBeTruthy();
+    expect(dotted).not.toBe(dashed);
+    expect(dotted && parseThreadSegmentFromAttachmentId(dotted)).toBe("thread-a");
+    expect(dashed && parseThreadSegmentFromAttachmentId(dashed)).toBe("thread-a");
+  });
+
   it("sanitizes thread ids when creating attachment ids", () => {
     const attachmentId = createAttachmentId("thread.folder/unsafe space");
     expect(attachmentId).toBeTruthy();
@@ -43,25 +106,75 @@ describe("attachmentStore", () => {
     expect(parseThreadSegmentFromAttachmentId(attachmentId)).toBe("thread-foo");
   });
 
+  it("keeps issue attachment ids out of the thread namespace", () => {
+    const attachmentId = createIssueAttachmentId("00000000-0000-4000-8000-000000000001");
+    expect(attachmentId).toBeTruthy();
+    if (!attachmentId) {
+      return;
+    }
+
+    expect(parseIssueSegmentFromAttachmentId(attachmentId)).toBe(
+      "00000000-0000-4000-8000-000000000001",
+    );
+    // The load-bearing half: thread attachment cleanup sweeps by thread segment, and an issue
+    // attachment that parsed as one would be deleted the next time that thread was pruned.
+    expect(parseThreadSegmentFromAttachmentId(attachmentId)).toBeNull();
+  });
+
+  it("keeps thread attachment ids out of the issue namespace", () => {
+    const threadId = "thread-1";
+    const attachmentId = createAttachmentId(threadId);
+    expect(attachmentId).toBeTruthy();
+    if (!attachmentId) {
+      return;
+    }
+
+    expect(parseIssueSegmentFromAttachmentId(attachmentId)).toBeNull();
+    expect(parseThreadSegmentFromAttachmentId(attachmentId)).toBe("thread-1");
+    // A thread cannot borrow the reserved prefix, in either direction.
+    expect(createAttachmentId("iss_borrowed")).toBeNull();
+    expect(
+      parseIssueSegmentFromAttachmentId("iss_issue-1-00000000-0000-4000-8000-000000000002"),
+    ).toBe("issue-1");
+  });
+
   it("resolves attachment path by id using the extension that exists on disk", () => {
-    const attachmentsDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-attachment-store-"));
+    const attachmentsDir = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "pathway-attachment-store-"),
+    );
     try {
       const attachmentId = "thread-1-attachment";
-      const pngPath = path.join(attachmentsDir, `${attachmentId}.png`);
-      fs.writeFileSync(pngPath, Buffer.from("hello"));
+      const pngPath = NodePath.join(attachmentsDir, `${attachmentId}.png`);
+      NodeFS.writeFileSync(pngPath, Buffer.from("hello"));
 
       const resolved = resolveAttachmentPathById({
         attachmentsDir,
         attachmentId,
       });
       expect(resolved).toBe(pngPath);
+
+      const videoAttachmentId = "iss_issue-1-00000000-0000-4000-8000-000000000001";
+      const webmPath = NodePath.join(attachmentsDir, `${videoAttachmentId}.webm`);
+      NodeFS.writeFileSync(webmPath, Buffer.from("video"));
+      expect(resolveAttachmentPathById({ attachmentsDir, attachmentId: videoAttachmentId })).toBe(
+        webmPath,
+      );
+
+      const fileAttachmentId = "thread-1-file-attachment";
+      const jsonPath = NodePath.join(attachmentsDir, `${fileAttachmentId}.json`);
+      NodeFS.writeFileSync(jsonPath, Buffer.from("{}"));
+      expect(resolveAttachmentPathById({ attachmentsDir, attachmentId: fileAttachmentId })).toBe(
+        jsonPath,
+      );
     } finally {
-      fs.rmSync(attachmentsDir, { recursive: true, force: true });
+      NodeFS.rmSync(attachmentsDir, { recursive: true, force: true });
     }
   });
 
   it("returns null when no attachment file exists for the id", () => {
-    const attachmentsDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-attachment-store-"));
+    const attachmentsDir = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "pathway-attachment-store-"),
+    );
     try {
       const resolved = resolveAttachmentPathById({
         attachmentsDir,
@@ -69,7 +182,36 @@ describe("attachmentStore", () => {
       });
       expect(resolved).toBeNull();
     } finally {
-      fs.rmSync(attachmentsDir, { recursive: true, force: true });
+      NodeFS.rmSync(attachmentsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("claims pending uploads to a stable thread id across retries", () => {
+    const attachmentsDir = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "pathway-attachment-claim-"),
+    );
+    try {
+      const pendingId = "pending-00000000-0000-4000-8000-000000000001-json";
+      NodeFS.writeFileSync(NodePath.join(attachmentsDir, `${pendingId}.json`), Buffer.from("{}"));
+      const first = planAttachmentClaim({
+        attachmentsDir,
+        threadId: "thread-1",
+        attachmentId: pendingId,
+      });
+      const retry = planAttachmentClaim({
+        attachmentsDir,
+        threadId: "thread-1",
+        attachmentId: pendingId,
+      });
+      expect(first.ok).toBe(true);
+      expect(retry.ok).toBe(true);
+      if (first.ok && retry.ok) {
+        expect(first.finalId).toBe(retry.finalId);
+        expect(first.finalId).toBe("thread-1-00000000-0000-4000-8000-000000000001-json");
+        expect(first.finalPath).toBe(retry.finalPath);
+      }
+    } finally {
+      NodeFS.rmSync(attachmentsDir, { recursive: true, force: true });
     }
   });
 });

@@ -1,182 +1,15 @@
-// FILE: diffRendering.ts
-// Purpose: Shared helpers for rendering, caching, copying, and summarizing git patches.
-// Layer: Web diff utilities
-// Depends on: @pierre/diffs patch parsing
-
-import { parsePatchFiles } from "@pierre/diffs";
-import type { FileDiffMetadata } from "@pierre/diffs/react";
-
-export type FileDiffStat = { additions: number; deletions: number };
+import { parsePatchFiles } from "@pierre/diffs/utils/parsePatchFiles";
+import type { FileDiffMetadata } from "@pierre/diffs/types";
 
 export const DIFF_THEME_NAMES = {
-  // Keep diff syntax highlighting on the bundled GitHub themes for better parity with git tooling.
-  light: "github-light",
-  dark: "github-dark",
+  light: "pierre-light",
+  dark: "pierre-dark",
 } as const;
 
 export type DiffThemeName = (typeof DIFF_THEME_NAMES)[keyof typeof DIFF_THEME_NAMES];
 
 export function resolveDiffThemeName(theme: "light" | "dark"): DiffThemeName {
   return theme === "dark" ? DIFF_THEME_NAMES.dark : DIFF_THEME_NAMES.light;
-}
-
-// The `unsafeCSS` payload is identical per theme and only ever has two values,
-// so cache it instead of rebuilding the (large) template string per file/render.
-const diffPanelUnsafeCssCache = new Map<"light" | "dark", string>();
-
-// Themed CSS injected into the @pierre/diffs shadow markup so the diff viewer
-// adopts the app's chat code font and themed addition/deletion backgrounds.
-// Shared by every diff surface (turn diffs, repo diffs, the git pane) so they
-// render consistently — previously the git pane omitted this entirely.
-export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
-  const cached = diffPanelUnsafeCssCache.get(theme);
-  if (cached) {
-    return cached;
-  }
-  const css = `
-:host {
-  /* Route diff hunks through the chat code font; keep file headers on the UI stack. */
-  --diffs-font-family: var(--font-chat-code-family);
-  --diffs-header-font-family: var(--font-ui-family);
-  /* Honor the user-chosen chat code font size from settings instead of the library default (13px). */
-  --diffs-font-size: var(--app-font-size-chat-code, 11px);
-  /* Match the app chrome — set on :host so hunk rows/gutters/separators inherit. */
-  --diffs-bg: var(--background) !important;
-  --diffs-light-bg: var(--background) !important;
-  --diffs-dark-bg: var(--background) !important;
-  --diffs-token-light-bg: transparent;
-  --diffs-token-dark-bg: transparent;
-
-  --diffs-bg-context-override: var(--background) !important;
-  --diffs-bg-context-number-override: var(--background) !important;
-  --diffs-bg-hover-override: color-mix(in srgb, var(--background) 96%, var(--foreground)) !important;
-  --diffs-bg-separator-override: color-mix(in srgb, var(--background) 95%, var(--foreground)) !important;
-  --diffs-bg-buffer-override: color-mix(in srgb, var(--background) 92%, var(--foreground)) !important;
-
-  --diffs-bg-addition-override: color-mix(in srgb, var(--background) 92%, var(--success)) !important;
-  --diffs-bg-addition-number-override: color-mix(in srgb, var(--background) 88%, var(--success)) !important;
-  --diffs-bg-addition-hover-override: color-mix(in srgb, var(--background) 85%, var(--success)) !important;
-  --diffs-bg-addition-emphasis-override: color-mix(in srgb, var(--background) 80%, var(--success)) !important;
-
-  --diffs-bg-deletion-override: color-mix(in srgb, var(--background) 92%, var(--destructive)) !important;
-  --diffs-bg-deletion-number-override: color-mix(in srgb, var(--background) 88%, var(--destructive)) !important;
-  --diffs-bg-deletion-hover-override: color-mix(in srgb, var(--background) 85%, var(--destructive)) !important;
-  --diffs-bg-deletion-emphasis-override: color-mix(
-    in srgb,
-    var(--background) 80%,
-    var(--destructive)
-  ) !important;
-
-  /* Force the derived tokens Pierre reads for hunk rows (not only the *-override knobs).
-     Do not pin --diffs-line-bg on :host — addition/deletion rows set that per line-type. */
-  --diffs-bg-context: var(--background) !important;
-  --diffs-bg-context-number: var(--background) !important;
-  --diffs-bg-buffer: color-mix(in srgb, var(--background) 92%, var(--foreground)) !important;
-  --diffs-bg-separator: color-mix(in srgb, var(--background) 95%, var(--foreground)) !important;
-  --diffs-bg-addition: color-mix(in srgb, var(--background) 92%, var(--success)) !important;
-  --diffs-bg-addition-number: color-mix(in srgb, var(--background) 88%, var(--success)) !important;
-  --diffs-bg-addition-hover: color-mix(in srgb, var(--background) 85%, var(--success)) !important;
-  --diffs-bg-addition-emphasis: color-mix(in srgb, var(--background) 80%, var(--success)) !important;
-  --diffs-bg-deletion: color-mix(in srgb, var(--background) 92%, var(--destructive)) !important;
-  --diffs-bg-deletion-number: color-mix(in srgb, var(--background) 88%, var(--destructive)) !important;
-  --diffs-bg-deletion-hover: color-mix(in srgb, var(--background) 85%, var(--destructive)) !important;
-  --diffs-bg-deletion-emphasis: color-mix(in srgb, var(--background) 80%, var(--destructive)) !important;
-
-  font-family: var(--font-chat-code-family) !important;
-  font-size: var(--app-font-size-chat-code, 11px) !important;
-  background-color: var(--background) !important;
-}
-
-[data-diffs-header],
-[data-diff],
-[data-file],
-[data-error-wrapper],
-[data-virtualizer-buffer] {
-  --diffs-font-size: var(--app-font-size-chat-code, 11px) !important;
-  --diffs-bg: var(--background) !important;
-  --diffs-light-bg: var(--background) !important;
-  --diffs-dark-bg: var(--background) !important;
-  --diffs-bg-context: var(--background) !important;
-  --diffs-bg-context-number: var(--background) !important;
-  background-color: var(--background) !important;
-}
-
-/* Unmodified hunk chrome — pin to theme background without wiping +/- tints. */
-[data-line-type="context"],
-[data-line-type="context-expanded"],
-[data-column-number]:where([data-line-type="context"], [data-line-type="context-expanded"]),
-[data-gutter-buffer="buffer"],
-[data-separator],
-[data-separator-wrapper],
-[data-separator-content] {
-  --diffs-line-bg: var(--background) !important;
-  background-color: var(--background) !important;
-}
-
-[data-diff],
-[data-file],
-[data-error-wrapper],
-[data-virtualizer-buffer] {
-  /* Re-assert the code font inside diff hunks because these nodes live in shadow-rooted markup. */
-  --diffs-font-family: var(--font-chat-code-family) !important;
-  font-family: var(--font-chat-code-family) !important;
-  font-size: var(--app-font-size-chat-code, 11px) !important;
-}
-
-[data-file-info] {
-  font-family: var(--font-ui-family) !important;
-  font-size: var(--app-font-size-ui, 12px) !important;
-  background-color: var(--background) !important;
-  border-block-color: var(--border) !important;
-  color: var(--foreground) !important;
-}
-
-/* Sticky header chrome. Layout for the custom slot only — do not zero-out
-   Pierre's default header padding (that clips path/+N text). */
-[data-diffs-header] {
-  --diffs-header-font-family: var(--font-ui-family) !important;
-  font-family: var(--font-ui-family) !important;
-  font-size: var(--app-font-size-ui, 12px) !important;
-  position: sticky !important;
-  top: 0;
-  z-index: 4;
-  background-color: var(--background) !important;
-  border-bottom: 1px solid var(--border) !important;
-  cursor: pointer;
-}
-
-[data-diffs-header="custom"] {
-  display: flex !important;
-  align-items: center !important;
-  min-height: 0 !important;
-  padding: 0 !important;
-}
-
-::slotted([slot="header-custom"]) {
-  display: flex !important;
-  width: 100% !important;
-  min-width: 0 !important;
-  flex: 1 1 auto !important;
-}
-
-/* Give gutters a little air so line numbers aren't clipped by the card edge. */
-[data-column-number] {
-  padding-left: 1.25ch !important;
-}
-
-/* Every number rendered inside a diff reads in the UI font (with tabular figures
-   so columns still line up), not the mono code font: gutter line numbers and the
-   "N unmodified lines" separators. The library pins these to --diffs-font-family
-   from the hunk body, so each needs an explicit override. */
-[data-line-number-content],
-[data-column-number],
-[data-unmodified-lines] {
-  font-family: var(--font-ui-family) !important;
-  font-variant-numeric: tabular-nums !important;
-}
-`;
-  diffPanelUnsafeCssCache.set(theme, css);
-  return css;
 }
 
 const FNV_OFFSET_BASIS_32 = 0x811c9dc5;
@@ -208,23 +41,6 @@ export function buildPatchCacheKey(patch: string, scope = "diff-panel"): string 
   return `${scope}:${normalizedPatch.length}:${primary}:${secondary}`;
 }
 
-export const PARTIAL_DIFF_COPY_NOTICE =
-  "[Synara: partial diff. Output was truncated at the size limit; some files or changes may be missing.]";
-
-// Returns copyable source text for diff surfaces without depending on virtualized DOM rows.
-// A truncation notice travels with partial clipboard content so it cannot be mistaken for a
-// complete patch after it leaves Synara.
-export function resolveDiffCopyText(patch: string | undefined, truncated = false): string | null {
-  if (typeof patch !== "string") {
-    return null;
-  }
-  if (patch.trim().length === 0) {
-    return null;
-  }
-  const noticeSeparator = patch.endsWith("\n") ? "\n" : "\n\n";
-  return truncated ? `${patch}${noticeSeparator}${PARTIAL_DIFF_COPY_NOTICE}\n` : patch;
-}
-
 export type RenderablePatch =
   | {
       kind: "files";
@@ -236,39 +52,78 @@ export type RenderablePatch =
       reason: string;
     };
 
-const PATCH_FILE_BOUNDARY_PATTERN = /^diff --git /gm;
+export interface DiffLineStat {
+  additions: number;
+  deletions: number;
+}
 
-export function splitPatchIntoFileSegments(patch: string): string[] {
-  const boundaries: number[] = [];
-  for (const match of patch.matchAll(PATCH_FILE_BOUNDARY_PATTERN)) {
-    boundaries.push(match.index);
-  }
-  if (boundaries.length <= 1) {
-    return [patch];
-  }
-  const segments: string[] = [];
-  let start = 0;
-  for (const boundary of boundaries.slice(1)) {
-    segments.push(patch.slice(start, boundary));
-    start = boundary;
-  }
-  segments.push(patch.slice(start));
-  return segments;
+export function getDiffLineStat(files: ReadonlyArray<FileDiffMetadata>): DiffLineStat {
+  return files.reduce<DiffLineStat>(
+    (total, file) => {
+      for (const hunk of file.hunks) {
+        total.additions += hunk.additionLines;
+        total.deletions += hunk.deletionLines;
+      }
+
+      return total;
+    },
+    { additions: 0, deletions: 0 },
+  );
+}
+
+interface RenderablePatchOptions {
+  /**
+   * Pierre's partial-patch parser keeps hunk render starts in source-file
+   * coordinates. Its virtualizer iterates partial patches as compact rows, so
+   * review diffs need compact render starts while retaining collapsedBefore
+   * for the "N unmodified lines" separator.
+   */
+  compactPartialHunkOffsets?: boolean;
+}
+
+export function compactPartialHunkOffsets(file: FileDiffMetadata): FileDiffMetadata {
+  if (!file.isPartial) return file;
+
+  let splitLineStart = 0;
+  let unifiedLineStart = 0;
+  const hunks = file.hunks.map((hunk) => {
+    const compactHunk = {
+      ...hunk,
+      splitLineStart,
+      unifiedLineStart,
+    };
+    splitLineStart += hunk.splitLineCount;
+    unifiedLineStart += hunk.unifiedLineCount;
+    return compactHunk;
+  });
+
+  return {
+    ...file,
+    hunks,
+    splitLineCount: splitLineStart,
+    unifiedLineCount: unifiedLineStart,
+    ...(file.cacheKey ? { cacheKey: `${file.cacheKey}:compact-partial` } : {}),
+  };
 }
 
 export function getRenderablePatch(
   patch: string | undefined,
   cacheScope = "diff-panel",
+  options: RenderablePatchOptions = {},
 ): RenderablePatch | null {
   if (!patch) return null;
   const normalizedPatch = patch.trim();
   if (normalizedPatch.length === 0) return null;
 
   try {
-    const files = splitPatchIntoFileSegments(normalizedPatch).flatMap((segment) =>
-      parsePatchFiles(segment, buildPatchCacheKey(segment, cacheScope)).flatMap(
-        (parsedPatch) => parsedPatch.files,
-      ),
+    const parsedPatches = parsePatchFiles(
+      normalizedPatch,
+      buildPatchCacheKey(normalizedPatch, cacheScope),
+    );
+    const files = parsedPatches.flatMap((parsedPatch) =>
+      options.compactPartialHunkOffsets
+        ? parsedPatch.files.map(compactPartialHunkOffsets)
+        : parsedPatch.files,
     );
     if (files.length > 0) {
       return { kind: "files", files };
@@ -288,8 +143,6 @@ export function getRenderablePatch(
   }
 }
 
-// Resolve the working-tree-relative path for a parsed file diff, stripping the
-// conventional `a/` / `b/` patch prefixes so callers can match git status paths.
 export function resolveFileDiffPath(fileDiff: FileDiffMetadata): string {
   const raw = fileDiff.name ?? fileDiff.prevName ?? "";
   if (raw.startsWith("a/") || raw.startsWith("b/")) {
@@ -298,171 +151,107 @@ export function resolveFileDiffPath(fileDiff: FileDiffMetadata): string {
   return raw;
 }
 
-// Resolve the pre-change path for a parsed file diff (the old side of a
-// rename/move), stripping the conventional `a/` patch prefix. Returns null for
-// files that were not renamed or moved: the parser also fills `prevName` for
-// added files, where it is `/dev/null` or a copy of the new name.
-export function resolveFileDiffPrevPath(fileDiff: FileDiffMetadata): string | null {
-  if (
-    fileDiff.prevName === undefined ||
-    (fileDiff.type !== "rename-pure" && fileDiff.type !== "rename-changed")
-  ) {
-    return null;
-  }
-  const raw = fileDiff.prevName;
+/**
+ * What the file was called before the change. Only a rename makes it differ from the current
+ * path, and the hosts that resolve a diff position against both sides need both names.
+ */
+export function resolveFileDiffPreviousPath(fileDiff: FileDiffMetadata): string {
+  const raw = fileDiff.prevName ?? fileDiff.name ?? "";
   if (raw.startsWith("a/") || raw.startsWith("b/")) {
     return raw.slice(2);
   }
   return raw;
 }
 
-// Symlinks (120000) show their target path but the workspace read/write path
-// follows the link, and gitlinks (160000, submodules) are directories in the
-// working tree: neither can be edited in place as the text the diff shows.
-const UNEDITABLE_GIT_MODES = new Set(["120000", "160000"]);
-
-export function hasUneditableGitMode(fileDiff: FileDiffMetadata): boolean {
-  return UNEDITABLE_GIT_MODES.has(fileDiff.mode ?? fileDiff.prevMode ?? "");
-}
-
-// Stable identity for a parsed file diff, used as a React key and selection id.
 export function buildFileDiffRenderKey(fileDiff: FileDiffMetadata): string {
-  return fileDiff.cacheKey ?? `${fileDiff.prevName ?? "none"}:${fileDiff.name}`;
+  const cacheKey = fileDiff.cacheKey;
+  if (!cacheKey) return `${fileDiff.prevName ?? "none"}:${fileDiff.name}`;
+
+  return cacheKey.endsWith(":hydrated") ? cacheKey.slice(0, -":hydrated".length) : cacheKey;
 }
 
-// Split a repo-relative path into a trailing-slash directory prefix and a leaf
-// name so diff/file rows can dim the directory while emphasizing the file name.
-// Intentionally not reusing the directory-browser helpers (projectPaths.ts):
-// those carry trailing-separator / Windows-drive semantics meant for browsing.
-export function splitRepoRelativePath(path: string): { dir: string; name: string } {
-  const index = path.lastIndexOf("/");
-  if (index === -1) {
-    return { dir: "", name: path };
+export function getDiffCollapseIconClassName(fileDiff: FileDiffMetadata): string {
+  switch (fileDiff.type) {
+    case "new":
+      return "text-[var(--diffs-addition-base)]";
+    case "deleted":
+      return "text-[var(--diffs-deletion-base)]";
+    case "change":
+    case "rename-pure":
+    case "rename-changed":
+      return "text-[var(--diffs-modified-base)]";
+    default:
+      return "text-muted-foreground/80";
   }
-  return { dir: path.slice(0, index + 1), name: path.slice(index + 1) };
 }
 
-// Natural-order comparator for parsed file diffs by working-tree path, so file
-// lists stay stable and human-friendly (numeric-aware, case-insensitive).
-let diffPathCollator: Intl.Collator | undefined;
+/**
+ * Maps every diff/file surface the @pierre/diffs renderer paints onto the
+ * app's code tokens, so themed palettes reach the code body, gutter, and
+ * row tints instead of the renderer's bundled colors. Shared by the diff
+ * panel and the file preview.
+ */
+export const DIFF_SURFACE_THEME_UNSAFE_CSS = `
+[data-diffs-header],
+[data-diff],
+[data-file],
+[data-error-wrapper],
+[data-virtualizer-buffer] {
+  --diffs-header-font-family: var(--font-sans) !important;
+  --diffs-font-family: var(--font-mono) !important;
+  --diffs-bg: var(--code-background) !important;
+  --diffs-light-bg: var(--code-background) !important;
+  --diffs-dark-bg: var(--code-background) !important;
+  --diffs-token-light-bg: transparent;
+  --diffs-token-dark-bg: transparent;
 
-export function compareDiffPaths(left: string, right: string): number {
-  diffPathCollator ??= new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
-  return diffPathCollator.compare(left, right);
-}
-
-export function compareFileDiffByPath(left: FileDiffMetadata, right: FileDiffMetadata): number {
-  return compareDiffPaths(resolveFileDiffPath(left), resolveFileDiffPath(right));
-}
-
-export function sortFileDiffsByPath(files: ReadonlyArray<FileDiffMetadata>): FileDiffMetadata[] {
-  return files.toSorted(compareFileDiffByPath);
-}
-
-// Summarize parsed hunks for compact, consistent diff stats across panel chrome.
-export function summarizeFileDiffStats(files: ReadonlyArray<FileDiffMetadata>): {
-  additions: number;
-  deletions: number;
-} {
-  return files.reduce(
-    (total, file) => {
-      for (const hunk of file.hunks) {
-        total.additions += hunk.additionLines;
-        total.deletions += hunk.deletionLines;
-      }
-      return total;
-    },
-    { additions: 0, deletions: 0 },
+  /* Gutter, context, and row tints all derive from the code surface the diff
+     body sits on — mixing from the canvas leaves the gutter looking unthemed
+     when a palette separates the two. */
+  --diffs-bg-context-override: color-mix(in srgb, var(--code-background) 97%, var(--code-foreground));
+  --diffs-bg-hover-override: color-mix(in srgb, var(--code-background) 94%, var(--code-foreground));
+  --diffs-bg-separator-override: color-mix(
+    in srgb,
+    var(--code-background) 95%,
+    var(--code-foreground)
   );
-}
+  --diffs-bg-buffer-override: color-mix(in srgb, var(--code-background) 90%, var(--code-foreground));
 
-export function summarizeRenderablePatchStats(
-  renderable: RenderablePatch | null | undefined,
-): { additions: number; deletions: number; fileCount: number } | null {
-  if (!renderable || renderable.kind !== "files" || renderable.files.length === 0) {
-    return null;
-  }
-  return { ...summarizeFileDiffStats(renderable.files), fileCount: renderable.files.length };
-}
-
-export function summarizePatchTotals(
-  patch: string | undefined,
-): { additions: number; deletions: number; fileCount: number } | null {
-  const renderable = getRenderablePatch(patch, "diff-panel:stats");
-  return summarizeRenderablePatchStats(renderable);
-}
-
-// Per-file +N/-M parsed from a unified diff/patch, keyed by working-tree-relative
-// path (a/ b/ prefixes stripped via resolveFileDiffPath). Lets transcript
-// "Edited <file>" rows surface diff stats from a tool call's own patch when no
-// turn-diff summary is in scope (e.g. standalone work rows). Empty map when the
-// patch is missing or unparsable, so callers can fall back gracefully.
-export function fileDiffStatsByPath(patch: string | undefined): Map<string, FileDiffStat> {
-  const stats = new Map<string, FileDiffStat>();
-  const renderable = getRenderablePatch(patch, "tool-row:stats");
-  if (!renderable || renderable.kind !== "files") {
-    return stats;
-  }
-  for (const file of renderable.files) {
-    const path = resolveFileDiffPath(file);
-    if (path.length === 0) {
-      continue;
-    }
-    stats.set(path, summarizeFileDiffStats([file]));
-  }
-  return stats;
-}
-
-function normalizeDiffStatPath(path: string): string {
-  return path
-    .replace(/\\/g, "/")
-    .replace(/^\.\/+/, "")
-    .replace(/\/+/g, "/");
-}
-
-function diffStatPathsReferToSameFile(left: string, right: string): boolean {
-  const normalizedLeft = normalizeDiffStatPath(left);
-  const normalizedRight = normalizeDiffStatPath(right);
-  return (
-    normalizedLeft === normalizedRight ||
-    normalizedLeft.endsWith(`/${normalizedRight}`) ||
-    normalizedRight.endsWith(`/${normalizedLeft}`)
+  --diffs-bg-addition-override: light-dark(
+    color-mix(in srgb, var(--code-background) 50%, var(--success)),
+    color-mix(in srgb, var(--code-background) 70%, var(--success))
   );
+  --diffs-bg-addition-number-override: light-dark(
+    color-mix(in srgb, var(--code-background) 35%, var(--success)),
+    color-mix(in srgb, var(--code-background) 60%, var(--success))
+  );
+  --diffs-bg-addition-hover-override: color-mix(in srgb, var(--code-background) 85%, var(--success));
+  --diffs-bg-addition-emphasis-override: color-mix(
+    in srgb,
+    var(--code-background) 80%,
+    var(--success)
+  );
+
+  --diffs-bg-deletion-override: light-dark(
+    color-mix(in srgb, var(--code-background) 50%, var(--destructive)),
+    color-mix(in srgb, var(--code-background) 70%, var(--destructive))
+  );
+  --diffs-bg-deletion-number-override: light-dark(
+    color-mix(in srgb, var(--code-background) 35%, var(--destructive)),
+    color-mix(in srgb, var(--code-background) 60%, var(--destructive))
+  );
+  --diffs-bg-deletion-hover-override: color-mix(
+    in srgb,
+    var(--code-background) 85%,
+    var(--destructive)
+  );
+  --diffs-bg-deletion-emphasis-override: color-mix(
+    in srgb,
+    var(--code-background) 80%,
+    var(--destructive)
+  );
+
+  background-color: var(--diffs-bg) !important;
+  color: var(--code-foreground) !important;
 }
-
-export function resolveDiffEntryByPath<T>(
-  entriesByPath: ReadonlyMap<string, T>,
-  changedFilePath: string,
-): T | undefined {
-  const direct = entriesByPath.get(changedFilePath);
-  if (direct) {
-    return direct;
-  }
-
-  const matches = Array.from(entriesByPath.entries())
-    .filter(([path]) => diffStatPathsReferToSameFile(path, changedFilePath))
-    .map(([, entry]) => entry);
-  return matches.length === 1 ? matches.at(0) : undefined;
-}
-
-// Resolve a parsed patch stat for a visible changed-file row. Parsed patch paths are
-// usually repo-relative, while work-log changedFiles can be absolute or basename-only.
-export function resolveFileDiffStatByChangedPath(
-  statsByPath: ReadonlyMap<string, FileDiffStat>,
-  changedFilePath: string,
-  changedFileCount: number,
-): FileDiffStat | undefined {
-  if (statsByPath.size === 0) {
-    return undefined;
-  }
-
-  const match = resolveDiffEntryByPath(statsByPath, changedFilePath);
-  if (match) {
-    return match;
-  }
-
-  if (statsByPath.size === 1 && changedFileCount === 1) {
-    return statsByPath.values().next().value;
-  }
-  return undefined;
-}
+`;

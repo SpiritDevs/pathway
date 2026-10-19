@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self' pathway-terminal: 'wasm-unsafe-eval'; style-src 'unsafe-inline'; font-src pathway-terminal:; connect-src pathway-terminal:; img-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>Pathway terminal</title>
+    <style>
+      html,
+      body,
+      #terminal {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #141619;
+        color: #e3e5e8;
+      }
+      #terminal {
+        position: relative;
+        touch-action: none;
+      }
+      textarea {
+        font-size: 16px !important;
+      }
+      .pathway-ghostty-scrollbar {
+        position: absolute;
+        right: 0;
+        top: 0;
+        width: 12px;
+        height: 100%;
+        background: transparent;
+      }
+      .pathway-ghostty-scrollbar-thumb {
+        position: absolute;
+        right: 2px;
+        width: 6px;
+        border-radius: 4px;
+        background: #6c7078;
+      }
+    </style>
+    <script type="module" crossorigin src="./assets/index-DvLT-O2L.js"></script>
+  </head>
+  <body>
+    <main id="terminal" aria-label="Terminal"></main>
+  </body>
+</html>

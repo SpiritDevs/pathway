@@ -1,16 +1,14 @@
-// FILE: ComputerSetupRequiredCard.test.tsx
-// Purpose: Keeps the setup card aligned with live permission state and explicit setup.
-// Layer: Chat transcript UI regression test
+// Keeps the setup card aligned with live permission state and explicit setup.
 
+import type { ComputerStatusResult } from "@spiritdevs/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
-import type { ComputerStatusResult } from "@synara/contracts";
+import { describe, expect, it } from "vite-plus/test";
 
 import { ComputerSetupRequiredCard } from "./ComputerSetupRequiredCard";
 
 function status(availability: ComputerStatusResult["availability"]): ComputerStatusResult {
   return {
-    computerId: "desktop",
+    computerId: "desktop" as ComputerStatusResult["computerId"],
     availability,
     health: { status: "connected", captureAvailable: true, consecutiveFailures: 0, reconnects: 0 },
     capabilities: {
@@ -42,6 +40,7 @@ describe("ComputerSetupRequiredCard", () => {
     expect(markup).toContain(
       "Choose Set up to request missing permissions or open System Settings.",
     );
+    expect(markup).toContain("Allow access for this Pathway app");
     expect(markup).not.toContain("macOS is asking");
     expect(markup).toContain("Set up");
   });
@@ -54,10 +53,8 @@ describe("ComputerSetupRequiredCard", () => {
   });
 
   it("explains a locally built copy's stale grant, and says nothing of it on a signed build", () => {
-    // The case that looks like a Synara bug: System Settings shows Synara
-    // switched on, because the grant it lists belongs to a binary a rebuild
-    // replaced. Without this the card tells the user to flip a switch that is
-    // already flipped.
+    // System Settings shows Pathway switched on, because the grant it lists
+    // belongs to a binary a rebuild replaced.
     const adhoc = renderToStaticMarkup(
       <ComputerSetupRequiredCard
         missing={["accessibility"]}
@@ -65,7 +62,7 @@ describe("ComputerSetupRequiredCard", () => {
         onSetUp={() => undefined}
       />,
     );
-    expect(adhoc).toContain("locally built copy");
+    expect(adhoc).toContain("locally built copy of Pathway");
     expect(adhoc).toContain("add the current build again");
 
     const signed = renderToStaticMarkup(
@@ -75,28 +72,21 @@ describe("ComputerSetupRequiredCard", () => {
         onSetUp={() => undefined}
       />,
     );
-    // On a Developer ID build the switch means what it says, so this advice
-    // would send the user off resetting a database for nothing.
     expect(signed).not.toContain("locally built copy");
     expect(signed).not.toContain("tccutil");
   });
 
   it("names the responsible app in the tccutil fallback, and withholds it when unknown", () => {
-    // The command has to repair *this* Synara's TCC row. `.dev` and `.canary`
-    // are separate bundle identifiers, so a guessed production id would revoke a
-    // separately installed release build's working grants and fix nothing here.
     const known = renderToStaticMarkup(
       <ComputerSetupRequiredCard
         missing={["accessibility"]}
         buildSignature="adhoc"
-        bundleId="com.emanueledipietro.synara.dev"
+        bundleId="com.spiritdevs.pathway.dev"
         onSetUp={() => undefined}
       />,
     );
-    expect(known).toContain("tccutil reset Accessibility com.emanueledipietro.synara.dev");
+    expect(known).toContain("tccutil reset Accessibility com.spiritdevs.pathway.dev");
 
-    // A server with no desktop shell behind it has no responsible app, and the
-    // card must say nothing rather than guess.
     const unknown = renderToStaticMarkup(
       <ComputerSetupRequiredCard
         missing={["accessibility"]}
@@ -186,11 +176,33 @@ describe("ComputerSetupRequiredCard", () => {
     expect(markup).toContain("Computer access has not been checked");
   });
 
+  it("offers no Set up while the server is still finding its desktop", () => {
+    const markup = renderToStaticMarkup(
+      <ComputerSetupRequiredCard
+        status={status({ kind: "checking", message: "Finding the desktop." })}
+        onSetUp={() => undefined}
+      />,
+    );
+    expect(markup).toContain("Finding the desktop.");
+    expect(markup).not.toContain("Set up");
+  });
+
   it("disables setup while the shared request is pending", () => {
     const markup = renderToStaticMarkup(
       <ComputerSetupRequiredCard isPending onSetUp={() => undefined} />,
     );
     expect(markup).toContain("Setting up…");
     expect(markup).toContain('disabled=""');
+  });
+
+  it("links to Settings → Computer until the desktop is ready", () => {
+    const pending = renderToStaticMarkup(
+      <ComputerSetupRequiredCard onSetUp={() => undefined} onOpenSettings={() => undefined} />,
+    );
+    expect(pending).toContain("Open Computer settings");
+    const ready = renderToStaticMarkup(
+      <ComputerSetupRequiredCard computerControlReady onOpenSettings={() => undefined} />,
+    );
+    expect(ready).not.toContain("Open Computer settings");
   });
 });

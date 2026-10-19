@@ -1,161 +1,105 @@
-<div align="center">
-  <img src="./assets/prod/logo.svg" width="112" alt="Synara logo">
-  <h1>Synara</h1>
-  <p><strong>A focused workspace for coding agents.</strong><br>
-  Projects, provider sessions, execution surfaces, and review tools in one local-first desktop application.</p>
-  <p>
-    <a href="https://github.com/Emanuele-web04/synara/releases/latest">Download</a>
-    &nbsp;·&nbsp;
-    <a href="https://www.trysynara.com/">Website</a>
-    &nbsp;·&nbsp;
-    <a href="https://www.trysynara.com/docs">Documentation</a>
-    &nbsp;·&nbsp;
-    <a href="./docs/external-mcp.md">MCP integration</a>
-    &nbsp;·&nbsp;
-    <a href="https://github.com/Emanuele-web04/synara/issues/new/choose">Report an issue</a>
-  </p>
-</div>
+# Pathway
 
-<p align="center">
-  <img src="./assets/prod/readme-workspace-light.png" width="1200" alt="Synara workspace with an agent conversation and pull request review side by side">
-</p>
+Pathway is an Agentic Business OS. It enables on your machine with a best-in-class mobile app ([iOS and iPadOS](https://apps.apple.com/us/app/pathway-remote-claude-more/id6787819824), with a native visionOS target), [web app](https://app.pathwayos.dev) and [Electron-based desktop app](https://pathway.codes).
 
-<details open>
-  <summary><strong>Table of contents</strong></summary>
+Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, and OpenCode. If they're set up on your computer, Pathway can control them.
 
-| Workspace layer      | Responsibility                                                |
-| -------------------- | ------------------------------------------------------------- |
-| **Project**          | Repository context, settings, and related work.               |
-| **Thread**           | Task-specific conversation, state, files, and history.        |
-| **Provider session** | The authenticated coding-agent runtime executing the task.    |
-| **Workspace tools**  | Changes, terminal, browser, files, editor, previews, and Git. |
+## "Wait, what are you selling me?"
 
-> [!NOTE]
-> Synara is early-stage software. APIs and interface details remain under active development.
+Nothing. We built Pathway because we wanted the best possible development experience with agents. We were inspired by existing solutions like the Codex desktop app, Conductor, Claude Desktop and Cursor Glass, but none met our bar.
 
-## Capabilities
-
-### 1. Projects, threads, and context
-
-Organize work around projects and threads. Projects define the workspace; threads preserve the task-specific conversation, state, files, and history.
-
-- Project-aware navigation and conversations
-- Provider and model selection per task
-- Thread history, status, recaps, notes, and side chats
-- Search and quick access across active work
-
-### 2. Integrated workspace tools
-
-The tools surrounding an agent session remain available from the same task surface, keeping execution and review connected.
-
-| Surface            | Purpose                                                                                           |
-| ------------------ | ------------------------------------------------------------------------------------------------- |
-| **Changes**        | Inspect diffs, changed files, and review state.                                                   |
-| **Terminal**       | Run commands in the project environment.                                                          |
-| **Browser**        | Keep local previews next to the thread and let agents use semantic or page-declared WebMCP tools. |
-| **Files / Editor** | Browse, inspect, and edit project files in context.                                               |
-| **Git**            | Work with branches, commits, pushes, and pull requests.                                           |
-
-### 3. Split views and previews
-
-Keep an active conversation alongside the surface it is changing. Split views, browser previews, and device previews make the result part of the working context.
-
-<p align="center">
-  <img src="./assets/prod/readme-split-view-dark.png" width="900" alt="Synara split view with an agent thread and iOS simulator preview">
-</p>
-
-### 4. Provider-native integrations
-
-Synara connects to coding-agent runtimes that are installed and authenticated locally. The current development build includes the following integrations:
-
-| Runtime         | Local integration                           |
-| --------------- | ------------------------------------------- |
-| **Codex**       | Codex CLI / app-server                      |
-| **Claude**      | Claude Code                                 |
-| **Cursor**      | Cursor agent runtime                        |
-| **Antigravity** | Antigravity CLI                             |
-| **Grok**        | Grok Build                                  |
-| **Droid**       | Factory Droid                               |
-| **OpenCode**    | OpenCode and its configured model providers |
-| **Pi**          | Pi and its configured model providers       |
-| **Devin**       | Devin CLI                                   |
-
-### 5. Isolated parallel work
-
-Managed worktrees provide a boundary for parallel changes. Handoffs preserve project context when a task needs to continue with another provider or toolchain.
-
-- Run work in a local checkout or an isolated managed worktree
-- Keep parallel threads from modifying the same checkout unintentionally
-- Hand off a task without losing its project context
-- Review the resulting diff before it leaves the workspace
-
-### 6. Automations and external MCP
-
-Automations support recurring agent runs and keep their outcomes attached to projects and threads. External MCP integrations provide scoped, user-approved access for other local clients.
-
-See [External MCP integrations](./docs/external-mcp.md) for setup, pairing, project access, and permission boundaries.
-
-### 7. Appearance and workspace preferences
-
-Configure the shell to match the way you work with light and dark themes, typography controls, density preferences, and workspace settings.
-
-<p align="center">
-  <img src="./assets/prod/readme-appearance-dark.png" width="900" alt="Synara Appearance settings with theme, typography, and density controls">
-</p>
-
-### Additional capabilities
-
-| Workflow          | Included surfaces                                               |
-| ----------------- | --------------------------------------------------------------- |
-| **Workspace**     | Local projects, chats, history, and multiple provider runtimes. |
-| **Execution**     | Terminals, browser previews, files, and editor.                 |
-| **Delivery**      | Diffs, Git actions, managed worktrees, and pull requests.       |
-| **Orchestration** | Provider handoffs, automations, and scoped external MCP.        |
-| **Development**   | Desktop shell plus focused server and web modes.                |
+We wanted something performant, remote-ready, and truly open. If we ever go the wrong direction, we want you to have everything you need to fork and build the editor that you want.
 
 ## Installation
 
-### Desktop application
+> [!WARNING]
+> Pathway currently supports Codex, Claude, Cursor, Grok Build and OpenCode. Install and authenticate at least one provider before use:
+>
+> - Codex: install [Codex CLI](https://developers.openai.com/codex/cli) and run `codex login`
+> - Claude: install [Claude Code](https://claude.com/product/claude-code) and run `claude auth login`
+> - Cursor: install [Cursor CLI](https://cursor.com/cli) and run `agent login`
+> - Grok Build: install [Grok Build CLI](https://x.ai/cli) and run `grok login`
+> - OpenCode: install [OpenCode](https://opencode.ai) and run `opencode auth login`
 
-Download the latest build from [GitHub Releases](https://github.com/Emanuele-web04/synara/releases) or visit [trysynara.com](https://www.trysynara.com/).
+### Try it out (install-free)
 
-Current native release targets are Windows x64, macOS Intel, macOS Apple Silicon, and Linux x64.
+The easiest way to test Pathway is to run the server in your terminal (requires Node.js 22.16+, 23.11+, or 24.10+):
 
-### Provider setup
-
-Synara uses the provider installations and subscriptions already configured on the local machine. Install and authenticate the runtime you intend to use before starting a session. For Codex sessions, follow the [Codex CLI setup](https://github.com/openai/codex).
-
-### Run from source
-
-The development checkout uses [Bun 1.4.2](https://bun.sh/) and [Node.js 24.13.1](https://nodejs.org/).
-
-```console
-git clone https://github.com/Emanuele-web04/synara.git
-cd synara
-bun install
-bun run dev
+```bash
+npx @spiritdevs/pathway@latest
 ```
 
-`bun run typecheck` checks all seven workspaces with TypeScript 7 and the native
-Effect checker. CI and each workspace's `typecheck` script use the same compiler.
-`bun run typecheck:native` remains an alias for the default check.
+This will launch Pathway's backend on your machine as well as the local web app to control your agents.
 
-The native Effect checker does not enforce every legacy rule: in particular,
-`importFromBarrel` errors are currently missed. `bun run typecheck:legacy` keeps
-the TypeScript 5 check available for explicit comparisons; it is not run by CI.
-The existing compiler also remains installed for build and declaration tools
-that require its JavaScript API. Native and legacy checks use separate caches.
+Tip: Use `npx @spiritdevs/pathway@latest --help` for the full CLI reference.
 
-Use these named scripts rather than a bare `tsc`, whose version depends on the
-current directory. Normal installation patches the native compiler for Effect;
-the root `typecheck` command also ensures that patch is applied before checking.
+### Desktop app
 
-## Contributing
+Install the latest version of the desktop app from [GitHub Releases](https://github.com/coreybain/pathway/releases), or from your favorite package registry:
 
-Bug fixes, reliability improvements, performance work, documentation, and maintenance changes are welcome.
+#### macOS (Homebrew)
 
-Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening a pull request. For a reproducible problem, [open an issue](https://github.com/Emanuele-web04/synara/issues/new/choose) with the Synara version, operating system, runtime, and relevant logs.
+```bash
+brew install --cask pathway
+```
 
-## License
+#### Arch Linux (AUR)
 
-Synara is licensed under the [MIT License](./LICENSE).
+```bash
+yay -S pathway-bin
+```
+
+## Some notes
+
+We are very very early in this project. Expect bugs.
+
+We are (mostly) not accepting contributions yet. Small fixes may be considered. Big features will not be.
+
+## Documentation
+
+Full docs live in [docs/](./docs). There's no docs site yet.
+
+- [Install and first run](./docs/user/install.md)
+- [Permission modes](./docs/user/permission-modes.md)
+- [Keyboard shortcuts](./docs/user/keybindings.md)
+- [SnapShots: capture a window and its app context](./docs/user/snap-shot.md)
+- [Customize a project icon](./docs/user/project-settings.md)
+- [Appearance preferences](./docs/user/appearance.md)
+- [Thread alerts, sounds, and quiet hours](./docs/user/thread-alerts.md)
+- [Remote access from a phone or another machine](./docs/user/remote-access.md)
+- [Keeping app and server in sync](./docs/user/updating.md)
+- [Source control integrations](./docs/user/source-control.md)
+- Multiple accounts: [Codex](./docs/user/providers-codex.md) · [Claude](./docs/user/providers-claude.md)
+- Linux: [run Pathway as a background service](./docs/user/background-service.md)
+
+Building from source? Start at [docs/internals/overview.md](./docs/internals/overview.md).
+
+## If you REALLY want to contribute still.... read this first
+
+### Install `vp`
+
+Pathway uses Vite+ so you'll need to install the global `vp` command-line tool.
+
+#### macOS / Linux
+
+```bash
+curl -fsSL https://vite.plus | bash
+```
+
+#### Windows
+
+```bash
+irm https://vite.plus/ps1 | iex
+```
+
+Checkout their getting started guide for more information: [https://viteplus.dev/guide/](https://viteplus.dev/guide/)
+
+### Install dependencies
+
+```bash
+vp i
+```
+
+Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening an issue or PR.
+
+Need support? Join the [Discord](https://discord.gg/jn4EGJjrvv).

@@ -1,8 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as TestClock from "effect/testing/TestClock";
 
-import { CuaComputerBackend } from "./CuaComputerBackend.ts";
+import { makeCuaComputerBackend } from "./CuaComputerBackend.ts";
 import { withComputerTask } from "./computerTaskContext.ts";
-import type { cuaRequest } from "@synara/shared/cuaDriverProtocol";
+import { fakeCuaRequest } from "./testing/FakeCuaRequest.ts";
 
 const BOUNDS = { x: 0, y: 0, width: 200, height: 100 };
 
@@ -15,13 +18,11 @@ const PNG_HEADER = (() => {
   return header.toString("base64");
 })();
 
-function evictionFixture(): {
-  backend: CuaComputerBackend;
-  endTaskCalls: () => number;
-} {
+const evictionFixture = Effect.fn(function* () {
   const calls: Array<{ method?: string }> = [];
-  const request = vi.fn(async (_endpoint: string, req: Record<string, unknown>) => {
-    calls.push({ ...(typeof req.method === "string" ? { method: req.method } : {}) });
+  const request = async (_endpoint: string, raw: unknown) => {
+    const req = raw as Record<string, unknown>;
+    calls.push(typeof req.method === "string" ? { method: req.method } : {});
     if (req.name === "check_permissions")
       return {
         ok: true,
@@ -66,40 +67,46 @@ function evictionFixture(): {
         },
       };
     return { ok: true, result: { structuredContent: {} } };
-  }) as unknown as typeof cuaRequest;
-  const backend = new CuaComputerBackend({ endpoint: "/evict", request });
-  return { backend, endTaskCalls: () => calls.filter((call) => call.method === "end_task").length };
-}
+  };
+  const backend = yield* makeCuaComputerBackend({
+    endpoint: "/evict",
+    request: fakeCuaRequest(request),
+  });
+  return {
+    backend,
+    endTaskCalls: () => calls.filter((call) => call.method === "end_task").length,
+  };
+});
 
-describe("computer preview task eviction", () => {
-  it("a dispatching task survives flooding while idle tasks are evicted", async () => {
-    const { backend, endTaskCalls } = evictionFixture();
-    try {
-      // Live task attaches first.
-      await withComputerTask({ threadId: "evict-live", turnId: "turn-live" }, () =>
-        backend.getState({ windowId: "cua:10:20", includeTree: true }),
-      );
-      // A live task re-dispatches often: flood the table with other tasks
-      // while it keeps working. Recency refresh must keep it young; only
-      // tasks that stopped dispatching may be evicted.
-      for (let i = 0; i < 600; i++) {
-        await withComputerTask({ threadId: `flood-${i}`, turnId: `turn-${i}` }, () =>
-          backend.getState({ windowId: "cua:10:20", includeTree: true }),
-        );
-        if (i % 50 === 0) {
-          await withComputerTask({ threadId: "evict-live", turnId: "turn-live" }, () =>
+it.layer(NodeServices.layer)("computer preview task eviction", (it) => {
+  it.effect("a dispatching task survives flooding while idle tasks are evicted", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        // A wall-clock start like Synara's Date.now(): the backend's never-taken
+        // snapshot is stamped 0, which only reads as fresh on a clock at 0.
+        yield* TestClock.setTime(Date.UTC(2026, 0, 1));
+        const { backend, endTaskCalls } = yield* evictionFixture();
+        const observe = (threadId: string, turnId: string) =>
+          withComputerTask(
+            { threadId, turnId },
             backend.getState({ windowId: "cua:10:20", includeTree: true }),
           );
+        // Live task attaches first.
+        yield* observe("evict-live", "turn-live");
+        // A live task re-dispatches often: flood the table with other tasks
+        // while it keeps working. Recency refresh must keep it young; only
+        // tasks that stopped dispatching may be evicted.
+        for (let i = 0; i < 600; i++) {
+          yield* observe(`flood-${i}`, `turn-${i}`);
+          if (i % 50 === 0) yield* observe("evict-live", "turn-live");
         }
-      }
-      // The live task still ends its preview: it was never evicted.
-      await backend.endTask("evict-live", "turn-live");
-      expect(endTaskCalls()).toBe(1);
-      // A task that stopped dispatching early was evicted: ending it is silent.
-      await backend.endTask("flood-0", "turn-0");
-      expect(endTaskCalls()).toBe(1);
-    } finally {
-      await backend.dispose();
-    }
-  });
+        // The live task still ends its preview: it was never evicted.
+        yield* backend.endTask("evict-live", "turn-live");
+        expect(endTaskCalls()).toBe(1);
+        // A task that stopped dispatching early was evicted: ending it is silent.
+        yield* backend.endTask("flood-0", "turn-0");
+        expect(endTaskCalls()).toBe(1);
+      }),
+    ),
+  );
 });

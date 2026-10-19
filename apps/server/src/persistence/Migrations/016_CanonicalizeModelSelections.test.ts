@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
-import { Effect, Layer } from "effect";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { runMigrations } from "../Migrations.ts";
@@ -129,6 +130,20 @@ layer("016_CanonicalizeModelSelections", (it) => {
           '{}'
         ),
         (
+          'event-project-created-null-model',
+          'project',
+          'project-3',
+          1,
+          'project.created',
+          '2026-01-01T00:00:00.000Z',
+          'command-project-created-null-model',
+          NULL,
+          'correlation-project-created-null-model',
+          'user',
+          '{"projectId":"project-3","title":"Null Model Project","workspaceRoot":"/tmp/project-3","defaultModel":null,"scripts":[],"createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z"}',
+          '{}'
+        ),
+        (
           'event-thread-created',
           'thread',
           'thread-1',
@@ -250,7 +265,7 @@ layer("016_CanonicalizeModelSelections", (it) => {
         FROM orchestration_events
         ORDER BY rowid ASC
       `;
-
+          // @effect-diagnostics-next-line preferSchemaOverJson:off
           assert.deepStrictEqual(JSON.parse(eventRows[0]!.payloadJson), {
             projectId: "project-1",
             title: "Project",
@@ -266,7 +281,7 @@ layer("016_CanonicalizeModelSelections", (it) => {
             createdAt: "2026-01-01T00:00:00.000Z",
             updatedAt: "2026-01-01T00:00:00.000Z",
           });
-
+          // @effect-diagnostics-next-line preferSchemaOverJson:off
           assert.deepStrictEqual(JSON.parse(eventRows[1]!.payloadJson), {
             projectId: "project-2",
             title: "Fallback Project",
@@ -282,8 +297,18 @@ layer("016_CanonicalizeModelSelections", (it) => {
             createdAt: "2026-01-01T00:00:00.000Z",
             updatedAt: "2026-01-01T00:00:00.000Z",
           });
-
+          // @effect-diagnostics-next-line preferSchemaOverJson:off
           assert.deepStrictEqual(JSON.parse(eventRows[2]!.payloadJson), {
+            projectId: "project-3",
+            title: "Null Model Project",
+            workspaceRoot: "/tmp/project-3",
+            defaultModelSelection: null,
+            scripts: [],
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          });
+          // @effect-diagnostics-next-line preferSchemaOverJson:off
+          assert.deepStrictEqual(JSON.parse(eventRows[3]!.payloadJson), {
             threadId: "thread-1",
             projectId: "project-1",
             title: "Thread",
@@ -302,8 +327,8 @@ layer("016_CanonicalizeModelSelections", (it) => {
             createdAt: "2026-01-01T00:00:00.000Z",
             updatedAt: "2026-01-01T00:00:00.000Z",
           });
-
-          assert.deepStrictEqual(JSON.parse(eventRows[3]!.payloadJson), {
+          // @effect-diagnostics-next-line preferSchemaOverJson:off
+          assert.deepStrictEqual(JSON.parse(eventRows[4]!.payloadJson), {
             threadId: "thread-2",
             projectId: "project-1",
             title: "Fallback Thread",
@@ -321,8 +346,8 @@ layer("016_CanonicalizeModelSelections", (it) => {
             createdAt: "2026-01-01T00:00:00.000Z",
             updatedAt: "2026-01-01T00:00:00.000Z",
           });
-
-          assert.deepStrictEqual(JSON.parse(eventRows[4]!.payloadJson), {
+          // @effect-diagnostics-next-line preferSchemaOverJson:off
+          assert.deepStrictEqual(JSON.parse(eventRows[5]!.payloadJson), {
             threadId: "thread-1",
             turnId: "turn-1",
             input: "hi",
@@ -335,14 +360,14 @@ layer("016_CanonicalizeModelSelections", (it) => {
             },
             deliveryMode: "buffered",
           });
-
-          assert.deepStrictEqual(JSON.parse(eventRows[5]!.payloadJson), {
+          // @effect-diagnostics-next-line preferSchemaOverJson:off
+          assert.deepStrictEqual(JSON.parse(eventRows[6]!.payloadJson), {
             threadId: "thread-3",
             projectId: "project-1",
             title: "Ancient Thread",
             modelSelection: {
               provider: "codex",
-              model: "gpt-5.5",
+              model: "gpt-5.4",
             },
             runtimeMode: "full-access",
             interactionMode: "default",

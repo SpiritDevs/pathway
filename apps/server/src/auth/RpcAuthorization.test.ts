@@ -1,0 +1,139 @@
+import {
+  AuthAccessReadScope,
+  AuthAccessWriteScope,
+  AuthOrchestrationOperateScope,
+  AuthOrchestrationReadScope,
+  AuthRelayReadScope,
+  AuthRelayWriteScope,
+  AuthStandardClientScopes,
+  COMPUTER_WS_METHODS,
+  ORCHESTRATION_V2_WS_METHODS,
+  WS_METHODS,
+  WsServerProbeRpc,
+  WsRpcGroup,
+} from "@spiritdevs/contracts";
+import { describe, expect, it } from "@effect/vitest";
+import * as Schema from "effect/Schema";
+
+import {
+  RPC_REQUIRED_SCOPES,
+  extraScopeForServerSettingsPatch,
+  requiredScopeForRpcMethod,
+} from "./RpcAuthorization.ts";
+
+describe("RPC authorization scopes", () => {
+  it("declares exactly one scope for every RPC in the server group", () => {
+    expect(new Set(Object.keys(RPC_REQUIRED_SCOPES))).toEqual(new Set(WsRpcGroup.requests.keys()));
+  });
+
+  it("requires orchestration read access for host headroom", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.serverGetHostResources)).toBe(
+      AuthOrchestrationReadScope,
+    );
+  });
+
+  it("lets read-only clients inspect socket permissions without granting launch access", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.serverProbe)).toBe(AuthOrchestrationReadScope);
+    const decode = Schema.decodeUnknownSync(WsServerProbeRpc.successSchema);
+    expect(decode({ scopes: [AuthOrchestrationReadScope] }).scopes).not.toContain(
+      AuthOrchestrationOperateScope,
+    );
+    expect(decode({})).toEqual({});
+    expect(decode({ scopes: [] }).scopes).toEqual([]);
+  });
+
+  it("requires operation access to prepare and commit remote desktop updates", () => {
+    for (const method of [
+      WS_METHODS.serverUpdateServer,
+      WS_METHODS.serverUpdateServerWithProgress,
+      WS_METHODS.serverCommitDesktopUpdate,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
+    }
+  });
+
+  it("authorizes background policy reporting and observation deliberately", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.serverReportClientActivity)).toBe(
+      AuthOrchestrationReadScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.serverReportHostPowerState)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.serverGetBackgroundPolicy)).toBe(
+      AuthOrchestrationReadScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.subscribeBackgroundPolicy)).toBe(
+      AuthOrchestrationReadScope,
+    );
+  });
+
+  it("allows relay status reads without granting relay installation access", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.cloudGetRelayClientStatus)).toBe(
+      AuthRelayReadScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.cloudInstallRelayClient)).toBe(AuthRelayWriteScope);
+  });
+
+  it("reads the reviewer menu under the same scope as the pull request it belongs to", () => {
+    // The candidate list is a read like the detail beside it, and asking somebody for a review is
+    // a write like every other pull request operation.
+    expect(requiredScopeForRpcMethod(WS_METHODS.pullRequestsReviewerCandidates)).toBe(
+      requiredScopeForRpcMethod(WS_METHODS.pullRequestsDetail),
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.pullRequestsRequestReviewers)).toBe(
+      requiredScopeForRpcMethod(WS_METHODS.pullRequestsComment),
+    );
+  });
+
+  it("rejects unknown RPC method names", () => {
+    for (const method of ["server.notRegistered", "toString", "constructor"]) {
+      expect(() => requiredScopeForRpcMethod(method)).toThrow(
+        `RPC method ${method} has no declared authorization scope.`,
+      );
+    }
+  });
+
+  it("allows cleanup observation with read access and requires operation access to retry deletion", () => {
+    expect(requiredScopeForRpcMethod(ORCHESTRATION_V2_WS_METHODS.subscribeWorkspaceCleanup)).toBe(
+      AuthOrchestrationReadScope,
+    );
+    expect(requiredScopeForRpcMethod(ORCHESTRATION_V2_WS_METHODS.retryWorkspaceCleanup)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+  });
+
+  it("lets read access watch Computer and requires operation access to act on it", () => {
+    const watching = new Set<string>([
+      COMPUTER_WS_METHODS.getStatus,
+      COMPUTER_WS_METHODS.listWindows,
+      COMPUTER_WS_METHODS.getState,
+      COMPUTER_WS_METHODS.getScreenSize,
+      COMPUTER_WS_METHODS.getThreadState,
+      COMPUTER_WS_METHODS.subscribeEvents,
+    ]);
+    for (const method of Object.values(COMPUTER_WS_METHODS)) {
+      if (method === COMPUTER_WS_METHODS.getAuditHistory) continue;
+      expect(requiredScopeForRpcMethod(method)).toBe(
+        watching.has(method) ? AuthOrchestrationReadScope : AuthOrchestrationOperateScope,
+      );
+    }
+  });
+
+  it("keeps the desktop-wide Computer audit log to admin clients", () => {
+    expect(requiredScopeForRpcMethod(COMPUTER_WS_METHODS.getAuditHistory)).toBe(
+      AuthAccessReadScope,
+    );
+    expect(AuthStandardClientScopes).not.toContain(AuthAccessReadScope);
+  });
+
+  it("keeps the Computer access policy and autonomy ceiling to admin clients", () => {
+    expect(extraScopeForServerSettingsPatch({ environmentName: "Studio" })).toBeNull();
+    expect(extraScopeForServerSettingsPatch({ computer: { accessPolicy: "admins-only" } })).toBe(
+      AuthAccessWriteScope,
+    );
+    expect(extraScopeForServerSettingsPatch({ computer: { autonomy: "full-access" } })).toBe(
+      AuthAccessWriteScope,
+    );
+    expect(AuthStandardClientScopes).not.toContain(AuthAccessWriteScope);
+  });
+});

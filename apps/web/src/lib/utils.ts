@@ -1,38 +1,15 @@
-import { CommandId, MessageId, ProjectId, SpaceId, ThreadId } from "@synara/contracts";
+import { CommandId, MessageId, ProjectId, ThreadId } from "@spiritdevs/contracts";
 import { type CxOptions, cx } from "class-variance-authority";
-import { extendTailwindMerge } from "tailwind-merge";
-import * as Random from "effect/Random";
-import * as Effect from "effect/Effect";
-
-// `text-ui*` / `text-chat*` are font sizes from the `@theme` block in index.css.
-// Register them so twMerge resolves them against `text-xs` etc. instead of
-// treating them as text colors.
-const twMerge = extendTailwindMerge({
-  extend: {
-    theme: {
-      text: [
-        "ui",
-        "ui-lg",
-        "ui-sm",
-        "ui-xs",
-        "ui-2xs",
-        "ui-meta",
-        "ui-timestamp",
-        "chat",
-        "chat-code",
-        "chat-meta",
-        "chat-tiny",
-      ],
-    },
-  },
-});
+import * as Encoding from "effect/Encoding";
+import { twMerge } from "tailwind-merge";
+import { DraftId } from "../composerDraftStore";
 
 export function cn(...inputs: CxOptions) {
   return twMerge(cx(inputs));
 }
 
 export function isMacPlatform(platform: string): boolean {
-  return /mac|darwin|iphone|ipad|ipod/i.test(platform);
+  return /mac|iphone|ipad|ipod/i.test(platform);
 }
 
 export function isWindowsPlatform(platform: string): boolean {
@@ -43,29 +20,24 @@ export function isLinuxPlatform(platform: string): boolean {
   return /linux/i.test(platform);
 }
 
-/** The host platform string, safe to read where `navigator` may be absent (SSR, node tests). */
-export function getNavigatorPlatform(): string {
-  return typeof navigator === "undefined" ? "" : navigator.platform;
-}
-
-/** Single source of truth for "render the ⌘ affordance instead of the Ctrl one". */
-export function isMacNavigatorPlatform(): boolean {
-  return isMacPlatform(getNavigatorPlatform());
+export function randomHex(byteLength: number): string {
+  return Encoding.encodeHex(globalThis.crypto.getRandomValues(new Uint8Array(byteLength)));
 }
 
 export function randomUUID(): string {
-  if (typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return Effect.runSync(Random.nextUUIDv4);
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = Encoding.encodeHex(bytes);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-export const newCommandId = (): CommandId => CommandId.makeUnsafe(randomUUID());
+export const newCommandId = (): CommandId => CommandId.make(randomUUID());
 
-export const newProjectId = (): ProjectId => ProjectId.makeUnsafe(randomUUID());
+export const newProjectId = (): ProjectId => ProjectId.make(randomUUID());
 
-export const newSpaceId = (): SpaceId => SpaceId.makeUnsafe(randomUUID());
+export const newThreadId = (): ThreadId => ThreadId.make(randomUUID());
 
-export const newThreadId = (): ThreadId => ThreadId.makeUnsafe(randomUUID());
+export const newDraftId = (): DraftId => DraftId.make(randomUUID());
 
-export const newMessageId = (): MessageId => MessageId.makeUnsafe(randomUUID());
+export const newMessageId = (): MessageId => MessageId.make(randomUUID());

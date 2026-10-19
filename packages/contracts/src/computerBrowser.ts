@@ -2,9 +2,9 @@ import { Schema } from "effect";
 
 /**
  * Contract surface for the cua-driver browser tool family — the CDP route
- * exposed as `computer_browser_*` on the agent gateway. These are NOT the
- * integrated `browser_*` automation tools (see `browserAutomation*`): the
- * integrated surface owns a Synara-managed browser home, while this family
+ * exposed as `computer_browser_*` in the Computer MCP toolkit. These are NOT the
+ * integrated `preview_*` automation tools (see `previewAutomation`): the
+ * integrated surface owns the Pathway preview browser, while this family
  * dispatches through the desktop driver's CDP engine, which is the only route
  * that reaches browsers the driver launched or an approved existing profile.
  *
@@ -15,7 +15,7 @@ import { Schema } from "effect";
  * transport, or ownership field — the host injects those.
  */
 
-/** Gateway names in registration order; each maps to exactly one driver tool. */
+/** Tool names in registration order; each maps to exactly one driver tool. */
 export const COMPUTER_BROWSER_TOOL_NAMES = [
   "computer_browser_state",
   "computer_browser_prepare",
@@ -68,7 +68,7 @@ export type ComputerBrowserRefusal = typeof ComputerBrowserRefusal.Type;
 /**
  * What a `status:"refused"` call looks like inside `structuredContent`. The
  * driver keeps `isError` unset for deliberate refusals — the refusal IS the
- * result — so gateways must branch on `structuredContent.status`, not on
+ * result — so callers must branch on `structuredContent.status`, not on
  * protocol error plumbing.
  */
 export const ComputerBrowserRefusedContent = Schema.Struct({
@@ -89,7 +89,7 @@ export const ComputerBrowserResultStatus = Schema.String;
  * The driver returns browser state (`get_browser_state`) as structured
  * content containing at least a minted `target_id` and a `tabs` inventory.
  * Everything beyond that is engine-version data: this schema declares the
- * fields Synara itself reads and leaves the rest opaque.
+ * fields Pathway itself reads and leaves the rest opaque.
  */
 export const ComputerBrowserTabInfo = Schema.Struct({
   tab_id: Schema.String,

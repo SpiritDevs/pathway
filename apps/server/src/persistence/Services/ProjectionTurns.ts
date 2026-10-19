@@ -11,14 +11,18 @@ import {
   IsoDateTime,
   MessageId,
   NonNegativeInt,
-  OrchestrationProposedPlanId,
-  OrchestrationCheckpointFile,
-  OrchestrationCheckpointStatus,
   ThreadId,
   TurnId,
-} from "@synara/contracts";
-import { Option, Schema, ServiceMap } from "effect";
-import type { Effect } from "effect";
+} from "@spiritdevs/contracts";
+import {
+  OrchestrationCheckpointFile,
+  OrchestrationCheckpointStatus,
+  OrchestrationProposedPlanId,
+} from "@spiritdevs/contracts/legacy-orchestration";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import * as Context from "effect/Context";
+import type * as Effect from "effect/Effect";
 
 import type { ProjectionRepositoryError } from "../Errors.ts";
 
@@ -87,15 +91,6 @@ export const GetProjectionTurnByTurnIdInput = Schema.Struct({
 });
 export type GetProjectionTurnByTurnIdInput = typeof GetProjectionTurnByTurnIdInput.Type;
 
-export interface ProjectionTurnWaitSnapshot {
-  readonly existingThreadIds: ReadonlyArray<GetProjectionTurnByTurnIdInput["threadId"]>;
-  readonly turns: ReadonlyArray<{
-    readonly threadId: GetProjectionTurnByTurnIdInput["threadId"];
-    readonly turnId: GetProjectionTurnByTurnIdInput["turnId"];
-    readonly state: ProjectionTurnState;
-  }>;
-}
-
 export const GetProjectionPendingTurnStartInput = Schema.Struct({
   threadId: ThreadId,
 });
@@ -156,17 +151,6 @@ export interface ProjectionTurnRepositoryShape {
     input: GetProjectionTurnByTurnIdInput,
   ) => Effect.Effect<Option.Option<ProjectionTurnById>, ProjectionRepositoryError>;
 
-  /** Batch lookup used by long-poll status readers to avoid one query per turn. */
-  readonly getManyByTurnId: (
-    input: ReadonlyArray<GetProjectionTurnByTurnIdInput>,
-  ) => Effect.Effect<ReadonlyArray<ProjectionTurnById>, ProjectionRepositoryError>;
-
-  /** One lightweight query for pinned turn states plus current thread existence. */
-  readonly getManyWaitSnapshot: (input: {
-    readonly threadIds: ReadonlyArray<GetProjectionTurnByTurnIdInput["threadId"]>;
-    readonly turns: ReadonlyArray<GetProjectionTurnByTurnIdInput>;
-  }) => Effect.Effect<ProjectionTurnWaitSnapshot, ProjectionRepositoryError>;
-
   /**
    * Clears checkpoint fields on conflicting rows that reuse the same checkpoint turn count in a thread, excluding the provided turn.
    */
@@ -182,7 +166,7 @@ export interface ProjectionTurnRepositoryShape {
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 }
 
-export class ProjectionTurnRepository extends ServiceMap.Service<
+export class ProjectionTurnRepository extends Context.Service<
   ProjectionTurnRepository,
   ProjectionTurnRepositoryShape
->()("synara/persistence/Services/ProjectionTurns/ProjectionTurnRepository") {}
+>()("@spiritdevs/pathway/persistence/Services/ProjectionTurns/ProjectionTurnRepository") {}

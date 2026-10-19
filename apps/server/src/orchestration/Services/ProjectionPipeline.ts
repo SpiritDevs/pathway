@@ -6,17 +6,11 @@
  *
  * @module OrchestrationProjectionPipeline
  */
-import type { OrchestrationEvent } from "@synara/contracts";
-import { ServiceMap } from "effect";
-import type { Effect } from "effect";
+import type { OrchestrationEvent } from "@spiritdevs/contracts/legacy-orchestration";
+import * as Context from "effect/Context";
+import type * as Effect from "effect/Effect";
 
 import type { ProjectionRepositoryError } from "../../persistence/Errors.ts";
-import type { ProjectMetadataOrchestrationEvent } from "../projectMetadataProjection.ts";
-import type { SpaceMetadataOrchestrationEvent } from "../spaceMetadataProjection.ts";
-
-export type ShellMetadataOrchestrationEvent =
-  | ProjectMetadataOrchestrationEvent
-  | SpaceMetadataOrchestrationEvent;
 
 /**
  * OrchestrationProjectionPipelineShape - Service API for projection execution.
@@ -37,50 +31,14 @@ export interface OrchestrationProjectionPipelineShape {
   readonly projectEvent: (
     event: OrchestrationEvent,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
-
-  /**
-   * Project only the hot-path repositories required for live transcript and
-   * session updates during streaming.
-   *
-   * PRECONDITION: the caller MUST already hold an open transaction. This method
-   * performs NO transaction management of its own — it runs the hot projectors
-   * directly against the ambient transaction so their writes commit atomically
-   * with the caller's. Use `projectEvent` (or another wrapping variant) when no
-   * surrounding transaction is held.
-   */
-  readonly projectHotEventInCurrentTransaction: (event: OrchestrationEvent) => Effect.Effect<
-    {
-      /**
-       * True when the deferred phase had no projector for this event and its
-       * cursor was advanced inside the hot transaction, so the caller must not
-       * run a separate deferred pass for it.
-       */
-      readonly deferredPhaseSettled: boolean;
-    },
-    ProjectionRepositoryError
-  >;
-
-  /**
-   * Project deferred repositories whose derived shell metadata is safe to
-   * compute after the main event transaction commits.
-   */
-  readonly projectDeferredEvent: (
-    event: OrchestrationEvent,
-  ) => Effect.Effect<void, ProjectionRepositoryError>;
-
-  /**
-   * Project a single project metadata event while the caller already owns the
-   * surrounding transaction.
-   */
-  readonly projectMetadataEvent: (
-    event: ShellMetadataOrchestrationEvent,
-  ) => Effect.Effect<void, ProjectionRepositoryError>;
 }
 
 /**
  * OrchestrationProjectionPipeline - Service tag for orchestration projections.
  */
-export class OrchestrationProjectionPipeline extends ServiceMap.Service<
+export class OrchestrationProjectionPipeline extends Context.Service<
   OrchestrationProjectionPipeline,
   OrchestrationProjectionPipelineShape
->()("synara/orchestration/Services/ProjectionPipeline/OrchestrationProjectionPipeline") {}
+>()(
+  "@spiritdevs/pathway/orchestration/Services/ProjectionPipeline/OrchestrationProjectionPipeline",
+) {}

@@ -3,10 +3,12 @@ import {
   type KeybindingCommand,
   type KeybindingRule,
   type ResolvedKeybindingsConfig,
-} from "@synara/contracts";
-import { Schema } from "effect";
+} from "@spiritdevs/contracts";
+import * as Schema from "effect/Schema";
 
 export const PROJECT_SCRIPT_KEYBINDING_INVALID_MESSAGE = "Invalid keybinding.";
+
+const decodeKeybindingRule = Schema.decodeUnknownOption(KeybindingRuleSchema);
 
 function normalizeProjectScriptKeybindingInput(
   keybinding: string | null | undefined,
@@ -22,7 +24,7 @@ export function decodeProjectScriptKeybindingRule(input: {
   const normalizedKey = normalizeProjectScriptKeybindingInput(input.keybinding);
   if (!normalizedKey) return null;
 
-  const decoded = Schema.decodeUnknownOption(KeybindingRuleSchema)({
+  const decoded = decodeKeybindingRule({
     key: normalizedKey,
     command: input.command,
   });
@@ -40,15 +42,18 @@ export function keybindingValueForCommand(
     const binding = keybindings[index];
     if (!binding || binding.command !== command) continue;
 
-    const shortcut = binding.shortcut;
     const parts: string[] = [];
-    if (shortcut.modKey) parts.push("mod");
-    if (shortcut.ctrlKey) parts.push("ctrl");
-    if (shortcut.metaKey) parts.push("meta");
-    if (shortcut.altKey) parts.push("alt");
-    if (shortcut.shiftKey) parts.push("shift");
+    if (binding.shortcut.modKey) parts.push("mod");
+    if (binding.shortcut.ctrlKey) parts.push("ctrl");
+    if (binding.shortcut.metaKey) parts.push("meta");
+    if (binding.shortcut.altKey) parts.push("alt");
+    if (binding.shortcut.shiftKey) parts.push("shift");
     const keyToken =
-      shortcut.key === " " ? "space" : shortcut.key === "escape" ? "esc" : shortcut.key;
+      binding.shortcut.key === " "
+        ? "space"
+        : binding.shortcut.key === "escape"
+          ? "esc"
+          : binding.shortcut.key;
     parts.push(keyToken);
     return parts.join("+");
   }

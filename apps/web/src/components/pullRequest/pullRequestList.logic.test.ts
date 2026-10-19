@@ -1,285 +1,445 @@
-import { describe, expect, it } from "vitest";
-
-import type { PullRequestActor, PullRequestListEntry } from "@synara/contracts";
+import type { PullRequestListEntry } from "@spiritdevs/contracts";
+import { describe, expect, it } from "vite-plus/test";
 
 import {
-  filterPullRequestEntriesByInvolvement,
-  groupPullRequestEntriesByInvolvement,
-  matchesPullRequestSearchQuery,
-  orderPullRequestEntriesPinnedFirst,
-  pullRequestListEntryKey,
-  pullRequestPinToggleInputs,
+  filterPullRequestsByInvolvement,
+  groupPullRequestsByInvolvement,
+  matchesPullRequestQuery,
+  mergePullRequestDiffStats,
+  narrowPullRequestsToFilters,
+  partitionPullRequestsWithPriority,
+  readPullRequestListSnapshot,
+  writePullRequestListSnapshot,
+  rankPullRequestMatches,
+  scorePullRequestMatch,
+  withDiffStat,
+  resolveProjectScope,
 } from "./pullRequestList.logic";
 
-function makeActor(login: string): PullRequestActor {
-  return { login, name: null, avatarUrl: null, url: null };
-}
+const VIEWERS = { "github.com": "Bilal" } as const;
+const NO_VIEWERS = {} as const;
 
-function makeEntry(overrides: Partial<PullRequestListEntry> = {}): PullRequestListEntry {
-  const entry: PullRequestListEntry = {
-    projectId: "project-1" as PullRequestListEntry["projectId"],
-    projectTitle: "Project One",
-    repository: "acme/widgets",
-    number: 1,
-    title: "Untitled",
-    url: "https://github.com/acme/widgets/pull/1",
-    author: makeActor("someone"),
-    headBranch: "feature",
+function entry(overrides: Partial<PullRequestListEntry> & Pick<PullRequestListEntry, "number">) {
+  return {
+    provider: "github",
+    host: "github.com",
+    projectId: "project-1",
+    projectTitle: "pathway",
+    repository: "coreybain/pathway",
+    title: "Add the pull requests page",
+    url: `https://github.com/coreybain/pathway/pull/${overrides.number}`,
+    author: { login: "octocat", name: null, avatarUrl: null },
+    headBranch: `feat/branch-${overrides.number}`,
     baseBranch: "main",
     state: "open",
     isDraft: false,
+    mergeability: "mergeable",
     additions: 1,
-    deletions: 1,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    reviewDecision: null,
+    deletions: 0,
+    createdAt: "2026-07-01T00:00:00Z",
+    updatedAt: "2026-07-02T00:00:00Z",
     viewerReviewRequested: false,
-    isPinned: false,
-    projectContexts: [],
-    mergeability: "unknown",
-    stack: null,
     labels: [],
     ...overrides,
-  };
-  return {
-    ...entry,
-    projectContexts: overrides.projectContexts ?? [
-      {
-        projectId: entry.projectId,
-        projectTitle: entry.projectTitle,
-        isPinned: entry.isPinned ?? false,
-      },
-    ],
-  };
+  } as PullRequestListEntry;
 }
 
-describe("groupPullRequestEntriesByInvolvement", () => {
-  it("places pinned entries in one leading group without duplicating their involvement", () => {
-    const pinned = makeEntry({
-      isPinned: true,
-      author: makeActor("viewer"),
-      viewerReviewRequested: true,
-    });
-    const reviewing = makeEntry({ number: 2, viewerReviewRequested: true });
-    const groups = groupPullRequestEntriesByInvolvement([reviewing, pinned], "viewer");
+describe("pull request involvement filtering", () => {
+  const entries = [
+    entry({ number: 1, author: { login: "Bilal", name: null, avatarUrl: null } }),
+    entry({ number: 2, viewerReviewRequested: true }),
+    entry({ number: 3 }),
+  ];
 
-    expect(groups.map((group) => group.key)).toEqual(["pinned", "reviewRequested"]);
-    expect(groups.flatMap((group) => group.entries)).toEqual([pinned, reviewing]);
+  it("matches the viewer's own pull requests case-insensitively", () => {
+    expect(
+      filterPullRequestsByInvolvement(entries, VIEWERS, "authored").map((item) => item.number),
+    ).toEqual([1]);
   });
 
-  it("buckets self-authored entries into Authored regardless of review-request state", () => {
-    const entry = makeEntry({ author: makeActor("viewer"), viewerReviewRequested: true });
-    const groups = groupPullRequestEntriesByInvolvement([entry], "viewer");
-    expect(groups).toEqual([{ key: "authored", label: "Authored", entries: [entry] }]);
+  it("returns nothing for Authored when the viewer is unknown", () => {
+    expect(filterPullRequestsByInvolvement(entries, NO_VIEWERS, "authored")).toEqual([]);
   });
 
-  it("buckets entries with an active review request into Review requested", () => {
-    const entry = makeEntry({ author: makeActor("teammate"), viewerReviewRequested: true });
-    const groups = groupPullRequestEntriesByInvolvement([entry], "viewer");
-    expect(groups).toEqual([
-      { key: "reviewRequested", label: "Review requested", entries: [entry] },
-    ]);
+  it("uses the server-computed review-request flag for Reviewing", () => {
+    expect(
+      filterPullRequestsByInvolvement(entries, VIEWERS, "reviewing").map((item) => item.number),
+    ).toEqual([2]);
   });
 
-  it("buckets every other entry into Others without inventing review history", () => {
-    const entry = makeEntry({ author: makeActor("teammate"), viewerReviewRequested: false });
-    const groups = groupPullRequestEntriesByInvolvement([entry], "viewer");
-    expect(groups).toEqual([{ key: "others", label: "Others", entries: [entry] }]);
+  it("does not treat a matching login on another host as the viewer", () => {
+    // The same name on GitLab is a different account, and its viewer is unknown here.
+    const mixed = [
+      entry({ number: 1, author: { login: "Bilal", name: null, avatarUrl: null } }),
+      entry({
+        number: 2,
+        provider: "gitlab",
+        host: "gitlab.com",
+        author: { login: "Bilal", name: null, avatarUrl: null },
+      }),
+    ];
+    expect(
+      filterPullRequestsByInvolvement(mixed, VIEWERS, "authored").map((item) => item.number),
+    ).toEqual([1]);
   });
 
-  it("buckets ghost-authored entries into Others", () => {
-    const entry = makeEntry({ author: null, viewerReviewRequested: false });
-    const groups = groupPullRequestEntriesByInvolvement([entry], "viewer");
-    expect(groups).toEqual([{ key: "others", label: "Others", entries: [entry] }]);
+  it("leaves the superset untouched for All", () => {
+    expect(filterPullRequestsByInvolvement(entries, VIEWERS, "all")).toHaveLength(3);
   });
 
-  it("matches viewer logins case-insensitively", () => {
-    const entry = makeEntry({ author: makeActor("Viewer") });
-    const groups = groupPullRequestEntriesByInvolvement([entry], "viewer");
-    expect(groups[0]?.key).toBe("authored");
-  });
-
-  it("orders groups reviewRequested, authored, others and omits empty buckets", () => {
-    const reviewing = makeEntry({
-      number: 1,
-      author: makeActor("teammate"),
-      viewerReviewRequested: true,
-    });
-    const other = makeEntry({
-      number: 2,
-      author: makeActor("someone-else"),
-      viewerReviewRequested: false,
-    });
-    const authored = makeEntry({ number: 3, author: makeActor("viewer") });
-    const groups = groupPullRequestEntriesByInvolvement([authored, other, reviewing], "viewer");
-    expect(groups.map((group) => group.key)).toEqual(["reviewRequested", "authored", "others"]);
-  });
-
-  it("returns no groups for an empty entry list", () => {
-    expect(groupPullRequestEntriesByInvolvement([], "viewer")).toEqual([]);
-  });
-
-  it("falls back gracefully when the viewer login is unknown", () => {
-    const entry = makeEntry({ author: makeActor("someone") });
-    const groups = groupPullRequestEntriesByInvolvement([entry], null);
-    expect(groups[0]?.key).toBe("others");
+  it("keeps two hosts of one provider kind as two accounts", () => {
+    // A GitHub Enterprise install is a different account from github.com, so the viewer for
+    // one must not claim authorship of the other's change requests.
+    const mixed = [
+      entry({ number: 1, author: { login: "Bilal", name: null, avatarUrl: null } }),
+      entry({
+        number: 2,
+        host: "github.acme.dev",
+        author: { login: "Bilal", name: null, avatarUrl: null },
+      }),
+    ];
+    expect(
+      filterPullRequestsByInvolvement(mixed, VIEWERS, "authored").map((item) => item.number),
+    ).toEqual([1]);
   });
 });
 
-describe("orderPullRequestEntriesPinnedFirst", () => {
-  it("moves pins first without disturbing order inside either section", () => {
-    const first = makeEntry({ number: 1 });
-    const pinnedFirst = makeEntry({ number: 2, isPinned: true });
-    const second = makeEntry({ number: 3 });
-    const pinnedSecond = makeEntry({ number: 4, isPinned: true });
+describe("pull request grouping", () => {
+  it("buckets authored above review-requested and drops empty groups", () => {
+    const groups = groupPullRequestsByInvolvement(
+      [
+        entry({ number: 1, author: { login: "bilal", name: null, avatarUrl: null } }),
+        entry({ number: 2, viewerReviewRequested: true }),
+      ],
+      VIEWERS,
+    );
+    expect(groups.map((group) => [group.key, group.entries.length])).toEqual([
+      ["reviewRequested", 1],
+      ["authored", 1],
+    ]);
+  });
 
+  it("puts everything in Others when the viewer is unknown", () => {
+    const groups = groupPullRequestsByInvolvement([entry({ number: 1 })], NO_VIEWERS);
+    expect(groups.map((group) => group.key)).toEqual(["others"]);
+  });
+
+  it("counts an authored pull request once, even with a review request on it", () => {
+    const groups = groupPullRequestsByInvolvement(
+      [
+        entry({
+          number: 1,
+          author: { login: "bilal", name: null, avatarUrl: null },
+          viewerReviewRequested: true,
+        }),
+      ],
+      VIEWERS,
+    );
+    expect(groups.map((group) => group.key)).toEqual(["authored"]);
+  });
+});
+
+describe("pull request search", () => {
+  const target = entry({
+    number: 4711,
+    title: "Restore sidebar actions",
+    headBranch: "fix/sidebar",
+  });
+
+  it("matches the number with or without the leading hash", () => {
+    expect(matchesPullRequestQuery(target, "#4711")).toBe(true);
+    expect(matchesPullRequestQuery(target, "4711")).toBe(true);
+  });
+
+  it("matches title, branch and author case-insensitively", () => {
+    expect(matchesPullRequestQuery(target, "SIDEBAR")).toBe(true);
+    expect(matchesPullRequestQuery(target, "fix/side")).toBe(true);
+    expect(matchesPullRequestQuery(target, "octocat")).toBe(true);
+  });
+
+  it("ignores surrounding whitespace and rejects non-matches", () => {
+    expect(matchesPullRequestQuery(target, "   ")).toBe(true);
+    expect(matchesPullRequestQuery(target, "kanban")).toBe(false);
+  });
+});
+
+describe("carrying rows already read into filters nothing has answered yet", () => {
+  const rows = [
+    entry({ number: 1 }),
+    entry({ number: 2, state: "merged" }),
+    entry({ number: 3, state: "closed" }),
+    entry({ number: 4, host: "github.acme.dev" }),
+    entry({ number: 5, projectId: "project-2" as PullRequestListEntry["projectId"] }),
+  ];
+  const everything = { state: "all", projectId: undefined, host: undefined } as const;
+
+  it("never lets a merged pull request sit under Open", () => {
     expect(
-      orderPullRequestEntriesPinnedFirst([first, pinnedFirst, second, pinnedSecond]).map(
-        (entry) => entry.number,
+      narrowPullRequestsToFilters(rows, { ...everything, state: "open" }).map((row) => row.number),
+    ).toEqual([1, 4, 5]);
+  });
+
+  it("keeps only the state that was asked for", () => {
+    expect(
+      narrowPullRequestsToFilters(rows, { ...everything, state: "merged" }).map(
+        (row) => row.number,
       ),
-    ).toEqual([2, 4, 1, 3]);
-  });
-});
-
-describe("pull request list identity", () => {
-  it("uses one stable row identity across projects sharing a repository", () => {
-    const first = makeEntry();
-    const second = makeEntry({
-      projectId: "project-2" as PullRequestListEntry["projectId"],
-      projectTitle: "Project Two",
-    });
-    expect(pullRequestListEntryKey(first)).toBe(pullRequestListEntryKey(second));
-  });
-});
-
-describe("pullRequestPinToggleInputs", () => {
-  it("clears every owning project from an aggregate pinned row", () => {
-    const entry = makeEntry({
-      isPinned: true,
-      projectContexts: [
-        {
-          projectId: "project-1" as PullRequestListEntry["projectId"],
-          projectTitle: "Project One",
-          isPinned: true,
-        },
-        {
-          projectId: "project-2" as PullRequestListEntry["projectId"],
-          projectTitle: "Project Two",
-          isPinned: true,
-        },
-      ],
-    });
-
-    expect(pullRequestPinToggleInputs(entry, true)).toEqual([
-      {
-        projectId: "project-1",
-        repository: "acme/widgets",
-        number: 1,
-        isPinned: false,
-      },
-      {
-        projectId: "project-2",
-        repository: "acme/widgets",
-        number: 1,
-        isPinned: false,
-      },
-    ]);
+    ).toEqual([2]);
   });
 
-  it("keeps project-scoped pin toggles local", () => {
-    const entry = makeEntry({ isPinned: true });
-    expect(pullRequestPinToggleInputs(entry, false)).toEqual([
-      {
-        projectId: entry.projectId,
-        repository: entry.repository,
-        number: entry.number,
-        isPinned: false,
-      },
-    ]);
-  });
-
-  it("pins every associated project from an aggregate unpinned row", () => {
-    const entry = makeEntry({
-      projectContexts: [
-        {
-          projectId: "project-1" as PullRequestListEntry["projectId"],
-          projectTitle: "Project One",
-          isPinned: false,
-        },
-        {
-          projectId: "project-2" as PullRequestListEntry["projectId"],
-          projectTitle: "Project Two",
-          isPinned: false,
-        },
-      ],
-    });
-    expect(pullRequestPinToggleInputs(entry, true)).toEqual([
-      {
-        projectId: "project-1",
-        repository: "acme/widgets",
-        number: 1,
-        isPinned: true,
-      },
-      {
-        projectId: "project-2",
-        repository: "acme/widgets",
-        number: 1,
-        isPinned: true,
-      },
-    ]);
-  });
-});
-
-describe("filterPullRequestEntriesByInvolvement", () => {
-  it("returns every entry for the all tab", () => {
-    const entries = [makeEntry(), makeEntry({ number: 2 })];
-    expect(filterPullRequestEntriesByInvolvement(entries, "viewer", "all")).toEqual(entries);
-  });
-
-  it("keeps only entries with an active review request for the reviewing tab", () => {
-    const requested = makeEntry({ viewerReviewRequested: true });
-    const other = makeEntry({ number: 2 });
+  it("narrows to one host, which two installs of one kind cannot share", () => {
     expect(
-      filterPullRequestEntriesByInvolvement([requested, other], "viewer", "reviewing"),
-    ).toEqual([requested]);
+      narrowPullRequestsToFilters(rows, { ...everything, host: "github.acme.dev" }).map(
+        (row) => row.number,
+      ),
+    ).toEqual([4]);
   });
 
-  it("matches the viewer's authored entries case-insensitively", () => {
-    const authored = makeEntry({ author: makeActor("Viewer") });
-    const other = makeEntry({ number: 2, author: makeActor("teammate") });
-    expect(filterPullRequestEntriesByInvolvement([authored, other], "viewer", "authored")).toEqual([
-      authored,
-    ]);
+  it("narrows to one project", () => {
+    expect(
+      narrowPullRequestsToFilters(rows, { ...everything, projectId: "project-2" }).map(
+        (row) => row.number,
+      ),
+    ).toEqual([5]);
   });
 
-  it("returns no authored entries when the viewer login is unknown", () => {
-    const entry = makeEntry({ author: makeActor("someone") });
-    expect(filterPullRequestEntriesByInvolvement([entry], null, "authored")).toEqual([]);
+  it("holds on to everything when nothing narrows it", () => {
+    expect(narrowPullRequestsToFilters(rows, everything)).toEqual(rows);
   });
 });
 
-describe("matchesPullRequestSearchQuery", () => {
-  it("matches every entry when the query is empty", () => {
-    expect(matchesPullRequestSearchQuery(makeEntry(), "")).toBe(true);
+describe("resolveProjectScope", () => {
+  const projects = [{ id: "p1" }, { id: "p2" }];
+
+  it("keeps an id the environment has", () => {
+    expect(resolveProjectScope("p2", projects, true)).toBe("p2");
   });
 
-  it("matches title, repository, branch, and author case-insensitively", () => {
-    const entry = makeEntry({
-      title: "Fix Widget",
-      repository: "acme/widgets",
-      headBranch: "feat/widget-fix",
-      author: makeActor("Reviewer"),
+  it("drops an id from another environment", () => {
+    expect(resolveProjectScope("p9", projects, false)).toBe("p9");
+    expect(resolveProjectScope("p9", projects, true)).toBeUndefined();
+  });
+
+  it("drops an id once the environment is known to have no projects", () => {
+    expect(resolveProjectScope("p9", [], true)).toBeUndefined();
+  });
+
+  it("keeps an id while the projects are still unknown", () => {
+    // Dropping here would list every project for a moment before narrowing back down.
+    expect(resolveProjectScope("p9", [], false)).toBe("p9");
+  });
+});
+
+describe("ranking what a search found", () => {
+  const row = (overrides: Partial<PullRequestListEntry> & { number?: number }) =>
+    entry({ number: 1, ...overrides });
+
+  it("puts the pull request whose title says it above one that merely mentions it", () => {
+    const titled = row({
+      number: 1,
+      title: "Add the welcome wizard",
+      updatedAt: "2026-07-01T00:00:00Z",
     });
-    expect(matchesPullRequestSearchQuery(entry, "widget")).toBe(true);
-    expect(matchesPullRequestSearchQuery(entry, "acme/")).toBe(true);
-    expect(matchesPullRequestSearchQuery(entry, "feat/")).toBe(true);
-    expect(matchesPullRequestSearchQuery(entry, "reviewer")).toBe(true);
-    expect(matchesPullRequestSearchQuery(entry, "nomatch")).toBe(false);
+    const mentioned = row({
+      number: 2,
+      title: "Unrelated work",
+      updatedAt: "2026-08-01T00:00:00Z",
+    });
+    expect(
+      rankPullRequestMatches([mentioned, titled], "welcome wizard").map((entry) => entry.number),
+    ).toEqual([1, 2]);
   });
 
-  it("matches the pull request number with and without the leading hash", () => {
-    const entry = makeEntry({ number: 350 });
-    expect(matchesPullRequestSearchQuery(entry, "#350")).toBe(true);
-    expect(matchesPullRequestSearchQuery(entry, "350")).toBe(true);
+  it("finds the words in any order, which is how people type them", () => {
+    // Substrings count, so "welcomes" answers "welcome" — a search is not a spelling test.
+    expect(
+      scorePullRequestMatch(row({ title: "The wizard that welcomes" }), "welcome wizard"),
+    ).toBe(70);
+    expect(
+      scorePullRequestMatch(row({ title: "Wizard for the welcome flow" }), "welcome wizard"),
+    ).toBe(70);
+    // One of the two words is a mention, not an answer, and ranks under both.
+    expect(scorePullRequestMatch(row({ title: "A wizard, of sorts" }), "welcome wizard")).toBe(30);
+  });
+
+  it("answers a number with the pull request that has it, and nothing else", () => {
+    expect(scorePullRequestMatch(row({ number: 42 }), "#42")).toBe(100);
+    expect(scorePullRequestMatch(row({ number: 42 }), "43")).toBe(0);
+  });
+
+  it("keeps recency where nothing tells two results apart", () => {
+    const older = row({ number: 1, title: "no match here", updatedAt: "2026-07-01T00:00:00Z" });
+    const newer = row({ number: 2, title: "none here either", updatedAt: "2026-08-01T00:00:00Z" });
+    expect(rankPullRequestMatches([older, newer], "wizard").map((entry) => entry.number)).toEqual([
+      2, 1,
+    ]);
+  });
+
+  it("leaves a listing with no search in the order it arrived", () => {
+    const first = row({ number: 1, updatedAt: "2026-07-01T00:00:00Z" });
+    const second = row({ number: 2, updatedAt: "2026-08-01T00:00:00Z" });
+    expect(rankPullRequestMatches([first, second], "  ")).toEqual([first, second]);
+  });
+});
+
+describe("line counts that arrive after the rows", () => {
+  const stats = new Map([["project-1 7", { additions: 42, deletions: 3 }]]);
+
+  it("fills in a row whose host left the counts for later", () => {
+    const row = entry({ number: 7, additions: 0, deletions: 0 });
+    expect(withDiffStat(row, stats)).toEqual({ ...row, additions: 42, deletions: 3 });
+  });
+
+  it("leaves a row the host already counted alone", () => {
+    const row = entry({ number: 7, additions: 1, deletions: 1 });
+    expect(withDiffStat(row, stats)).toBe(row);
+  });
+
+  it("leaves a row whose counts have not arrived as it is", () => {
+    const row = entry({ number: 9, additions: 0, deletions: 0 });
+    expect(withDiffStat(row, stats)).toBe(row);
+  });
+});
+
+describe("merging line counts across keyed stats queries", () => {
+  it("keeps counts already held while a fresh batch says nothing about them", () => {
+    const held = mergePullRequestDiffStats(new Map(), [
+      { projectId: "project-1", number: 1, additions: 10, deletions: 2 },
+      { projectId: "project-1", number: 2, additions: 5, deletions: 1 },
+    ]);
+    // A third row appeared; its batch is still pending and contributes nothing yet.
+    const merged = mergePullRequestDiffStats(held, []);
+    expect(merged.get("project-1 1")).toEqual({ additions: 10, deletions: 2 });
+    expect(merged.get("project-1 2")).toEqual({ additions: 5, deletions: 1 });
+  });
+
+  it("replaces a count once its replacement arrives, keeping its neighbours", () => {
+    const held = mergePullRequestDiffStats(new Map(), [
+      { projectId: "project-1", number: 1, additions: 10, deletions: 2 },
+    ]);
+    const merged = mergePullRequestDiffStats(held, [
+      { projectId: "project-1", number: 1, additions: 11, deletions: 2 },
+      { projectId: "project-1", number: 3, additions: 7, deletions: 0 },
+    ]);
+    expect(merged.get("project-1 1")).toEqual({ additions: 11, deletions: 2 });
+    expect(merged.get("project-1 3")).toEqual({ additions: 7, deletions: 0 });
+  });
+
+  it("does not mutate the map it was handed", () => {
+    const held = new Map([["project-1 1", { additions: 1, deletions: 1 }]]);
+    mergePullRequestDiffStats(held, [
+      { projectId: "project-1", number: 1, additions: 2, deletions: 2 },
+    ]);
+    expect(held.get("project-1 1")).toEqual({ additions: 1, deletions: 1 });
+  });
+});
+
+describe("partitioning with the hosts' own priority reads", () => {
+  const authoredRow = (number: number, updatedAt: string) =>
+    entry({ number, updatedAt, author: { login: "Bilal", name: null, avatarUrl: null } });
+
+  it("keeps Others in feed order when a continuation lands an authored row already partitioned", () => {
+    const older = entry({ number: 1, updatedAt: "2026-07-05T00:00:00Z" });
+    const newer = entry({ number: 2, updatedAt: "2026-07-06T00:00:00Z" });
+    const mine = authoredRow(3, "2026-07-04T00:00:00Z");
+    // The authored partition already holds the row the continuation carries.
+    const groups = partitionPullRequestsWithPriority([newer, older, mine], [mine], []);
+    expect(groups.map((group) => group.key)).toEqual(["authored", "others"]);
+    expect(groups[1]!.entries.map((item) => item.number)).toEqual([2, 1]);
+    expect(groups[0]!.entries.map((item) => item.number)).toEqual([3]);
+  });
+
+  it("appends an authored row the partition page missed to Others rather than moving it up", () => {
+    const shown = entry({ number: 1, updatedAt: "2026-07-06T00:00:00Z" });
+    const olderMine = authoredRow(9, "2026-01-01T00:00:00Z");
+    const groups = partitionPullRequestsWithPriority([shown, olderMine], [], []);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.entries.map((item) => item.number)).toEqual([1, 9]);
+  });
+
+  it("gives authored precedence over review-requested and orders partitions by recency", () => {
+    const both = authoredRow(1, "2026-07-01T00:00:00Z");
+    const requested = entry({
+      number: 2,
+      viewerReviewRequested: true,
+      updatedAt: "2026-07-02T00:00:00Z",
+    });
+    const requestedOlder = entry({
+      number: 3,
+      viewerReviewRequested: true,
+      updatedAt: "2026-06-02T00:00:00Z",
+    });
+    const groups = partitionPullRequestsWithPriority([], [both], [both, requestedOlder, requested]);
+    expect(groups.map((group) => group.key)).toEqual(["reviewRequested", "authored"]);
+    expect(groups[0]!.entries.map((item) => item.number)).toEqual([2, 3]);
+    expect(groups[1]!.entries.map((item) => item.number)).toEqual([1]);
+  });
+
+  it("lets the feed's copy of a partitioned row replace the partition's", () => {
+    const stale = authoredRow(1, "2026-07-01T00:00:00Z");
+    const fresh = { ...stale, title: "Retitled" };
+    const groups = partitionPullRequestsWithPriority([fresh], [stale], []);
+    expect(groups[0]!.entries[0]!.title).toBe("Retitled");
+  });
+});
+
+describe("the list snapshot across a reload", () => {
+  const makeStorage = () => {
+    const held = new Map<string, string>();
+    return {
+      getItem: (key: string) => held.get(key) ?? null,
+      setItem: (key: string, value: string) => void held.set(key, value),
+    };
+  };
+  const data = {
+    entries: [entry({ number: 1 })],
+    viewers: { "github.com": "Bilal" },
+    providers: [],
+    errors: [{ projectId: "project-1", message: "boom" }],
+    truncated: true,
+    nextCursors: { "coreybain/pathway": "cursor-1" },
+  } as never;
+
+  it("hydrates the retained rows so ghosts never replace them", () => {
+    const storage = makeStorage();
+    writePullRequestListSnapshot(storage, "env-1", { scope: "env-1:open:all::", data });
+    const snapshot = readPullRequestListSnapshot(storage, "env-1");
+    expect(snapshot?.scope).toBe("env-1:open:all::");
+    expect(snapshot?.data.entries.map((item) => item.number)).toEqual([1]);
+  });
+
+  it("carries neither stale failures nor stale cursors", () => {
+    const storage = makeStorage();
+    writePullRequestListSnapshot(storage, "env-1", { scope: "s", data });
+    const snapshot = readPullRequestListSnapshot(storage, "env-1");
+    expect(snapshot?.data.errors).toEqual([]);
+    expect(snapshot?.data.nextCursors).toEqual({});
+  });
+
+  it("answers nothing for another environment", () => {
+    const storage = makeStorage();
+    writePullRequestListSnapshot(storage, "env-1", { scope: "s", data });
+    expect(readPullRequestListSnapshot(storage, "env-2")).toBeNull();
+  });
+
+  it("rejects a snapshot whose rows do not decode as entries", () => {
+    const storage = makeStorage();
+    storage.setItem(
+      "pathway.pullRequests.list:env-1",
+      JSON.stringify({ scope: "s", data: { entries: [null] } }),
+    );
+    expect(readPullRequestListSnapshot(storage, "env-1")).toBeNull();
+    storage.setItem(
+      "pathway.pullRequests.list:env-1",
+      JSON.stringify({ scope: "s", data: { entries: [{ host: "github.com" }] } }),
+    );
+    expect(readPullRequestListSnapshot(storage, "env-1")).toBeNull();
+  });
+
+  it("shrugs off corrupt storage and no storage at all", () => {
+    const storage = makeStorage();
+    storage.setItem("pathway.pullRequests.list:env-1", "{not json");
+    expect(readPullRequestListSnapshot(storage, "env-1")).toBeNull();
+    expect(readPullRequestListSnapshot(undefined, "env-1")).toBeNull();
   });
 });

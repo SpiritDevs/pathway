@@ -1,16 +1,144 @@
 import {
-  DEFAULT_MODEL_BY_PROVIDER,
+  isProviderDriverKind,
+  isProviderAvailable,
   type ModelSelection,
-  type ProviderStartOptions,
-  type ServerSettings,
+  type ProviderDriverKind,
+  type ServerProvider,
+  ServerSettings,
   type ServerSettingsPatch,
-} from "@synara/contracts";
-import { deepMerge, type DeepPartial } from "./Struct";
+} from "@spiritdevs/contracts";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import { deepMerge } from "./Struct.ts";
+import { fromLenientJson } from "./schemaJson.ts";
+import { createModelSelection } from "./model.ts";
+import {
+  getBackgroundActivityBaseProfile,
+  normalizeBackgroundActivitySettings,
+  normalizeServerBackgroundActivitySettings,
+  resolveBackgroundActivitySettings,
+} from "./backgroundActivitySettings.ts";
 
-function shouldReplaceTextGenerationModelSelection(
-  patch: ServerSettingsPatch["textGenerationModelSelection"] | undefined,
+const ServerSettingsJson = fromLenientJson(ServerSettings);
+const decodeServerSettingsJson = Schema.decodeUnknownOption(ServerSettingsJson);
+
+type LegacyProviderSettings = ServerSettings["providers"][keyof ServerSettings["providers"]];
+
+const getLegacyProviderSettings = (
+  settings: ServerSettings,
+  provider: ProviderDriverKind,
+): LegacyProviderSettings | undefined =>
+  (settings.providers as Record<string, LegacyProviderSettings | undefined>)[provider];
+
+export function isModelSelectionProviderEnabled(
+  settings: ServerSettings,
+  selection: ModelSelection,
 ): boolean {
-  return Boolean(patch && (patch.provider !== undefined || patch.model !== undefined));
+  const instanceConfig = settings.providerInstances[selection.instanceId];
+  if (instanceConfig !== undefined) {
+    return instanceConfig.enabled ?? true;
+  }
+
+  return (
+    isProviderDriverKind(selection.instanceId) &&
+    getLegacyProviderSettings(settings, selection.instanceId)?.enabled === true
+  );
+}
+
+export function resolveSourceControlWriterModelSelection(
+  settings: ServerSettings,
+  providers?: ReadonlyArray<ServerProvider>,
+): ModelSelection {
+  const selection = settings.sourceControlWriterModelSelection;
+  if (!selection || !isModelSelectionProviderEnabled(settings, selection)) {
+    return settings.textGenerationModelSelection;
+  }
+  if (providers === undefined) {
+    return selection;
+  }
+
+  const provider = providers.find((candidate) => candidate.instanceId === selection.instanceId);
+  return provider?.enabled === true && isProviderAvailable(provider)
+    ? selection
+    : settings.textGenerationModelSelection;
+}
+
+export interface PersistedServerObservabilitySettings {
+  readonly otlpTracesUrl: string | undefined;
+  readonly otlpMetricsUrl: string | undefined;
+}
+
+export function normalizePersistedServerSettingString(
+  value: string | null | undefined,
+): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
+export function extractPersistedServerObservabilitySettings(input: {
+  readonly observability?: {
+    readonly otlpTracesUrl?: string;
+    readonly otlpMetricsUrl?: string;
+  };
+}): PersistedServerObservabilitySettings {
+  return {
+    otlpTracesUrl: normalizePersistedServerSettingString(input.observability?.otlpTracesUrl),
+    otlpMetricsUrl: normalizePersistedServerSettingString(input.observability?.otlpMetricsUrl),
+  };
+}
+
+export function parsePersistedServerObservabilitySettings(
+  raw: string,
+): PersistedServerObservabilitySettings {
+  const decoded = decodeServerSettingsJson(raw);
+  if (Option.isSome(decoded)) {
+    return extractPersistedServerObservabilitySettings(decoded.value);
+  }
+  return { otlpTracesUrl: undefined, otlpMetricsUrl: undefined };
+}
+
+type ModelSelectionPatch = NonNullable<ServerSettingsPatch["textGenerationModelSelection"]>;
+
+/**
+ * Naming a different instance or a different model starts the option set over. Options are
+ * model-specific — a reasoning effort means nothing to a model that has no reasoning — so carrying
+ * the old ones across a switch would hand the new model settings that were never chosen for it.
+ */
+function shouldReplaceTextGenerationModelSelection(
+  patch: ModelSelectionPatch | undefined,
+): boolean {
+  return Boolean(patch && (patch.instanceId !== undefined || patch.model !== undefined));
+}
+
+/** Apply one `ModelSelectionPatch` over one current selection. Shared by every selection key. */
+function applyModelSelectionPatch(
+  current: ModelSelection,
+  patch: ModelSelectionPatch,
+): ModelSelection {
+  const instanceId = patch.instanceId ?? current.instanceId;
+  const model = patch.model ?? current.model;
+  const options = shouldReplaceTextGenerationModelSelection(patch)
+    ? patch.options
+    : mergeModelSelectionOptionsById({ current: current.options, patch: patch.options });
+  return createModelSelection(instanceId, model, options);
+}
+
+function mergeModelSelectionOptionsById(input: {
+  current: ReadonlyArray<{ readonly id: string; readonly value: string | boolean }> | undefined;
+  patch: ReadonlyArray<{ readonly id: string; readonly value: string | boolean }> | undefined;
+}): Array<{ id: string; value: string | boolean }> | undefined {
+  if (input.patch === undefined) {
+    return input.current ? [...input.current] : undefined;
+  }
+  if (input.patch.length === 0) {
+    return undefined;
+  }
+
+  const merged = new Map((input.current ?? []).map((selection) => [selection.id, selection.value]));
+  for (const selection of input.patch) {
+    merged.set(selection.id, selection.value);
+  }
+  return [...merged.entries()].map(([id, value]) => ({ id, value }));
 }
 
 export function applyServerSettingsPatch(
@@ -18,71 +146,122 @@ export function applyServerSettingsPatch(
   patch: ServerSettingsPatch,
 ): ServerSettings {
   const selectionPatch = patch.textGenerationModelSelection;
-  const next = deepMerge(current, patch as DeepPartial<ServerSettings>);
-  if (!selectionPatch) {
-    return next;
-  }
-
-  const provider = selectionPatch.provider ?? current.textGenerationModelSelection.provider;
-  const model =
-    selectionPatch.model ??
-    (selectionPatch.provider &&
-    selectionPatch.provider !== "pi" &&
-    selectionPatch.provider !== current.textGenerationModelSelection.provider
-      ? DEFAULT_MODEL_BY_PROVIDER[selectionPatch.provider]
-      : current.textGenerationModelSelection.model);
-  const options = shouldReplaceTextGenerationModelSelection(selectionPatch)
-    ? selectionPatch.options
-    : (selectionPatch.options ?? current.textGenerationModelSelection.options);
-
-  return {
+  const timeTrackerSelectionPatch = patch.timeTrackerModelSelection;
+  const compactionSelectionPatch = patch.contextCompactionModelSelection;
+  const enrichmentSelectionPatch = patch.issueEnrichmentModelSelection;
+  const {
+    automaticGitFetchInterval,
+    providerHealthRefreshInterval,
+    backgroundActivityProfile,
+    backgroundActivity,
+    ...patchForMerge
+  } = patch;
+  const currentBackgroundActivity = normalizeServerBackgroundActivitySettings(current);
+  const backgroundActivityPatch =
+    backgroundActivityProfile !== undefined
+      ? {
+          schemaVersion: 1 as const,
+          profile:
+            automaticGitFetchInterval !== undefined || providerHealthRefreshInterval !== undefined
+              ? ("custom" as const)
+              : backgroundActivityProfile,
+          ...(automaticGitFetchInterval !== undefined || providerHealthRefreshInterval !== undefined
+            ? { baseProfile: backgroundActivityProfile }
+            : {}),
+          overrides: {
+            ...(automaticGitFetchInterval !== undefined ? { automaticGitFetchInterval } : {}),
+            ...(providerHealthRefreshInterval !== undefined
+              ? { providerHealthRefreshInterval }
+              : {}),
+          },
+        }
+      : automaticGitFetchInterval !== undefined || providerHealthRefreshInterval !== undefined
+        ? {
+            schemaVersion: 1 as const,
+            profile: "custom" as const,
+            baseProfile: getBackgroundActivityBaseProfile(currentBackgroundActivity),
+            overrides: {
+              ...(currentBackgroundActivity.profile === "custom"
+                ? currentBackgroundActivity.overrides
+                : {}),
+              ...(automaticGitFetchInterval !== undefined ? { automaticGitFetchInterval } : {}),
+              ...(providerHealthRefreshInterval !== undefined
+                ? { providerHealthRefreshInterval }
+                : {}),
+            },
+          }
+        : undefined;
+  const next = deepMerge(current, patchForMerge);
+  const nextWithReplacementsBase = {
     ...next,
-    textGenerationModelSelection: {
-      provider,
-      model,
-      ...(options !== undefined ? { options } : {}),
-    } as ModelSelection,
+    ...(backgroundActivity !== undefined
+      ? {
+          backgroundActivity: {
+            ...deepMerge(currentBackgroundActivity, backgroundActivity),
+            ...(backgroundActivity.overrides !== undefined
+              ? { overrides: backgroundActivity.overrides }
+              : {}),
+          },
+        }
+      : { backgroundActivity: currentBackgroundActivity }),
+    ...(backgroundActivity === undefined && backgroundActivityPatch !== undefined
+      ? { backgroundActivity: backgroundActivityPatch }
+      : {}),
+    ...(patch.providerInstances !== undefined
+      ? { providerInstances: patch.providerInstances }
+      : {}),
+    ...(patch.sourceControlWriterModelSelection !== undefined
+      ? { sourceControlWriterModelSelection: patch.sourceControlWriterModelSelection }
+      : {}),
+    ...(automaticGitFetchInterval !== undefined ? { automaticGitFetchInterval } : {}),
+    ...(providerHealthRefreshInterval !== undefined ? { providerHealthRefreshInterval } : {}),
   };
-}
-
-/** Server-owned launch options derived from the persisted non-secret settings snapshot. */
-export function providerStartOptionsFromServerSettings(
-  settings: ServerSettings,
-): ProviderStartOptions {
-  const { providers } = settings;
+  const normalizedBackgroundActivity = normalizeBackgroundActivitySettings(
+    nextWithReplacementsBase.backgroundActivity,
+  );
+  const resolvedBackgroundActivity = resolveBackgroundActivitySettings(
+    normalizedBackgroundActivity,
+  );
+  const nextWithReplacements = {
+    ...nextWithReplacementsBase,
+    backgroundActivity: normalizedBackgroundActivity,
+    automaticGitFetchInterval: resolvedBackgroundActivity.automaticGitFetchInterval,
+    providerHealthRefreshInterval: resolvedBackgroundActivity.providerHealthRefreshInterval,
+    backgroundActivityProfile: resolvedBackgroundActivity.profile,
+  };
   return {
-    codex: {
-      ...(providers.codex.binaryPath ? { binaryPath: providers.codex.binaryPath } : {}),
-      ...(providers.codex.homePath ? { homePath: providers.codex.homePath } : {}),
-    },
-    claudeAgent: {
-      ...(providers.claudeAgent.binaryPath ? { binaryPath: providers.claudeAgent.binaryPath } : {}),
-      enableArtifacts: providers.claudeAgent.enableArtifacts,
-    },
-    cursor: {
-      ...(providers.cursor.binaryPath ? { binaryPath: providers.cursor.binaryPath } : {}),
-      ...(providers.cursor.apiEndpoint ? { apiEndpoint: providers.cursor.apiEndpoint } : {}),
-    },
-    antigravity: {
-      ...(providers.antigravity.binaryPath ? { binaryPath: providers.antigravity.binaryPath } : {}),
-    },
-    grok: {
-      ...(providers.grok.binaryPath ? { binaryPath: providers.grok.binaryPath } : {}),
-    },
-    droid: {
-      ...(providers.droid.binaryPath ? { binaryPath: providers.droid.binaryPath } : {}),
-    },
-    opencode: {
-      ...(providers.opencode.binaryPath ? { binaryPath: providers.opencode.binaryPath } : {}),
-      ...(providers.opencode.serverUrl ? { serverUrl: providers.opencode.serverUrl } : {}),
-      experimentalWebSockets: providers.opencode.experimentalWebSockets,
-    },
-    pi: {
-      ...(providers.pi.binaryPath ? { binaryPath: providers.pi.binaryPath } : {}),
-      ...(providers.pi.agentDir ? { agentDir: providers.pi.agentDir } : {}),
-    },
-    devin: {
-      ...(providers.devin.binaryPath ? { binaryPath: providers.devin.binaryPath } : {}),
-    },
+    ...nextWithReplacements,
+    ...(selectionPatch
+      ? {
+          textGenerationModelSelection: applyModelSelectionPatch(
+            current.textGenerationModelSelection,
+            selectionPatch,
+          ),
+        }
+      : {}),
+    ...(timeTrackerSelectionPatch
+      ? {
+          timeTrackerModelSelection: applyModelSelectionPatch(
+            current.timeTrackerModelSelection,
+            timeTrackerSelectionPatch,
+          ),
+        }
+      : {}),
+    ...(compactionSelectionPatch
+      ? {
+          contextCompactionModelSelection: applyModelSelectionPatch(
+            current.contextCompactionModelSelection,
+            compactionSelectionPatch,
+          ),
+        }
+      : {}),
+    ...(enrichmentSelectionPatch
+      ? {
+          issueEnrichmentModelSelection: applyModelSelectionPatch(
+            current.issueEnrichmentModelSelection,
+            enrichmentSelectionPatch,
+          ),
+        }
+      : {}),
   };
 }

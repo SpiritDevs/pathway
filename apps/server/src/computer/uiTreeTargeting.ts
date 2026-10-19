@@ -2,148 +2,136 @@
  * Resolving a desktop target — a coordinate or a label — to the point that acts
  * on it.
  *
- * The matching itself is `@synara/shared/uiTreeTargeting`, shared with the iOS
- * family: exact label before substring, ambiguity refused rather than guessed.
- * What lives here is what the desktop specifically needs — a window scope, a
- * role compared verbatim, and an `onScreen` flag the perception source already
- * computed — plus the coordinate path, which has no accessibility tree at all.
+ * The matching itself is `@spiritdevs/shared/uiTreeTargeting`, shared with the
+ * iOS family: exact label before substring, ambiguity refused rather than
+ * guessed. What lives here is what the desktop specifically needs — a window
+ * scope, a role compared verbatim, and an `onScreen` flag the perception source
+ * already computed — plus the coordinate path, which has no accessibility tree
+ * at all.
+ *
+ * Every resolver that can refuse returns an Effect failing with
+ * `ComputerTargetError`; the digest and diff helpers are plain functions.
  *
  * @module computer/uiTreeTargeting
  */
 import type {
   ComputerPoint,
-  ComputerRect,
   ComputerScreenSize,
-  ComputerSpaceErrorCode,
   ComputerTarget,
   ComputerUiNode,
-} from "@synara/contracts";
+} from "@spiritdevs/contracts";
 import {
   flattenUiTree,
   resolveUiTreeTarget,
   uiTreeActivationPoint,
   type UiTreeTargetSpec,
-} from "@synara/shared/uiTreeTargeting";
-import { clampTextToLength } from "./utf8Truncation.ts";
-import { retainComputerElementRef } from "./computerElementIdentity.ts";
+} from "@spiritdevs/shared/uiTreeTargeting";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
-export interface ComputerTargetCandidate {
-  readonly label: string;
-  readonly role: string;
-  readonly windowId: string | null;
-  readonly onScreen: boolean;
-  readonly frame: ComputerRect;
-}
+import { retainComputerElementRef } from "./computerElementIdentity.ts";
+import {
+  ComputerTargetError,
+  type ComputerTargetCandidate,
+  type ComputerTargetErrorCode,
+} from "./computerErrors.ts";
+import { clampTextToLength } from "./utf8Truncation.ts";
+
+export { ComputerTargetError, type ComputerTargetCandidate, type ComputerTargetErrorCode };
 
 export interface ComputerTargetMatch {
   readonly point: ComputerPoint;
   readonly node: ComputerUiNode;
 }
 
-export type ComputerTargetErrorCode =
-  | ComputerSpaceErrorCode
-  | "computer_target_invalid"
-  | "computer_target_not_found"
-  | "computer_target_ambiguous"
-  | "computer_target_offscreen"
-  /** The named window is covered at the point and the desktop could not raise it. */
-  | "computer_target_occluded"
-  /** The desktop declined to deliver input to the named window, and sent none. */
-  | "computer_target_refused"
-  /**
-   * The target belongs to a denylisted surface — a password manager or OS
-   * security UI — and the access was refused before it could dispatch or
-   * disclose anything. There is no override in this build.
-   */
-  | "computer_denylist_refused";
-
 /** How many near-misses to name; a whole desktop of labels is noise, not help. */
 const MAX_REPORTED_CANDIDATES = 16;
-
-export class ComputerTargetError extends Error {
-  readonly code: ComputerTargetErrorCode;
-  readonly candidates: readonly ComputerTargetCandidate[];
-  readonly notFound: boolean;
-  /**
-   * The window exists but its text field could not be singled out from the
-   * accessibility tree. Distinct from a missing window: the keyboard can still
-   * reach whatever field the app itself has focused.
-   */
-  readonly unresolvedTextControl: boolean;
-
-  constructor(input: {
-    readonly code: ComputerTargetErrorCode;
-    readonly message: string;
-    readonly candidates?: readonly ComputerTargetCandidate[];
-    readonly notFound?: boolean;
-    readonly unresolvedTextControl?: boolean;
-  }) {
-    const candidates = input.candidates ?? [];
-    // Candidates go in the message, not only in the field beside it. This error
-    // reaches the model through MCP tool results and WsRpcError, and only the
-    // first of those carries the field, so a "no such label" that names the real
-    // ones structurally is still a dead end everywhere else. The whole
-    // refuse-rather-than-guess design depends on the caller being able to see
-    // what it should have asked for.
-    super(messageWithCandidates(input.message, candidates));
-    this.name = "ComputerTargetError";
-    this.code = input.code;
-    this.candidates = candidates;
-    this.notFound = input.notFound ?? input.code === "computer_target_not_found";
-    this.unresolvedTextControl = input.unresolvedTextControl ?? false;
-  }
-}
 
 export function resolveComputerPoint(
   target: ComputerTarget,
   screenSize: ComputerScreenSize,
-): ComputerPoint {
-  const hasX = typeof target.x === "number";
-  const hasY = typeof target.y === "number";
-  if (hasX !== hasY) {
-    throw new ComputerTargetError({
-      code: "computer_target_invalid",
-      message: "Computer coordinate targets must include both x and y.",
-    });
+): Effect.Effect<ComputerPoint, ComputerTargetError> {
+  const { x, y } = target;
+  if ((x === undefined) !== (y === undefined)) {
+    return Effect.fail(
+      new ComputerTargetError({
+        code: "computer_target_invalid",
+        message: "Computer coordinate targets must include both x and y.",
+      }),
+    );
   }
-  if (!hasX || !hasY) {
-    throw new ComputerTargetError({
-      code: "computer_target_invalid",
-      message: "Computer actions require x/y coordinates or a labelled target.",
-    });
+  if (x === undefined || y === undefined) {
+    return Effect.fail(
+      new ComputerTargetError({
+        code: "computer_target_invalid",
+        message: "Computer actions require x/y coordinates or a labelled target.",
+      }),
+    );
   }
-  const point = { x: target.x, y: target.y } as ComputerPoint;
-  if (point.x < 0 || point.y < 0 || point.x >= screenSize.width || point.y >= screenSize.height) {
-    throw new ComputerTargetError({
-      code: "computer_target_offscreen",
-      message: `Computer target (${point.x}, ${point.y}) is outside the ${screenSize.width}x${screenSize.height} screen.`,
-      candidates: [],
-    });
+  if (x < 0 || y < 0 || x >= screenSize.width || y >= screenSize.height) {
+    return Effect.fail(
+      new ComputerTargetError({
+        code: "computer_target_offscreen",
+        message: `Computer target (${x}, ${y}) is outside the ${screenSize.width}x${screenSize.height} screen.`,
+        candidates: [],
+      }),
+    );
   }
-  return point;
+  return Effect.succeed({ x, y });
 }
 
 export function resolveComputerSemanticTarget(
   root: ComputerUiNode,
   target: ComputerTarget,
   allowOffscreen = false,
-): ComputerTargetMatch {
+): Effect.Effect<ComputerTargetMatch, ComputerTargetError> {
   if (target.refOrdinal !== undefined && target.label !== undefined) {
-    return resolveComputerOrdinalTarget(root, target, target.refOrdinal, allowOffscreen);
+    return resolveComputerOrdinalTarget(
+      root,
+      target,
+      target.label,
+      target.refOrdinal,
+      allowOffscreen,
+    );
   }
-  const match = resolveUiTreeTarget({
-    pool: flattenUiTree(root, childrenOf).filter((node) => matchesWindow(node, target.windowId)),
-    query: { label: target.label, role: target.role },
-    spec: computerTargetSpec(target),
+  return resolveInPool(() =>
+    resolveUiTreeTarget({
+      pool: flattenUiTree(root, childrenOf).filter((node) => matchesWindow(node, target.windowId)),
+      query: { label: target.label, role: target.role },
+      spec: computerTargetSpec(target),
+    }),
+  ).pipe(
+    Effect.flatMap((match) =>
+      !match.onScreen && !allowOffscreen
+        ? Effect.fail(offscreenTarget(target, match.node))
+        : Effect.succeed({ node: match.node, point: activationPointForNode(match.node) }),
+    ),
+  );
+}
+
+/**
+ * Runs the shared resolver, which reports a refusal by throwing whatever the
+ * spec built. The spec here only builds `ComputerTargetError`s, so anything
+ * else escaping it is a defect.
+ */
+const isComputerTargetError = Schema.is(ComputerTargetError);
+
+function resolveInPool<A>(resolve: () => A): Effect.Effect<A, ComputerTargetError> {
+  return Effect.suspend(() => {
+    try {
+      return Effect.succeed(resolve());
+    } catch (error) {
+      return isComputerTargetError(error) ? Effect.fail(error) : Effect.die(error);
+    }
   });
-  if (!match.onScreen && !allowOffscreen) {
-    throw new ComputerTargetError({
-      code: "computer_target_offscreen",
-      message: `Computer target ${describeTarget(target)} is off-screen; refusing to guess a click.`,
-      candidates: candidateDescriptions([match.node]),
-    });
-  }
-  return { node: match.node, point: activationPointForNode(match.node) };
+}
+
+function offscreenTarget(target: ComputerTarget, node: ComputerUiNode): ComputerTargetError {
+  return new ComputerTargetError({
+    code: "computer_target_offscreen",
+    message: `Computer target ${describeTarget(target)} is off-screen; refusing to guess a click.`,
+    candidates: candidateDescriptions([node]),
+  });
 }
 
 /**
@@ -154,21 +142,22 @@ export function resolveComputerSemanticTarget(
  * control verbatim, so substring promotion would only buy collisions with
  * controls that share a prefix. When the ordinal slot no longer exists,
  * refuse rather than substitute another control, even if only one survives.
- * Preferring on-screen matches mirrors
- * the digest's own membership (it only lists on-screen controls), and the
- * usual off-screen refusal still applies to the picked node.
+ * Preferring on-screen matches mirrors the digest's own membership (it only
+ * lists on-screen controls), and the usual off-screen refusal still applies to
+ * the picked node.
  */
 function resolveComputerOrdinalTarget(
   root: ComputerUiNode,
   target: ComputerTarget,
+  label: string,
   ordinal: number,
   allowOffscreen: boolean,
-): ComputerTargetMatch {
+): Effect.Effect<ComputerTargetMatch, ComputerTargetError> {
   const spec = computerTargetSpec(target);
   const pool = flattenUiTree(root, childrenOf).filter((node) =>
     matchesWindow(node, target.windowId),
   );
-  const exact = spec.exactKey(target.label!);
+  const exact = spec.exactKey(label);
   const matches = pool.filter(
     (node) =>
       (target.role === undefined || spec.matchesRole(node, target.role)) &&
@@ -176,27 +165,23 @@ function resolveComputerOrdinalTarget(
   );
   const onScreen = matches.filter((node) => spec.isOnScreen(node));
   const ordered = onScreen.length > 0 ? onScreen : matches;
-  let node: ComputerUiNode;
-  if (ordered.length > ordinal) {
-    node = ordered[ordinal]!;
-  } else if (ordered.length === 0) {
-    throw spec.noMatch(pool);
-  } else {
-    throw new ComputerTargetError({
-      code: "computer_target_not_found",
-      message: `Computer target ${describeTarget(target)} no longer exists at its observed duplicate position. Observe again with computer_get_state before acting.`,
-      candidates: candidateDescriptions(ordered),
-      notFound: true,
-    });
+  const node = ordered[ordinal];
+  if (node === undefined) {
+    return Effect.fail(
+      ordered.length === 0
+        ? computerTargetNoMatch(target, pool)
+        : new ComputerTargetError({
+            code: "computer_target_not_found",
+            message: `Computer target ${describeTarget(target)} no longer exists at its observed duplicate position. Observe again with computer_get_state before acting.`,
+            candidates: candidateDescriptions(ordered),
+            notFound: true,
+          }),
+    );
   }
   if (!spec.isOnScreen(node) && !allowOffscreen) {
-    throw new ComputerTargetError({
-      code: "computer_target_offscreen",
-      message: `Computer target ${describeTarget(target)} is off-screen; refusing to guess a click.`,
-      candidates: candidateDescriptions([node]),
-    });
+    return Effect.fail(offscreenTarget(target, node));
   }
-  return { node, point: activationPointForNode(node) };
+  return Effect.succeed({ node, point: activationPointForNode(node) });
 }
 
 const SEMANTIC_TEXT_ROLES = new Set([
@@ -216,7 +201,7 @@ export function resolveComputerUniqueTextTarget(
   root: ComputerUiNode,
   windowId: string,
   allowOffscreen = false,
-): ComputerTargetMatch {
+): Effect.Effect<ComputerTargetMatch, ComputerTargetError> {
   const candidates = flattenUiTree(root, childrenOf).filter(
     (node) =>
       node.windowId === windowId &&
@@ -224,50 +209,69 @@ export function resolveComputerUniqueTextTarget(
       node.editable !== false &&
       (node.editable === true || SEMANTIC_TEXT_ROLES.has(node.role)),
   );
-  if (candidates.length === 0) {
-    throw new ComputerTargetError({
-      code: "computer_target_not_found",
-      message: `Window ${JSON.stringify(windowId)} has no ${allowOffscreen ? "" : "visible "}writable text control. Observe it and pass the exact label and role.`,
-      candidates: candidateDescriptions(
-        flattenUiTree(root, childrenOf).filter((node) => node.windowId === windowId),
-      ),
-      notFound: true,
-      unresolvedTextControl: true,
-    });
+  const [node] = candidates;
+  if (node === undefined) {
+    return Effect.fail(
+      new ComputerTargetError({
+        code: "computer_target_not_found",
+        message: `Window ${JSON.stringify(windowId)} has no ${allowOffscreen ? "" : "visible "}writable text control. Observe it and pass the exact label and role.`,
+        candidates: candidateDescriptions(
+          flattenUiTree(root, childrenOf).filter((candidate) => candidate.windowId === windowId),
+        ),
+        notFound: true,
+        unresolvedTextControl: true,
+      }),
+    );
   }
   if (candidates.length > 1) {
-    throw new ComputerTargetError({
-      code: "computer_target_ambiguous",
-      message: `Window ${JSON.stringify(windowId)} has more than one ${allowOffscreen ? "" : "visible "}writable text control. Pass the exact label and role.`,
-      candidates: candidateDescriptions(candidates),
-      unresolvedTextControl: true,
-    });
+    return Effect.fail(
+      new ComputerTargetError({
+        code: "computer_target_ambiguous",
+        message: `Window ${JSON.stringify(windowId)} has more than one ${allowOffscreen ? "" : "visible "}writable text control. Pass the exact label and role.`,
+        candidates: candidateDescriptions(candidates),
+        unresolvedTextControl: true,
+      }),
+    );
   }
-  const node = candidates[0]!;
-  return { node, point: activationPointForNode(node) };
+  return Effect.succeed({ node, point: activationPointForNode(node) });
 }
 
 /**
  * A bare window id names the window itself rather than a control in it — the
  * shape "scroll this window" arrives as. The match is the window's own node:
  * the first node carrying that id in document order, which is the window's
- * root. Returns undefined when the tree does not describe the window at all,
- * so the caller can fall back to the window list's geometry.
+ * root. Succeeds with undefined when the tree does not describe the window at
+ * all, so the caller can fall back to the window list's geometry.
  */
 export function resolveComputerWindowTarget(
   root: ComputerUiNode,
   windowId: string,
-): ComputerTargetMatch | undefined {
+): Effect.Effect<ComputerTargetMatch | undefined, ComputerTargetError> {
   const node = flattenUiTree(root, childrenOf).find((candidate) => candidate.windowId === windowId);
-  if (node === undefined) return undefined;
-  if (!node.onScreen) {
-    throw new ComputerTargetError({
-      code: "computer_target_offscreen",
-      message: `Computer window ${JSON.stringify(windowId)} is off-screen; refusing to guess a scroll point.`,
-      candidates: candidateDescriptions([node]),
-    });
+  if (node !== undefined && !node.onScreen) {
+    return Effect.fail(
+      new ComputerTargetError({
+        code: "computer_target_offscreen",
+        message: `Computer window ${JSON.stringify(windowId)} is off-screen; refusing to guess a scroll point.`,
+        candidates: candidateDescriptions([node]),
+      }),
+    );
   }
-  return { node, point: activationPointForNode(node) };
+  return Effect.succeed(
+    node === undefined ? undefined : { node, point: activationPointForNode(node) },
+  );
+}
+
+function computerTargetNoMatch(
+  target: ComputerTarget,
+  pool: readonly ComputerUiNode[],
+): ComputerTargetError {
+  return new ComputerTargetError({
+    code: "computer_target_not_found",
+    message: `No visible computer target matched ${describeTarget(target)}.`,
+    candidates: candidateDescriptions(pool),
+    notFound: true,
+  });
 }
 
 /**
@@ -290,13 +294,7 @@ function computerTargetSpec(target: ComputerTarget): UiTreeTargetSpec<ComputerUi
     exactKey: normalizeLabelSpaces,
     isOnScreen: (node) => node.onScreen,
     preferOnScreen: false,
-    noMatch: (pool) =>
-      new ComputerTargetError({
-        code: "computer_target_not_found",
-        message: `No visible computer target matched ${describeTarget(target)}.`,
-        candidates: candidateDescriptions(pool),
-        notFound: true,
-      }),
+    noMatch: (pool) => computerTargetNoMatch(target, pool),
     ambiguous: (matches) =>
       new ComputerTargetError({
         code: "computer_target_ambiguous",
@@ -646,19 +644,4 @@ export function normalizeLabelSpaces(label: string): string {
 
 function matchesWindow(node: ComputerUiNode, windowId: string | undefined): boolean {
   return windowId === undefined || node.windowId === windowId;
-}
-
-/** One candidate as a single line, short enough that sixteen of them still read. */
-function describeCandidate(candidate: ComputerTargetCandidate): string {
-  const window =
-    candidate.windowId === null ? "" : ` in window ${JSON.stringify(candidate.windowId)}`;
-  return `${candidate.role} ${JSON.stringify(candidate.label)}${window}`;
-}
-
-function messageWithCandidates(
-  message: string,
-  candidates: readonly ComputerTargetCandidate[],
-): string {
-  if (candidates.length === 0) return message;
-  return `${message} Controls in the accessibility tree: ${candidates.map(describeCandidate).join("; ")}.`;
 }

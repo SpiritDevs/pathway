@@ -1,5 +1,5 @@
-import { Schema } from "effect";
-import { TrimmedNonEmptyString } from "./baseSchemas";
+import * as Schema from "effect/Schema";
+import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
   ApprovalRequestId,
   EventId,
@@ -7,24 +7,23 @@ import {
   ProviderItemId,
   ThreadId,
   TurnId,
-} from "./baseSchemas";
+} from "./baseSchemas.ts";
 import {
-  ChatAttachment,
-  ModelSelection,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+  ChatAttachment,
+} from "./chatAttachment.ts";
+import { ModelSelection } from "./modelSelection.ts";
+import {
   ProviderApprovalDecision,
   ProviderApprovalPolicy,
   ProviderInteractionMode,
-  ProviderKind,
   ProviderRequestKind,
-  ProviderReviewTarget,
   ProviderSandboxMode,
-  ProviderStartOptions,
   ProviderUserInputAnswers,
   RuntimeMode,
-} from "./orchestration";
-import { ProviderMentionReference, ProviderSkillReference } from "./providerDiscovery";
+} from "./providerPolicy.ts";
+import { ProviderInstanceId, ProviderDriverKind } from "./providerInstance.ts";
 
 const ProviderSessionStatus = Schema.Literals([
   "connecting",
@@ -35,7 +34,11 @@ const ProviderSessionStatus = Schema.Literals([
 ]);
 
 export const ProviderSession = Schema.Struct({
-  provider: ProviderKind,
+  provider: ProviderDriverKind,
+  // Optional during the driver/instance migration. Once every producer
+  // populates it (post-slice-4), routing flips to instance-id-only and the
+  // legacy `provider` field is removed.
+  providerInstanceId: Schema.optional(ProviderInstanceId),
   status: ProviderSessionStatus,
   runtimeMode: RuntimeMode,
   cwd: Schema.optional(TrimmedNonEmptyString),
@@ -51,17 +54,14 @@ export type ProviderSession = typeof ProviderSession.Type;
 
 export const ProviderSessionStartInput = Schema.Struct({
   threadId: ThreadId,
-  provider: Schema.optional(ProviderKind),
-  lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
+  provider: Schema.optional(ProviderDriverKind),
+  // See ProviderSession for the migration story.
+  providerInstanceId: Schema.optional(ProviderInstanceId),
   cwd: Schema.optional(TrimmedNonEmptyString),
   modelSelection: Schema.optional(ModelSelection),
   resumeCursor: Schema.optional(Schema.Unknown),
-  forkSourceResumeCursor: Schema.optional(Schema.Unknown),
   approvalPolicy: Schema.optional(ProviderApprovalPolicy),
   sandboxMode: Schema.optional(ProviderSandboxMode),
-  providerOptions: Schema.optional(ProviderStartOptions),
-  /** Explicit per-thread provisioning for the Linux computer MCP tools. */
-  enableComputerControl: Schema.optional(Schema.Boolean),
   runtimeMode: RuntimeMode,
 });
 export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;
@@ -74,41 +74,10 @@ export const ProviderSendTurnInput = Schema.Struct({
   attachments: Schema.optional(
     Schema.Array(ChatAttachment).check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS)),
   ),
-  skills: Schema.optional(Schema.Array(ProviderSkillReference)),
-  mentions: Schema.optional(Schema.Array(ProviderMentionReference)),
   modelSelection: Schema.optional(ModelSelection),
   interactionMode: Schema.optional(ProviderInteractionMode),
 });
 export type ProviderSendTurnInput = typeof ProviderSendTurnInput.Type;
-export const ProviderSteerTurnInput = ProviderSendTurnInput;
-export type ProviderSteerTurnInput = typeof ProviderSteerTurnInput.Type;
-
-export const ProviderForkThreadInput = Schema.Struct({
-  sourceThreadId: ThreadId,
-  threadId: ThreadId,
-  lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
-  /** External imports must pin a completed native transcript boundary. */
-  requireCompletedSource: Schema.optional(Schema.Boolean),
-  sourceResumeCursor: Schema.optional(Schema.Unknown),
-  sourceCwd: Schema.optional(TrimmedNonEmptyString),
-  cwd: Schema.optional(TrimmedNonEmptyString),
-  modelSelection: Schema.optional(ModelSelection),
-  providerOptions: Schema.optional(ProviderStartOptions),
-  /**
-   * The computer-control fact a start would carry, so a fork leases the same
-   * gateway capabilities as its source instead of silently losing
-   * `computer:control` at the fork boundary.
-   */
-  enableComputerControl: Schema.optional(Schema.Boolean),
-  runtimeMode: RuntimeMode,
-});
-export type ProviderForkThreadInput = typeof ProviderForkThreadInput.Type;
-
-export const ProviderForkThreadResult = Schema.Struct({
-  threadId: ThreadId,
-  resumeCursor: Schema.optional(Schema.Unknown),
-});
-export type ProviderForkThreadResult = typeof ProviderForkThreadResult.Type;
 
 export const ProviderTurnStartResult = Schema.Struct({
   threadId: ThreadId,
@@ -117,59 +86,20 @@ export const ProviderTurnStartResult = Schema.Struct({
 });
 export type ProviderTurnStartResult = typeof ProviderTurnStartResult.Type;
 
-export const ProviderStartReviewInput = Schema.Struct({
-  threadId: ThreadId,
-  target: ProviderReviewTarget,
-});
-export type ProviderStartReviewInput = typeof ProviderStartReviewInput.Type;
-
 export const ProviderInterruptTurnInput = Schema.Struct({
   threadId: ThreadId,
   turnId: Schema.optional(TurnId),
-  providerThreadId: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderInterruptTurnInput = typeof ProviderInterruptTurnInput.Type;
-
-export const ProviderStopTaskInput = Schema.Struct({
-  threadId: ThreadId,
-  taskId: TrimmedNonEmptyString,
-});
-export type ProviderStopTaskInput = typeof ProviderStopTaskInput.Type;
-
-export const ProviderBackgroundTaskInput = Schema.Struct({
-  threadId: ThreadId,
-  toolUseId: TrimmedNonEmptyString,
-});
-export type ProviderBackgroundTaskInput = typeof ProviderBackgroundTaskInput.Type;
-
-export const ProviderSteerSubagentInput = Schema.Struct({
-  threadId: ThreadId,
-  providerThreadId: TrimmedNonEmptyString,
-  input: Schema.optional(
-    TrimmedNonEmptyString.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
-  ),
-  attachments: Schema.optional(
-    Schema.Array(ChatAttachment).check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS)),
-  ),
-  skills: Schema.optional(Schema.Array(ProviderSkillReference)),
-  mentions: Schema.optional(Schema.Array(ProviderMentionReference)),
-});
-export type ProviderSteerSubagentInput = typeof ProviderSteerSubagentInput.Type;
 
 export const ProviderStopSessionInput = Schema.Struct({
   threadId: ThreadId,
 });
 export type ProviderStopSessionInput = typeof ProviderStopSessionInput.Type;
 
-export const ProviderCompactThreadInput = Schema.Struct({
-  threadId: ThreadId,
-});
-export type ProviderCompactThreadInput = typeof ProviderCompactThreadInput.Type;
-
 export const ProviderRespondToRequestInput = Schema.Struct({
   threadId: ThreadId,
   requestId: ApprovalRequestId,
-  lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
   decision: ProviderApprovalDecision,
 });
 export type ProviderRespondToRequestInput = typeof ProviderRespondToRequestInput.Type;
@@ -177,7 +107,6 @@ export type ProviderRespondToRequestInput = typeof ProviderRespondToRequestInput
 export const ProviderRespondToUserInputInput = Schema.Struct({
   threadId: ThreadId,
   requestId: ApprovalRequestId,
-  lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
   answers: ProviderUserInputAnswers,
 });
 export type ProviderRespondToUserInputInput = typeof ProviderRespondToUserInputInput.Type;
@@ -187,19 +116,17 @@ const ProviderEventKind = Schema.Literals(["session", "notification", "request",
 export const ProviderEvent = Schema.Struct({
   id: EventId,
   kind: ProviderEventKind,
-  provider: ProviderKind,
+  provider: ProviderDriverKind,
+  // See ProviderSession for the migration story.
+  providerInstanceId: Schema.optional(ProviderInstanceId),
   threadId: ThreadId,
   createdAt: IsoDateTime,
   method: TrimmedNonEmptyString,
   message: Schema.optional(TrimmedNonEmptyString),
   turnId: Schema.optional(TurnId),
-  parentTurnId: Schema.optional(TurnId),
   itemId: Schema.optional(ProviderItemId),
   requestId: Schema.optional(ApprovalRequestId),
   requestKind: Schema.optional(ProviderRequestKind),
-  lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
-  providerThreadId: Schema.optional(TrimmedNonEmptyString),
-  providerParentThreadId: Schema.optional(TrimmedNonEmptyString),
   textDelta: Schema.optional(Schema.String),
   payload: Schema.optional(Schema.Unknown),
 });
