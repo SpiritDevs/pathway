@@ -14,7 +14,6 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -40,6 +39,7 @@ import {
   TurnItemPositionStoreV2,
   layer as turnItemPositionStoreLayer,
 } from "./TurnItemPositionStore.ts";
+import { makeSequencedLiveTail } from "../utils/sequencedLiveTail.ts";
 
 /**
  * ERRORS
@@ -216,7 +216,7 @@ const baseLayer: Layer.Layer<
     const eventStore = yield* EventStoreV2;
     const projectionStore = yield* ProjectionStoreV2;
     const turnItemPositions = yield* TurnItemPositionStoreV2;
-    const liveEvents = yield* PubSub.unbounded<OrchestrationV2StoredEvent>();
+    const liveEvents = makeSequencedLiveTail<OrchestrationV2StoredEvent>();
 
     const normalizeEvents = (events: ReadonlyArray<OrchestrationV2DomainEvent>) => {
       const runOrdinals = new Map(
@@ -340,7 +340,7 @@ const baseLayer: Layer.Layer<
         yield* effectOutbox.notifyAvailable(input.effects.length);
       }
       yield* eventStore.publishCommitted(storedEvents);
-      yield* PubSub.publishAll(liveEvents, storedEvents);
+      yield* liveEvents.publish(storedEvents);
       return storedEvents;
     });
 
@@ -390,7 +390,7 @@ const baseLayer: Layer.Layer<
         );
         if (result.committed) {
           yield* eventStore.publishCommitted(result.storedEvents);
-          yield* PubSub.publishAll(liveEvents, result.storedEvents);
+          yield* liveEvents.publish(result.storedEvents);
         }
         return result;
       },
@@ -447,7 +447,7 @@ const baseLayer: Layer.Layer<
       );
       if (result.committed) {
         yield* eventStore.publishCommitted(result.storedEvents);
-        yield* PubSub.publishAll(liveEvents, result.storedEvents);
+        yield* liveEvents.publish(result.storedEvents);
       }
       return result;
     });
@@ -484,7 +484,7 @@ const baseLayer: Layer.Layer<
       );
       if (result.committed) {
         yield* eventStore.publishCommitted(result.storedEvents);
-        yield* PubSub.publishAll(liveEvents, result.storedEvents);
+        yield* liveEvents.publish(result.storedEvents);
       }
       return result;
     });
@@ -597,7 +597,7 @@ const baseLayer: Layer.Layer<
         }
         if (result.committed) {
           yield* eventStore.publishCommitted(result.storedEvents);
-          yield* PubSub.publishAll(liveEvents, result.storedEvents);
+          yield* liveEvents.publish(result.storedEvents);
         }
       }
       return {
@@ -667,28 +667,22 @@ const baseLayer: Layer.Layer<
       return loop(input.afterSequence);
     };
 
-    const stream = (input?: { readonly threadId?: ThreadId; readonly afterSequence?: number }) =>
-      Stream.unwrap(
-        Effect.gen(function* () {
-          // Subscribe first, then capture the database high-water mark. Events
-          // committed between those operations are buffered by the subscription.
-          const subscription = yield* PubSub.subscribe(liveEvents);
-          const highWater = yield* eventStore.latestSequence();
-          const afterSequence = input?.afterSequence ?? 0;
-          const replay = catchUp({
+    const stream = (input?: { readonly threadId?: ThreadId; readonly afterSequence?: number }) => {
+      const threadId = input?.threadId;
+      return liveEvents.stream({
+        afterSequence: input?.afterSequence ?? 0,
+        ...(threadId === undefined
+          ? {}
+          : { accepts: (stored: OrchestrationV2StoredEvent) => stored.event.threadId === threadId }),
+        highWater: eventStore.latestSequence(),
+        replay: (afterSequence, throughSequence) =>
+          catchUp({
             afterSequence,
-            throughSequence: highWater,
-            ...(input?.threadId === undefined ? {} : { threadId: input.threadId }),
-          });
-          const live = Stream.fromSubscription(subscription).pipe(
-            Stream.filter((stored) => stored.sequence > Math.max(highWater, afterSequence)),
-            Stream.filter(
-              (stored) => input?.threadId === undefined || stored.event.threadId === input.threadId,
-            ),
-          );
-          return Stream.concat(replay, live);
-        }),
-      );
+            throughSequence,
+            ...(threadId === undefined ? {} : { threadId }),
+          }),
+      });
+    };
 
     return EventSinkV2.of({
       write: (input) =>

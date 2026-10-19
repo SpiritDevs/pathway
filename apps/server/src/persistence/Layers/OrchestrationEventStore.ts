@@ -22,7 +22,6 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
@@ -35,6 +34,7 @@ import {
   OrchestrationEventStore,
   type OrchestrationEventStoreShape,
 } from "../Services/OrchestrationEventStore.ts";
+import { makeSequencedLiveTail } from "../../utils/sequencedLiveTail.ts";
 
 const decodeEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
 const decodeProjectEvent = Schema.decodeUnknownEffect(ApplicationProjectEvent);
@@ -193,7 +193,7 @@ function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: st
 
 const makeEventStore = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  const committedEvents = yield* PubSub.unbounded<ApplicationStoredEvent>();
+  const committedEvents = makeSequencedLiveTail<ApplicationStoredEvent>();
 
   const appendEventRow = SqlSchema.findOne({
     Request: AppendEventRequestSchema,
@@ -575,21 +575,12 @@ const makeEventStore = Effect.gen(function* () {
   const streamApplicationEvents: OrchestrationEventStoreShape["streamApplicationEvents"] = (
     input,
   ) =>
-    Stream.unwrap(
-      Effect.gen(function* () {
-        const subscription = yield* PubSub.subscribe(committedEvents);
-        const highWater = yield* latestApplicationSequence;
-        const afterSequence = input?.afterSequence ?? 0;
-        const replay = catchUpApplicationEvents({
-          afterSequence,
-          throughSequence: highWater,
-        });
-        const live = Stream.fromSubscription(subscription).pipe(
-          Stream.filter((event) => event.sequence > Math.max(highWater, afterSequence)),
-        );
-        return Stream.concat(replay, live);
-      }),
-    );
+    committedEvents.stream({
+      afterSequence: input?.afterSequence ?? 0,
+      highWater: latestApplicationSequence,
+      replay: (afterSequence, throughSequence) =>
+        catchUpApplicationEvents({ afterSequence, throughSequence }),
+    });
 
   return {
     append,
@@ -600,7 +591,7 @@ const makeEventStore = Effect.gen(function* () {
     latestAgentSequence,
     latestApplicationSequence,
     readApplicationEvents: catchUpApplicationEvents,
-    publishCommitted: (events) => PubSub.publishAll(committedEvents, events).pipe(Effect.asVoid),
+    publishCommitted: committedEvents.publish,
     streamApplicationEvents,
   } satisfies OrchestrationEventStoreShape;
 });

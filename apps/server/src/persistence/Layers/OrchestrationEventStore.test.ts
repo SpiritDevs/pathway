@@ -236,6 +236,78 @@ layer("OrchestrationEventStore", (it) => {
     }),
   );
 
+  it.effect("recovers a stalled live subscriber from the store instead of buffering", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const eventStore = yield* OrchestrationEventStore;
+        const projectId = ProjectId.make("project-stalled-stream");
+        const providerInstanceId = ProviderInstanceId.make("codex");
+        const occurredAt = DateTime.makeUnsafe("2026-01-03T00:00:00.000Z");
+        const commitAndPublish = (index: number) =>
+          eventStore
+            .appendAgentEvents({
+              commandId: CommandId.make(`command-stalled-stream-${index}`),
+              events: [
+                {
+                  id: EventId.make(`event-stalled-stream-${index}`),
+                  type: "thread.created",
+                  threadId: ThreadId.make(`thread-stalled-stream-${index}`),
+                  providerInstanceId,
+                  occurredAt,
+                  payload: {
+                    id: ThreadId.make(`thread-stalled-stream-${index}`),
+                    projectId,
+                    title: `Thread ${index}`,
+                    providerInstanceId,
+                    modelSelection: { instanceId: providerInstanceId, model: "gpt-5.4" },
+                    runtimeMode: "full-access",
+                    interactionMode: "default",
+                    branch: null,
+                    worktreePath: null,
+                    activeProviderThreadId: null,
+                    lineage: {
+                      rootThreadId: ThreadId.make(`thread-stalled-stream-${index}`),
+                      parentThreadId: null,
+                      relationshipToParent: null,
+                    },
+                    forkedFrom: null,
+                    createdBy: "user",
+                    creationSource: "web",
+                    createdAt: occurredAt,
+                    updatedAt: occurredAt,
+                    archivedAt: null,
+                    settledOverride: null,
+                    settledAt: null,
+                    lastVisitedAt: null,
+                    deletedAt: null,
+                  },
+                },
+              ],
+            })
+            .pipe(Effect.tap(eventStore.publishCommitted));
+
+        const [first] = yield* commitAndPublish(0);
+        const pull = yield* Stream.toPull(
+          eventStore.streamApplicationEvents({ afterSequence: first!.sequence - 1 }),
+        );
+        const received = Array.from(yield* pull, (event) => event.sequence);
+        assert.deepEqual(received, [first!.sequence]);
+
+        // More commits than a live subscriber may buffer, with no pulls in between.
+        const committed = [first!.sequence];
+        for (let index = 1; index <= 300; index++) {
+          const [event] = yield* commitAndPublish(index);
+          committed.push(event!.sequence);
+        }
+
+        while (received.at(-1)! < committed.at(-1)!) {
+          received.push(...Array.from(yield* pull, (event) => event.sequence));
+        }
+        assert.deepEqual(received, committed);
+      }),
+    ),
+  );
+
   it.effect("filters agent reads and high-water marks by thread and command", () =>
     Effect.gen(function* () {
       const eventStore = yield* OrchestrationEventStore;
