@@ -41,7 +41,7 @@ import {
 } from "@spiritdevs/contracts";
 import {
   isOrchestrationV2SupersededInterrupt,
-  isOrchestrationV2TurnItemVisible,
+  orchestrationV2TurnItemVisibility,
 } from "@spiritdevs/shared/orchestrationV2Timeline";
 import { derivePendingBackgroundWork } from "@spiritdevs/shared/orchestrationV2PendingBackgroundWork";
 import {
@@ -55,7 +55,14 @@ import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { selectThreadHistory, type ThreadHistoryItem } from "./ThreadHistory.ts";
+import {
+  narrowHistoryPageSupport,
+  selectHistoryPageSupport,
+  selectThreadHistory,
+  type HistorySupportNode,
+  type HistorySupportProviderTurn,
+  type ThreadHistoryItem,
+} from "./ThreadHistory.ts";
 
 export class ProjectionStoreApplyEventError extends Schema.TaggedErrorClass<ProjectionStoreApplyEventError>()(
   "ProjectionStoreApplyEventError",
@@ -866,15 +873,13 @@ function sortMessagesByTurnItemOrder(
 function activeLocalTurnItems(
   projection: OrchestrationV2ThreadProjection,
 ): Array<OrchestrationV2ProjectedTurnItem> {
+  const isVisible = orchestrationV2TurnItemVisibility({
+    runs: projection.runs,
+    attempts: projection.attempts,
+    items: projection.turnItems,
+  });
   return projection.turnItems
-    .filter((item) =>
-      isOrchestrationV2TurnItemVisible({
-        item,
-        runs: projection.runs,
-        attempts: projection.attempts,
-        items: projection.turnItems,
-      }),
-    )
+    .filter(isVisible)
     .map((item, position) => ({
       position,
       visibility: "local" as const,
@@ -2321,11 +2326,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           thread,
           runRows,
           attemptRows,
-          nodeRows,
           subagentRows,
           providerSessionRows,
           providerThreadRows,
-          providerTurnRows,
           runtimeRequestRows,
           messageRows,
           planRows,
@@ -2347,12 +2350,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             FROM orchestration_v2_projection_run_attempts
             WHERE thread_id = ${threadId}
             ORDER BY run_id ASC, attempt_ordinal ASC
-          `,
-          sql<PayloadRow>`
-            SELECT payload_json
-            FROM orchestration_v2_projection_nodes
-            WHERE thread_id = ${threadId}
-            ORDER BY COALESCE(started_at, ''), node_id ASC
           `,
           sql<PayloadRow>`
             SELECT payload_json
@@ -2384,12 +2381,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                    AND provider_thread_id IS NOT NULL
                )
             ORDER BY COALESCE(first_run_ordinal, 0), provider_thread_id ASC
-          `,
-          sql<PayloadRow>`
-            SELECT payload_json
-            FROM orchestration_v2_projection_provider_turns
-            WHERE thread_id = ${threadId}
-            ORDER BY provider_thread_id ASC, ordinal ASC
           `,
           sql<PayloadRow>`
             SELECT payload_json
@@ -2480,12 +2471,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
 
         const [
           runs,
-          attempts,
-          nodes,
+          allAttempts,
           subagents,
           providerSessions,
           providerThreads,
-          providerTurns,
           runtimeRequests,
           messages,
           plans,
@@ -2497,11 +2486,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         ] = yield* Effect.all([
           decodeRows(decodeRunPayload, threadId)(runRows),
           decodeRows(decodeRunAttemptPayload, threadId)(attemptRows),
-          decodeRows(decodeNodePayload, threadId)(nodeRows),
           decodeRows(decodeSubagentPayload, threadId)(subagentRows),
           decodeRows(decodeProviderSessionPayload, threadId)(providerSessionRows),
           decodeRows(decodeProviderThreadPayload, threadId)(providerThreadRows),
-          decodeRows(decodeProviderTurnPayload, threadId)(providerTurnRows),
           decodeRows(decodeRuntimeRequestPayload, threadId)(runtimeRequestRows),
           decodeRows(decodeMessagePayload, threadId)(messageRows),
           decodeRows(decodePlanPayload, threadId)(planRows),
@@ -2511,8 +2498,60 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           decodeRows(decodeContextHandoffPayload, threadId)(contextHandoffRows),
           decodeRows(decodeContextTransferPayload, threadId)(contextTransferRows),
         ]);
+        // A page chooses its nodes and provider turns from their linking
+        // columns, so unreferenced historical payloads are never read.
+        const support =
+          content === undefined
+            ? undefined
+            : selectHistoryPageSupport({
+                threadId,
+                runs,
+                attempts: allAttempts,
+                items: turnItems,
+                messages,
+                subagents,
+                plans,
+                runtimeRequests,
+                ...(yield* Effect.all({
+                  nodes: sql<HistorySupportNode>`
+                    SELECT node_id AS id, parent_node_id AS parentNodeId,
+                      root_node_id AS rootNodeId, status, provider_turn_id AS providerTurnId
+                    FROM orchestration_v2_projection_nodes
+                    WHERE thread_id = ${threadId}
+                  `,
+                  providerTurns: sql<HistorySupportProviderTurn>`
+                    SELECT provider_turn_id AS id, node_id AS nodeId,
+                      run_attempt_id AS runAttemptId, status
+                    FROM orchestration_v2_projection_provider_turns
+                    WHERE thread_id = ${threadId}
+                  `,
+                })),
+              });
+        const nodeRows = yield* sql<PayloadRow>`
+          SELECT payload_json
+          FROM orchestration_v2_projection_nodes
+          WHERE thread_id = ${threadId}
+            ${support === undefined ? sql`` : sql`AND node_id IN ${sql.in([...support.nodeIds])}`}
+          ORDER BY COALESCE(started_at, ''), node_id ASC
+        `;
+        const providerTurnRows = yield* sql<PayloadRow>`
+          SELECT payload_json
+          FROM orchestration_v2_projection_provider_turns
+          WHERE thread_id = ${threadId}
+            ${
+              support === undefined
+                ? sql``
+                : sql`AND provider_turn_id IN ${sql.in([...support.providerTurnIds])}`
+            }
+          ORDER BY provider_thread_id ASC, ordinal ASC
+        `;
+        const [nodes, providerTurns] = yield* Effect.all([
+          decodeRows(decodeNodePayload, threadId)(nodeRows),
+          decodeRows(decodeProviderTurnPayload, threadId)(providerTurnRows),
+        ]);
+        const attempts = support?.attempts ?? allAttempts;
         const orderedMessages = sortMessagesByTurnItemOrder(messages, turnItems);
-        const projection = {
+        return {
           thread,
           runs,
           attempts,
@@ -2529,10 +2568,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           checkpoints,
           contextHandoffs,
           contextTransfers,
+          // Callers derive visible rows, which differ for forks and pages.
           visibleTurnItems: [],
           updatedAt: thread.updatedAt,
         } satisfies OrchestrationV2ThreadProjection;
-        return withLocalVisibleTurnItems(projection);
       }).pipe(
         Effect.mapError((cause) =>
           isProjectionStoreThreadNotFoundError(cause)
@@ -2818,8 +2857,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           decodeRows(decodeRunPayload, threadId)(runRows),
           decodeRows(decodeRunAttemptPayload, threadId)(attemptRows),
         ]);
-        const visible = local.filter((item) =>
-          isOrchestrationV2TurnItemVisible({ item, runs, attempts, items: local }),
+        const visible = local.filter(
+          orchestrationV2TurnItemVisibility({ runs, attempts, items: local }),
         );
         const fork = thread.forkedFrom;
         if (fork?.type !== "run" || seen.has(fork.threadId)) {
@@ -4036,7 +4075,7 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 schemaVersion: ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION,
                 snapshotSequence,
                 history: page.history,
-                projection: {
+                projection: narrowHistoryPageSupport({
                   ...projection,
                   messages: projection.messages.filter(
                     (message) => messageIds.has(message.id) || message.streaming,
@@ -4051,7 +4090,7 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                     page.start,
                     page.start + page.items.length,
                   ),
-                },
+                }),
               };
             }),
           ),

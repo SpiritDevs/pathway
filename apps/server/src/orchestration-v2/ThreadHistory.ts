@@ -1,6 +1,8 @@
 import type {
   MessageId,
   NodeId,
+  OrchestrationV2ExecutionNode,
+  OrchestrationV2ProviderTurn,
   OrchestrationV2ThreadHistory,
   OrchestrationV2ThreadProjection,
   OrchestrationV2ThreadHistoryRequest,
@@ -132,17 +134,42 @@ const SETTLED_STATUSES = new Set([
 ]);
 const SETTLED_TURN_STATUSES = new Set(["completed", "interrupted", "failed", "cancelled"]);
 
+/** Linking columns of a node, enough to choose it for a page without its payload. */
+export type HistorySupportNode = Pick<
+  OrchestrationV2ExecutionNode,
+  "id" | "parentNodeId" | "rootNodeId" | "status" | "providerTurnId"
+>;
+/** Linking columns of a provider turn, enough to choose it for a page without its payload. */
+export type HistorySupportProviderTurn = Pick<
+  OrchestrationV2ProviderTurn,
+  "id" | "nodeId" | "runAttemptId" | "status"
+>;
+
 /**
- * Narrows a history page's nodes, attempts and provider turns to what the
- * page's items and the thread's live or latest work reference. Pages otherwise
- * carry every node of the thread: 2.5 MB of a 4.7 MB page on a 2,700-item
- * thread. Clients union these arrays by id across pages and live events
- * upsert ids they do not hold, so older pages bring their own support.
+ * Chooses the nodes, attempts and provider turns a history page needs: those
+ * its items reference, the thread's live or latest work, subagents, plans and
+ * requests, plus every parent and root of the chosen nodes. `nodes` and
+ * `providerTurns` need only their linking columns, so the store can choose
+ * before it reads or decodes any payload.
  */
-export function narrowHistoryPageSupport(
-  projection: OrchestrationV2ThreadProjection,
-): OrchestrationV2ThreadProjection {
-  const latestRun = projection.runs.reduce<(typeof projection.runs)[number] | undefined>(
+export function selectHistoryPageSupport(
+  input: Pick<
+    OrchestrationV2ThreadProjection,
+    "runs" | "attempts" | "messages" | "subagents" | "plans" | "runtimeRequests"
+  > & {
+    readonly threadId: ThreadId;
+    readonly items: ReadonlyArray<
+      Pick<OrchestrationV2TurnItem, "threadId" | "runId" | "nodeId" | "providerTurnId">
+    >;
+    readonly nodes: ReadonlyArray<HistorySupportNode>;
+    readonly providerTurns: ReadonlyArray<HistorySupportProviderTurn>;
+  },
+): {
+  readonly attempts: OrchestrationV2ThreadProjection["attempts"];
+  readonly nodeIds: ReadonlySet<NodeId>;
+  readonly providerTurnIds: ReadonlySet<string>;
+} {
+  const latestRun = input.runs.reduce<(typeof input.runs)[number] | undefined>(
     (latest, run) => (latest === undefined || run.ordinal > latest.ordinal ? run : latest),
     undefined,
   );
@@ -152,51 +179,79 @@ export function narrowHistoryPageSupport(
   const addRun = (runId: RunId | null) => runId !== null && runIds.add(runId);
   const addNode = (nodeId: NodeId | null) => nodeId !== null && nodeIds.add(nodeId);
   if (latestRun !== undefined) addRun(latestRun.id);
-  for (const run of projection.runs) {
+  for (const run of input.runs) {
     if (!SETTLED_STATUSES.has(run.status)) addRun(run.id);
   }
-  for (const item of [
-    ...projection.turnItems,
-    ...projection.visibleTurnItems.map((row) => row.item),
-  ]) {
-    if (item.threadId !== projection.thread.id) continue;
+  for (const item of input.items) {
+    if (item.threadId !== input.threadId) continue;
     addRun(item.runId);
     addNode(item.nodeId);
     if (item.providerTurnId !== null) providerTurnIds.add(item.providerTurnId);
   }
-  for (const message of projection.messages) addRun(message.runId);
-  for (const run of projection.runs) if (runIds.has(run.id)) addNode(run.rootNodeId);
-  const attempts = projection.attempts.filter((attempt) => runIds.has(attempt.runId));
+  for (const message of input.messages) addRun(message.runId);
+  for (const run of input.runs) if (runIds.has(run.id)) addNode(run.rootNodeId);
+  const attempts = input.attempts.filter((attempt) => runIds.has(attempt.runId));
   for (const attempt of attempts) {
     addNode(attempt.rootNodeId);
     if (attempt.providerTurnId !== null) providerTurnIds.add(attempt.providerTurnId);
   }
-  for (const subagent of projection.subagents) {
+  for (const subagent of input.subagents) {
     addNode(subagent.id);
     addNode(subagent.parentNodeId);
   }
-  for (const entry of [...projection.plans, ...projection.runtimeRequests]) addNode(entry.nodeId);
-  for (const node of projection.nodes) {
+  for (const entry of [...input.plans, ...input.runtimeRequests]) addNode(entry.nodeId);
+  for (const node of input.nodes) {
     if (!SETTLED_STATUSES.has(node.status)) addNode(node.id);
   }
-  const nodeById = new Map(projection.nodes.map((node) => [node.id, node] as const));
+  const nodeById = new Map(input.nodes.map((node) => [node.id, node] as const));
+  // Set iteration visits ids added during the loop, closing over every ancestor.
   for (const nodeId of nodeIds) {
     const node = nodeById.get(nodeId);
     if (node === undefined) continue;
     addNode(node.parentNodeId);
     addNode(node.rootNodeId);
   }
-  const nodes = projection.nodes.filter((node) => nodeIds.has(node.id));
-  for (const node of nodes) {
-    if (node.providerTurnId !== null) providerTurnIds.add(node.providerTurnId);
+  for (const node of input.nodes) {
+    if (nodeIds.has(node.id) && node.providerTurnId !== null) {
+      providerTurnIds.add(node.providerTurnId);
+    }
   }
   const attemptIds = new Set<string>(attempts.map((attempt) => attempt.id));
-  const providerTurns = projection.providerTurns.filter(
-    (turn) =>
+  const turnIds = new Set<string>();
+  for (const turn of input.providerTurns) {
+    if (
       providerTurnIds.has(turn.id) ||
       nodeIds.has(turn.nodeId) ||
       (turn.runAttemptId !== null && attemptIds.has(turn.runAttemptId)) ||
-      !SETTLED_TURN_STATUSES.has(turn.status),
-  );
-  return { ...projection, nodes, attempts, providerTurns };
+      !SETTLED_TURN_STATUSES.has(turn.status)
+    ) {
+      turnIds.add(turn.id);
+    }
+  }
+  return { attempts, nodeIds, providerTurnIds: turnIds };
+}
+
+/**
+ * Narrows an already-read history page's nodes, attempts and provider turns
+ * with {@link selectHistoryPageSupport}. The SQL store chooses before reading;
+ * stores that hold whole projections in memory narrow afterwards. Clients union
+ * these arrays by id across pages and live events upsert ids they do not hold,
+ * so older pages bring their own support.
+ */
+export function narrowHistoryPageSupport(
+  projection: OrchestrationV2ThreadProjection,
+): OrchestrationV2ThreadProjection {
+  const support = selectHistoryPageSupport({
+    ...projection,
+    threadId: projection.thread.id,
+    items: [...projection.turnItems, ...projection.visibleTurnItems.map((row) => row.item)],
+  });
+  return {
+    ...projection,
+    attempts: support.attempts,
+    nodes: projection.nodes.filter((node) => support.nodeIds.has(node.id)),
+    providerTurns: projection.providerTurns.filter((turn) =>
+      support.providerTurnIds.has(turn.id),
+    ),
+  };
 }
