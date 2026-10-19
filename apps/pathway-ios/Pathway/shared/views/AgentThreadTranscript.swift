@@ -11,14 +11,23 @@ struct AgentThreadTranscript: View {
     @State private var layoutCache = AgentThreadTranscriptLayoutCache()
 
     var body: some View {
+        let rows = layoutCache.rows(model.transcriptItems, activeRunID: model.activeRunID)
+        // Rows this close to the top load the previous page before the reader reaches it.
+        let prefetchIDs = model.history?.hasOlder == true ? Set(rows.prefix(Self.prefetchRows).map(\.id)) : []
         LazyVStack(alignment: .leading, spacing: 22) {
-            ForEach(layoutCache.rows(model.transcriptItems, activeRunID: model.activeRunID)) { row in
-                switch row.content {
-                case .item(let item):
-                    itemView(item)
-                case .work(let label, let items, let settled):
-                    AgentTranscriptWorkGroup(label: label, items: items, settled: settled, model: model, onOpenChild: onOpenChild)
+            if model.history?.hasOlder == true {
+                AgentTranscriptOlderHistory(model: model)
+            }
+            ForEach(rows) { row in
+                Group {
+                    switch row.content {
+                    case .item(let item):
+                        itemView(item)
+                    case .work(let label, let items, let settled):
+                        AgentTranscriptWorkGroup(label: label, items: items, settled: settled, model: model, onOpenChild: onOpenChild)
+                    }
                 }
+                .onAppear { if prefetchIDs.contains(row.id) { model.loadOlderHistory() } }
             }
             if let hold = model.thread.shell.allowanceHold {
                 VStack(alignment: .leading, spacing: 6) {
@@ -40,6 +49,8 @@ struct AgentThreadTranscript: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("agent-thread-transcript")
     }
+
+    static let prefetchRows = 12
 
     @ViewBuilder
     private func itemView(_ item: PathwayTimelineItem) -> some View {
@@ -790,6 +801,28 @@ struct AgentTranscriptMessageEditor: View {
     }
 }
 
+/// The top edge of a partly loaded thread: loads on sight, and offers a retry when a page fails.
+struct AgentTranscriptOlderHistory: View {
+    let model: PathwayAgentThreadModel
+
+    var body: some View {
+        HStack {
+            Spacer()
+            if model.isLoadingOlderHistory {
+                ProgressView().accessibilityLabel("Loading earlier messages")
+            } else if let error = model.olderHistoryError {
+                Button("\(error) Retry", systemImage: "arrow.clockwise") { model.loadOlderHistory() }
+                    .font(.footnote)
+            }
+            Spacer()
+        }
+        .frame(minHeight: 1)
+        // Keeps loading while the top stays on screen; a failed page waits for Retry.
+        .task(id: model.items.first?.id) { if model.olderHistoryError == nil { model.loadOlderHistory() } }
+        .accessibilityIdentifier("agent-transcript-older-history")
+    }
+}
+
 struct AgentThreadChangesView: View {
     let model: PathwayAgentThreadModel
     @Environment(\.dismiss) private var dismiss
@@ -817,7 +850,9 @@ struct AgentThreadChangesView: View {
                         }.font(.subheadline)
                     }
                 }
-                if changes.isEmpty { Text("No file changes in this conversation.").foregroundStyle(.secondary) }
+                if model.history?.hasOlder == true {
+                    Text("Showing changes from loaded messages. Scroll up in the conversation to include earlier ones.").font(.footnote).foregroundStyle(.secondary)
+                } else if changes.isEmpty { Text("No file changes in this conversation.").foregroundStyle(.secondary) }
             }
             .navigationTitle("Changes").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }

@@ -250,8 +250,17 @@ actor PathwayThreadCache {
 @Observable
 final class PathwayAgentThreadModel {
     typealias Request = @MainActor (String, JSONValue) async throws -> JSONValue
+    typealias HistoryPageLoader = @MainActor (_ threadID: String, _ limit: Int, _ before: String?) async throws -> JSONValue
     private(set) var connectionState: PathwayThreadConnectionState = .idle
     private(set) var items: [PathwayTimelineItem] = []
+    /// The loaded slice of the thread; nil when the server sent its complete history.
+    private(set) var history: PathwayThreadHistory?
+    private(set) var isLoadingOlderHistory = false
+    private(set) var olderHistoryError: String?
+    /// Pending requests older than the loaded slice, so their replies stay reachable.
+    private var olderRequestItems: [PathwayTimelineItem] = []
+    @ObservationIgnored private var historyGeneration = 0
+    @ObservationIgnored var historyPageLoader: HistoryPageLoader?
     var questionDrafts: [String: PathwayQuestionDraft] = [:]
     var questionAttachmentStores: [String: PathwayNewThreadAttachments] = [:]
     var restoringQuestionAttachments: Set<String> = []
@@ -379,7 +388,9 @@ final class PathwayAgentThreadModel {
         interactionMode = thread.shell.interactionMode; activeRunID = thread.shell.activeRunId
         threadTitle = thread.shell.title
         isParentRosterLoading = thread.shell.lineage?.relationshipToParent == "subagent"
-
+        historyPageLoader = { threadID, limit, before in
+            try await PathwayThreadHistory.loadPage(threadID: threadID, limit: limit, before: before, environment: environment, connect: connect)
+        }
     }
 
     init(thread: PathwayAgentThread, environment: PathwayCompanyEnvironment,
@@ -704,7 +715,7 @@ final class PathwayAgentThreadModel {
         saveDraft()
     }
     var pendingAsyncQuestions: [PathwayTimelineItem] {
-        items.filter { item in
+        (olderRequestItems + items).filter { item in
             item.type == "user_input_request" && isNonBlockingQuestion(item) && runtimeRequests.contains {
                 $0.objectValue?["id"]?.stringValue == item.requestID && $0.objectValue?["status"]?.stringValue == "pending"
             }
@@ -789,7 +800,7 @@ final class PathwayAgentThreadModel {
         catch { actionError = error.localizedDescription }
     }
     func respondToQuestions(requestID: String, answers: [String: JSONValue]) async throws {
-        guard let item = items.first(where: { $0.requestID == requestID }), questionAttachmentsReady(item) else {
+        guard let item = requestItem(requestID), questionAttachmentsReady(item) else {
             throw PathwayThreadConversationError.message("Wait for answer attachments to finish uploading.")
         }
         let stores = item.questions.map { ($0.id, questionAttachments(item: item, questionID: $0.id)) }
@@ -818,7 +829,7 @@ final class PathwayAgentThreadModel {
         }
     }
     func dismissQuestion(requestID: String) async throws {
-        guard let item = items.first(where: { $0.requestID == requestID }), canDismissQuestion(item) else {
+        guard let item = requestItem(requestID), canDismissQuestion(item) else {
             throw PathwayThreadConversationError.message("This question can no longer be ignored.")
         }
         let payload: [String: JSONValue] = ["requestId": .string(requestID), "decision": .string("cancel")]
@@ -849,7 +860,7 @@ final class PathwayAgentThreadModel {
     }
 
     private func reconcileQuestionAttachments(snapshot: Bool = false) {
-        for item in items where item.type == "user_input_request" { questionAttachmentItems[item.id] = item }
+        for item in olderRequestItems + items where item.type == "user_input_request" { questionAttachmentItems[item.id] = item }
         let requestStatuses = Dictionary(uniqueKeysWithValues: runtimeRequests.compactMap { value -> (String, String)? in
             guard let fields = value.objectValue, let id = fields["id"]?.stringValue, let status = fields["status"]?.stringValue else { return nil }
             return (id, status)
@@ -892,19 +903,35 @@ final class PathwayAgentThreadModel {
         item.questions.allSatisfy { questionAttachmentStores["\(item.id):\($0.id)"]?.isReady ?? true }
     }
     private func respond(requestID: String, fields: [String: JSONValue]) async throws {
-        guard let item = items.first(where: { $0.requestID == requestID }), canRespond(to: item) else {
+        guard let item = requestItem(requestID), canRespond(to: item) else {
             throw PathwayThreadConversationError.message("This request is no longer connected to a live agent.")
         }
         var payload = fields; payload["requestId"] = .string(requestID)
         try await dispatch("runtime-request.respond", fields: payload)
     }
     func run(for item: PathwayTimelineItem) -> PathwayThreadRun? { runs.first { $0.id == item.runID } }
+    private func requestItem(_ requestID: String) -> PathwayTimelineItem? {
+        items.first { $0.requestID == requestID } ?? olderRequestItems.first { $0.requestID == requestID }
+    }
 
-    func installSnapshot(_ projection: JSONValue, sequence: Int = 0) {
+    /// Installs a complete projection, or a history page with its `history` metadata.
+    func installSnapshot(_ projection: JSONValue, sequence: Int = 0, history historyJSON: JSONValue? = nil) {
         guard let object = projection.objectValue else { return }
         projectionCollections = object.compactMapValues(\.arrayValue)
-        items = (object["visibleTurnItems"]?.arrayValue ?? []).compactMap { $0.objectValue?["item"].flatMap(PathwayTimelineItem.init(json:)) }.sorted(by: Self.order)
         runs = (object["runs"]?.arrayValue ?? []).compactMap(PathwayThreadRun.init)
+        let page = Self.visibleItems(object)
+        let pageHistory = PathwayThreadHistory(json: historyJSON)
+        if pageHistory != nil, history != nil, let first = page.first, items.contains(where: { $0.id == first.id }) {
+            // A reconnect's latest page overlaps the loaded slice: keep the older rows the reader may be on.
+            let pageIDs = Set(page.map(\.id))
+            let rolledBack = Set(runs.filter { $0.status == "rolled_back" }.map(\.id))
+            items = items.filter { Self.order($0, first) && !pageIDs.contains($0.id) && $0.runID.map(rolledBack.contains) != true } + page
+        } else {
+            items = page
+            history = pageHistory
+            historyGeneration += 1; isLoadingOlderHistory = false; olderHistoryError = nil
+        }
+        olderRequestItems = history?.hasOlder == true ? Self.olderRequests(object, excluding: Set(items.map(\.id))) : []
         Task { await reconcileQueuedEdit() }
         subagents = (object["subagents"]?.arrayValue ?? []).compactMap(PathwayThreadSubagent.init)
         runtimeRequests = object["runtimeRequests"]?.arrayValue ?? []
@@ -938,7 +965,7 @@ final class PathwayAgentThreadModel {
         default: break
         }
         switch object["kind"]?.stringValue {
-        case "snapshot": if let projection = object["projection"] { installSnapshot(projection, sequence: object["snapshotSequence"]?.intValue ?? 0) }
+        case "snapshot": if let projection = object["projection"] { installSnapshot(projection, sequence: object["snapshotSequence"]?.intValue ?? 0, history: object["history"]) }
         case "event":
             guard let sequence = object["sequence"]?.intValue, sequence > lastSequence,
                   let event = object["event"]?.objectValue, let type = event["type"]?.stringValue, let payload = event["payload"] else { return }
@@ -951,6 +978,10 @@ final class PathwayAgentThreadModel {
                     items[index] = item
                     // Streaming text updates retain their position; only ordering changes sort.
                     if Self.order(previous, item) || Self.order(item, previous) { items.sort(by: Self.order) }
+                } else if history?.hasOlder == true, let first = items.first, Self.order(item, first) {
+                    // Rows older than the loaded slice arrive with their page; only a pending request shows now.
+                    if let index = olderRequestItems.firstIndex(where: { $0.id == item.id }) { olderRequestItems[index] = item }
+                    else if item.requiresResponse { olderRequestItems.append(item) }
                 } else {
                     var lower = 0, upper = items.count
                     while lower < upper {
@@ -964,7 +995,7 @@ final class PathwayAgentThreadModel {
                 if let index = runs.firstIndex(where: { $0.id == run.id }) { runs[index] = run } else { runs.append(run) }
                 deriveActiveRun()
                 Task { await reconcileQueuedEdit() }
-                if run.status == "rolled_back" { items.removeAll { $0.runID == run.id }; persist() }
+                if run.status == "rolled_back" { items.removeAll { $0.runID == run.id }; olderRequestItems.removeAll { $0.runID == run.id }; persist() }
             } else if type == "subagent.updated" || type == "subagent.created", let agent = PathwayThreadSubagent(payload) {
                 if let index = subagents.firstIndex(where: { $0.id == agent.id }) { subagents[index] = agent } else { subagents.append(agent) }
             } else if type.hasPrefix("runtime-request.") { Self.upsert(payload, into: &runtimeRequests) }
@@ -1023,7 +1054,8 @@ final class PathwayAgentThreadModel {
     static func json<T: Encodable>(_ value: T) throws -> JSONValue { try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(value)) }
     private func persist() {
         guard persistsLocalState else { return }
-        pendingCacheWrite = PathwayThreadCachePendingWrite(items: items, revision: DispatchTime.now().uptimeNanoseconds)
+        // The cache only paints the latest rows until the live page arrives.
+        pendingCacheWrite = PathwayThreadCachePendingWrite(items: Array(items.suffix(Self.cachedItemLimit)), revision: DispatchTime.now().uptimeNanoseconds)
         guard cacheWriteTask == nil else { return }
         cacheWriteTask = Task { @MainActor [weak self] in
             do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
@@ -1099,6 +1131,57 @@ final class PathwayAgentThreadModel {
         do { try await draftStore.save(snapshot) }
         catch { actionError = "The draft could not be saved on this device. " + error.localizedDescription }
     }
+    static let cachedItemLimit = 200
+
+    /// Loads the page before the oldest loaded row, one request at a time.
+    @discardableResult func loadOlderHistory() -> Task<Void, Never>? {
+        guard let history, history.hasOlder, let cursor = history.beforeCursor ?? items.first?.id,
+              !isLoadingOlderHistory, let historyPageLoader else { return nil }
+        isLoadingOlderHistory = true; olderHistoryError = nil
+        let generation = historyGeneration
+        let threadID = threadID
+        return Task { [weak self] in
+            let page: JSONValue?
+            do { page = try await historyPageLoader(threadID, PathwayThreadHistory.olderPageLimit, cursor) } catch { page = nil }
+            // A replacing snapshot invalidated the cursor and already reset the loading state.
+            guard let self, generation == historyGeneration else { return }
+            isLoadingOlderHistory = false
+            if let page, mergeOlderPage(page) { return }
+            olderHistoryError = "Earlier messages couldn't load."
+        }
+    }
+
+    private func mergeOlderPage(_ page: JSONValue) -> Bool {
+        guard let object = page.objectValue, let projection = object["projection"]?.objectValue,
+              let pageHistory = PathwayThreadHistory(json: object["history"]) else { return false }
+        let known = Set(items.map(\.id))
+        let rolledBack = Set(runs.filter { $0.status == "rolled_back" }.map(\.id))
+        // Requests seen live since are newer than the page's copy.
+        let live = Dictionary(olderRequestItems.map { ($0.id, $0) }) { _, last in last }
+        let older = Self.visibleItems(projection)
+            .filter { !known.contains($0.id) && $0.runID.map(rolledBack.contains) != true }
+            .map { live[$0.id] ?? $0 }
+        let olderIDs = Set(older.map(\.id))
+        olderRequestItems.removeAll { olderIDs.contains($0.id) }
+        items = (older + items).sorted(by: Self.order)
+        self.history = PathwayThreadHistory(hasOlder: pageHistory.hasOlder, beforeCursor: pageHistory.beforeCursor ?? history?.beforeCursor)
+        persist()
+        return true
+    }
+
+    private static func visibleItems(_ projection: [String: JSONValue]) -> [PathwayTimelineItem] {
+        (projection["visibleTurnItems"]?.arrayValue ?? []).compactMap { $0.objectValue?["item"].flatMap(PathwayTimelineItem.init(json:)) }.sorted(by: order)
+    }
+
+    /// A page carries pending items outside its rows as support; keep the ones awaiting a reply.
+    private static func olderRequests(_ projection: [String: JSONValue], excluding ids: Set<String>) -> [PathwayTimelineItem] {
+        (projection["turnItems"]?.arrayValue ?? []).compactMap { value in
+            guard let fields = value.objectValue, fields["status"]?.stringValue == "waiting",
+                  let id = fields["id"]?.stringValue, !ids.contains(id) else { return nil }
+            return PathwayTimelineItem(json: value).flatMap { $0.requiresResponse ? $0 : nil }
+        }
+    }
+
     private static func order(_ left: PathwayTimelineItem, _ right: PathwayTimelineItem) -> Bool {
         left.ordinal == right.ordinal ? left.id < right.id : left.ordinal < right.ordinal
     }
