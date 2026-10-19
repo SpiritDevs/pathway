@@ -10,10 +10,12 @@ import {
 } from "@spiritdevs/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 
 import { QuestionAnswerDelivery } from "./QuestionAnswerDelivery.ts";
 import { ProjectionStoreV2 } from "./ProjectionStore.ts";
@@ -23,16 +25,9 @@ import { IdAllocatorV2 } from "./IdAllocator.ts";
 import { makeInterruptResultTurnItem } from "./RunExecutionService.ts";
 import * as DateTime from "effect/DateTime";
 
-const yieldToRuntime = Effect.yieldNow.pipe(
-  Effect.andThen(
-    Effect.promise(
-      () =>
-        new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        }),
-    ),
-  ),
-);
+// How long a provider gets to acknowledge an interrupt. Past it, Stop forces the
+// interrupted state and restart fails so its durable effect can retry.
+const providerTerminalDeadline = Duration.seconds(5);
 
 export class ProviderTurnControlError extends Schema.TaggedErrorClass<ProviderTurnControlError>()(
   "ProviderTurnControlError",
@@ -91,18 +86,39 @@ export const layer: Layer.Layer<
     const ids = yield* IdAllocatorV2;
     const questionDelivery = yield* Effect.serviceOption(QuestionAnswerDelivery);
 
-    const awaitTerminalOrForceInterrupt = Effect.fn(
-      "ProviderTurnControlService.awaitTerminalOrForceInterrupt",
-    )(function* (input: { readonly threadId: ThreadId; readonly providerTurnId: ProviderTurnId }) {
-      for (let remaining = 1_000; remaining > 0; remaining -= 1) {
-        const projection = yield* projections.getThreadProjection(input.threadId);
-        const providerTurn = projection.providerTurns.find(
-          (candidate) => candidate.id === input.providerTurnId,
+    /**
+     * Waits until the provider turn, and the attempt when given, leave "running". It reads
+     * only this thread's events after `afterSequence`; callers capture that before loading
+     * the state they pass in, so a terminal event landing in between is replayed, not missed.
+     * Returns false when the deadline passes first.
+     */
+    const awaitTerminal = Effect.fn("ProviderTurnControlService.awaitTerminal")(function* (input: {
+      readonly threadId: ThreadId;
+      readonly afterSequence: number;
+      readonly providerTurnId: ProviderTurnId;
+      readonly attempt?: { readonly id: RunAttemptId; readonly settled: boolean };
+    }) {
+      let turnSettled = false;
+      let attemptSettled = input.attempt?.settled ?? true;
+      const finished = yield* eventSink
+        .stream({ threadId: input.threadId, afterSequence: input.afterSequence })
+        .pipe(
+          Stream.takeUntil(({ event }) => {
+            if (event.type === "provider-turn.updated" && event.payload.id === input.providerTurnId)
+              turnSettled = event.payload.status !== "running";
+            if (event.type === "run-attempt.updated" && event.payload.id === input.attempt?.id)
+              attemptSettled = event.payload.status !== "running";
+            return turnSettled && attemptSettled;
+          }),
+          Stream.runDrain,
+          Effect.timeoutOption(providerTerminalDeadline),
         );
-        if (providerTurn === undefined || providerTurn.status !== "running") return;
-        yield* yieldToRuntime;
-      }
+      return Option.isSome(finished);
+    });
 
+    const forceInterruptedTerminal = Effect.fn(
+      "ProviderTurnControlService.forceInterruptedTerminal",
+    )(function* (input: { readonly threadId: ThreadId; readonly providerTurnId: ProviderTurnId }) {
       const projection = yield* projections.getThreadProjection(input.threadId);
       const providerTurn = projection.providerTurns.find(
         (candidate) => candidate.id === input.providerTurnId,
@@ -310,6 +326,7 @@ export const layer: Layer.Layer<
     return ProviderTurnControlServiceV2.of({
       interrupt: (input) =>
         Effect.gen(function* () {
+          const afterSequence = yield* eventSink.latestSequence({ threadId: input.threadId });
           const loaded = yield* load({ ...input, operation: "interrupt" });
           if (Option.isNone(loaded.session)) return;
           yield* loaded.session.value.interruptTurn({
@@ -317,10 +334,17 @@ export const layer: Layer.Layer<
             providerTurnId: loaded.providerTurn.id,
             requestRuntimeRestart: true,
           });
-          yield* awaitTerminalOrForceInterrupt({
+          const settled = yield* awaitTerminal({
             threadId: input.threadId,
+            afterSequence,
             providerTurnId: input.providerTurnId,
           });
+          if (!settled) {
+            yield* forceInterruptedTerminal({
+              threadId: input.threadId,
+              providerTurnId: input.providerTurnId,
+            });
+          }
         }).pipe(
           Effect.mapError((cause) =>
             isProviderTurnControlError(cause)
@@ -335,6 +359,7 @@ export const layer: Layer.Layer<
         ),
       interruptAndAwaitTerminal: (input) =>
         Effect.gen(function* () {
+          const afterSequence = yield* eventSink.latestSequence({ threadId: input.threadId });
           const loaded = yield* load({ ...input, operation: "restart" });
           if (Option.isNone(loaded.session)) {
             // No live adapter: nothing can emit a terminal provider-turn update
@@ -358,28 +383,19 @@ export const layer: Layer.Layer<
             providerTurnId: loaded.providerTurn.id,
           });
 
-          for (let remaining = 1_000; remaining > 0; remaining -= 1) {
-            const projection = yield* projections.getThreadProjection(input.threadId);
-            const providerTurn = projection.providerTurns.find(
-              (candidate) => candidate.id === input.providerTurnId,
-            );
-            const attempt = projection.attempts.find(
-              (candidate) => candidate.id === input.interruptedAttemptId,
-            );
-            if (
-              providerTurn !== undefined &&
-              providerTurn.status !== "running" &&
-              attempt !== undefined &&
-              attempt.status !== "running"
-            ) {
-              return;
-            }
-            // Provider terminal events are projected on a detached ingestion
-            // fiber. Yield through the Node event loop instead of sleeping on
-            // Effect's clock so deterministic runtimes cannot deadlock a
-            // command that is waiting for that projection.
-            yield* yieldToRuntime;
-          }
+          const attempt = loaded.projection.attempts.find(
+            (candidate) => candidate.id === input.interruptedAttemptId,
+          );
+          const settled = yield* awaitTerminal({
+            threadId: input.threadId,
+            afterSequence,
+            providerTurnId: input.providerTurnId,
+            attempt: {
+              id: input.interruptedAttemptId,
+              settled: attempt !== undefined && attempt.status !== "running",
+            },
+          });
+          if (settled) return;
           return yield* new ProviderTurnControlError({
             threadId: input.threadId,
             operation: "restart",

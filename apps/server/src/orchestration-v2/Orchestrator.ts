@@ -1791,6 +1791,52 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
+  // Visits fire whenever a client sees thread activity, so they read only the thread row.
+  // Read state only moves forward and never bumps updatedAt (viewing is not activity).
+  const dispatchThreadVisit = Effect.fn("orchestrationV2.dispatch.threadVisit")(function* (
+    command: Extract<OrchestrationV2Command, { readonly type: "thread.visit" }>,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ): Effect.fn.Return<void, OrchestratorV2Error> {
+    const thread = yield* projectionStore.getThread(command.threadId).pipe(
+      Effect.mapError(
+        (cause) =>
+          new OrchestratorProjectionError({
+            threadId: command.threadId,
+            cause,
+          }),
+      ),
+    );
+    if (thread.deletedAt !== null) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: `Thread ${command.threadId} is deleted.`,
+      });
+    }
+    const visitedAt = DateTime.make(command.visitedAt);
+    if (Option.isNone(visitedAt)) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: `Thread ${command.threadId} visit time ${command.visitedAt} is not a valid timestamp.`,
+      });
+    }
+    const movesForward =
+      thread.lastVisitedAt === null ||
+      DateTime.toEpochMillis(visitedAt.value) > DateTime.toEpochMillis(thread.lastVisitedAt);
+    const now = yield* DateTime.now;
+    yield* emit(
+      events,
+      command,
+    )({
+      type: "thread.visited",
+      threadId: command.threadId,
+      providerInstanceId: thread.providerInstanceId,
+      occurredAt: now,
+      payload: movesForward ? { ...thread, lastVisitedAt: visitedAt.value } : thread,
+    });
+  });
+
   const dispatchThreadMutation = Effect.fn("orchestrationV2.dispatch.threadMutation")(function* (
     command: Extract<
       OrchestrationV2Command,
@@ -1807,7 +1853,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           | "thread.pin"
           | "thread.unpin"
           | "thread.pin.reorder"
-          | "thread.visit"
           | "thread.mark-unread"
           | "thread.project.attach"
           | "thread.temporary.set"
@@ -2175,18 +2220,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
       snoozedUntil = parsedSnoozedUntil.value;
     }
-    let visitedAt: DateTime.Utc | null = null;
-    if (command.type === "thread.visit") {
-      const parsedVisitedAt = DateTime.make(command.visitedAt);
-      if (Option.isNone(parsedVisitedAt)) {
-        return yield* new OrchestratorDispatchError({
-          commandId: command.commandId,
-          commandType: command.type,
-          cause: `Thread ${command.threadId} visit time ${command.visitedAt} is not a valid timestamp.`,
-        });
-      }
-      visitedAt = parsedVisitedAt.value;
-    }
     let markUnreadVisitedAt: DateTime.Utc | null = null;
     if (command.type === "thread.mark-unread") {
       const latestRunCompletedAt = projection.runs.at(-1)?.completedAt ?? null;
@@ -2324,17 +2357,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             updatedAt: keyUnchanged ? thread.updatedAt : now,
           };
         }
-        // Visited tracking records read state only; it must not bump updatedAt,
-        // otherwise viewing a thread would count as activity (and re-trigger the
-        // clients that dispatch thread.visit whenever updatedAt advances).
-        case "thread.visit": {
-          const previousVisitedAt = thread.lastVisitedAt;
-          const movesForward =
-            visitedAt !== null &&
-            (previousVisitedAt === null ||
-              DateTime.toEpochMillis(visitedAt) > DateTime.toEpochMillis(previousVisitedAt));
-          return movesForward ? { ...thread, lastVisitedAt: visitedAt } : thread;
-        }
         case "thread.mark-unread":
           return { ...thread, lastVisitedAt: markUnreadVisitedAt };
         case "thread.project.attach":
@@ -2446,8 +2468,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return "thread.unpinned" as const;
         case "thread.pin.reorder":
           return "thread.pin-reordered" as const;
-        case "thread.visit":
-          return "thread.visited" as const;
         case "thread.mark-unread":
           return "thread.marked-unread" as const;
         case "thread.project.attach":
@@ -8865,6 +8885,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.workspace-move.request":
         yield* dispatchWorkspaceMoveRequest(command, events, effects);
         break;
+      case "thread.visit":
+        yield* dispatchThreadVisit(command, events);
+        break;
       case "thread.archive":
       case "thread.unarchive":
       case "thread.delete":
@@ -8876,7 +8899,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.pin":
       case "thread.unpin":
       case "thread.pin.reorder":
-      case "thread.visit":
       case "thread.mark-unread":
       case "thread.project.attach":
       case "thread.temporary.set":
