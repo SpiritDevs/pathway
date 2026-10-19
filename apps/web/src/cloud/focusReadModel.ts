@@ -12,6 +12,7 @@ import {
   type ActiveFocusId,
 } from "@spiritdevs/client-runtime/state/focuses";
 import {
+  AttentionEventId,
   FOCUS_NOTIFICATION_MAX_PER_USER,
   FocusId,
   FocusNotification as FocusNotificationSchema,
@@ -23,6 +24,7 @@ import {
   type FocusReadModel,
   type FocusThreadSortOrder,
 } from "@spiritdevs/contracts/focus";
+import { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
 import { ConvexClient } from "convex/browser";
 import { makeFunctionReference } from "convex/server";
 import * as Option from "effect/Option";
@@ -169,16 +171,37 @@ export const focusNotificationsAtom = Atom.make<ReadonlyArray<FocusNotification>
 ).pipe(Atom.keepAlive, Atom.withLabel("focuses:notifications"));
 
 // Notifications acknowledged on this device ahead of Cloud, so a slow or failed
-// markRead never strands a thread the user settled by hand.
+// markRead never strands a thread the user settled by hand. Persisted with the unread cache below,
+// so a reload cannot bring a read thread back to Active.
 const locallyReadNotificationIdsAtom = Atom.make<ReadonlySet<string>>(new Set<string>()).pipe(
   Atom.keepAlive,
 );
 
+/** The part of a notification the sidebar needs to place its thread. */
+type UnreadNotificationRef = Pick<FocusNotification, "eventId" | "environmentId" | "threadId">;
+
+// The last unread events Cloud reported, restored until the live list answers so the cached sidebar
+// paints unread threads in Active from the first frame. Null once the live list is authoritative.
+// Kept apart from `focusNotificationsAtom`, which drives alerts: cached events never alert.
+const cachedUnreadNotificationsAtom = Atom.make<ReadonlyArray<UnreadNotificationRef> | null>(
+  null,
+).pipe(Atom.keepAlive);
+const unreadNotificationsStorageKeyAtom = Atom.make<string | null>(null).pipe(Atom.keepAlive);
+
+function unreadNotificationRefs(
+  get: <A>(atom: Atom.Atom<A>) => A,
+): ReadonlyArray<UnreadNotificationRef> {
+  return (
+    get(cachedUnreadNotificationsAtom) ??
+    get(focusNotificationsAtom).filter((notification) => !notification.isRead)
+  );
+}
+
 export const unreadNotificationThreadKeysAtom = Atom.make((get) => {
   const locallyRead = get(locallyReadNotificationIdsAtom);
   return new Set(
-    get(focusNotificationsAtom)
-      .filter((notification) => !notification.isRead && !locallyRead.has(notification.eventId))
+    unreadNotificationRefs(get)
+      .filter((notification) => !locallyRead.has(notification.eventId))
       .map((notification) =>
         scopedThreadKey(scopeThreadRef(notification.environmentId, notification.threadId)),
       ),
@@ -195,25 +218,99 @@ export function readThreadHasUnreadNotification(threadKey: string): boolean {
 
 /** Acknowledges a thread's notifications without opening it, as settling it from a list does. */
 export function markThreadNotificationsRead(threadKey: string): void {
-  const unread = appAtomRegistry
-    .get(focusNotificationsAtom)
-    .filter(
-      (notification) =>
-        !notification.isRead &&
-        scopedThreadKey(scopeThreadRef(notification.environmentId, notification.threadId)) ===
-          threadKey,
-    );
-  if (unread.length === 0) return;
-  appAtomRegistry.update(
-    locallyReadNotificationIdsAtom,
-    (ids) => new Set([...ids, ...unread.map((notification) => notification.eventId)]),
+  const locallyRead = appAtomRegistry.get(locallyReadNotificationIdsAtom);
+  const unread = unreadNotificationRefs((atom) => appAtomRegistry.get(atom)).filter(
+    (notification) =>
+      !locallyRead.has(notification.eventId) &&
+      scopedThreadKey(scopeThreadRef(notification.environmentId, notification.threadId)) ===
+        threadKey,
   );
+  if (unread.length === 0) return;
+  appAtomRegistry.set(
+    locallyReadNotificationIdsAtom,
+    new Set([...locallyRead, ...unread.map((notification) => notification.eventId)]),
+  );
+  persistUnreadNotifications();
   const markRead = appAtomRegistry.get(focusMutationsAtom)?.markNotificationRead;
   for (const notification of unread) {
     void markRead?.(notification.eventId).catch((error: unknown) => {
       console.warn("Could not mark thread notification as read.", error);
     });
   }
+}
+
+export function unreadNotificationsStorageKey(scope: string, convexUrl: string): string {
+  return `pathway:cloud-sync/${scope}/focus-unread/${encodeURIComponent(convexUrl)}`;
+}
+
+const CachedUnreadNotifications = Schema.fromJsonString(
+  Schema.Struct({
+    unread: Schema.Array(
+      Schema.Struct({
+        eventId: AttentionEventId,
+        environmentId: EnvironmentId,
+        threadId: ThreadId,
+      }),
+    ),
+    locallyRead: Schema.Array(Schema.String),
+  }),
+);
+const decodeCachedUnreadNotifications = Schema.decodeUnknownOption(CachedUnreadNotifications);
+const encodeCachedUnreadNotifications = Schema.encodeSync(CachedUnreadNotifications);
+
+export function readCachedUnreadNotifications(
+  scope: string,
+  convexUrl: string,
+  storage: ActiveFocusStorage | null,
+): {
+  readonly unread: ReadonlyArray<UnreadNotificationRef>;
+  readonly locallyRead: ReadonlyArray<string>;
+} | null {
+  try {
+    if (readCloudSyncReset(scope)) return null;
+    const raw = storage?.getItem(unreadNotificationsStorageKey(scope, convexUrl));
+    return raw ? Option.getOrNull(decodeCachedUnreadNotifications(raw)) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Saves the current unread events and local reads for the signed-in account and deployment. */
+function persistUnreadNotifications(): void {
+  const key = appAtomRegistry.get(unreadNotificationsStorageKeyAtom);
+  if (key === null) return;
+  const locallyRead = appAtomRegistry.get(locallyReadNotificationIdsAtom);
+  const unread = unreadNotificationRefs((atom) => appAtomRegistry.get(atom))
+    .filter((notification) => !locallyRead.has(notification.eventId))
+    .map(({ eventId, environmentId, threadId }) => ({ eventId, environmentId, threadId }));
+  try {
+    ambientLocalStorage()?.setItem(
+      key,
+      encodeCachedUnreadNotifications({ unread, locallyRead: [...locallyRead] }),
+    );
+  } catch {
+    // The cache only shortens the first frame; the live list remains authoritative.
+  }
+}
+
+/**
+ * Applies a live notification list: it replaces the cached unread events, and local reads Cloud has
+ * since recorded (or dropped) are forgotten so the persisted set stays bounded by the live list.
+ */
+function applyLiveNotifications(notifications: ReadonlyArray<FocusNotification>): void {
+  appAtomRegistry.set(focusNotificationsAtom, notifications);
+  appAtomRegistry.set(cachedUnreadNotificationsAtom, null);
+  const locallyRead = appAtomRegistry.get(locallyReadNotificationIdsAtom);
+  if (locallyRead.size > 0) {
+    const stillUnread = new Set(
+      notifications
+        .filter((notification) => !notification.isRead && locallyRead.has(notification.eventId))
+        .map((notification) => notification.eventId),
+    );
+    if (stillUnread.size !== locallyRead.size)
+      appAtomRegistry.set(locallyReadNotificationIdsAtom, stillUnread);
+  }
+  persistUnreadNotifications();
 }
 
 function makeFocusMutations(client: ConvexClient): FocusMutations {
@@ -606,12 +703,29 @@ export function useFocusReadModelRuntime(options: {
         : null,
     );
     appAtomRegistry.set(focusReadModelErrorAtom, false);
+    const signedIn = options.enabled && options.accountScope && options.convexUrl;
+    const cachedUnread = signedIn
+      ? readCachedUnreadNotifications(
+          options.accountScope!,
+          options.convexUrl!,
+          ambientLocalStorage(),
+        )
+      : null;
+    appAtomRegistry.set(
+      unreadNotificationsStorageKeyAtom,
+      signedIn ? unreadNotificationsStorageKey(options.accountScope!, options.convexUrl!) : null,
+    );
+    appAtomRegistry.set(cachedUnreadNotificationsAtom, cachedUnread?.unread ?? null);
+    appAtomRegistry.set(locallyReadNotificationIdsAtom, new Set(cachedUnread?.locallyRead));
     return () => {
       appAtomRegistry.set(focusReadModelOwnerAtom, null);
       appAtomRegistry.set(focusReadModelAtom, null);
       appAtomRegistry.set(focusUnreadCountAtom, 0);
       appAtomRegistry.set(focusNotificationsAtom, EMPTY_FOCUS_NOTIFICATIONS);
       appAtomRegistry.set(threadAlertNotificationsReadyAtom, false);
+      appAtomRegistry.set(unreadNotificationsStorageKeyAtom, null);
+      appAtomRegistry.set(cachedUnreadNotificationsAtom, null);
+      appAtomRegistry.set(locallyReadNotificationIdsAtom, new Set<string>());
     };
   }, [options.accountScope, options.convexUrl, options.enabled]);
   useEffect(() => {
@@ -625,6 +739,7 @@ export function useFocusReadModelRuntime(options: {
     }
 
     let active = true;
+    let resentLocalReads = false;
     const client = new ConvexClient(options.convexUrl);
     client.setAuth(options.fetchToken);
     const mutations = makeFocusMutations(client);
@@ -677,8 +792,17 @@ export function useFocusReadModelRuntime(options: {
           if (!active) return;
           const decoded = decodeFocusNotifications(value);
           if (Option.isSome(decoded)) {
-            appAtomRegistry.set(focusNotificationsAtom, decoded.value);
+            applyLiveNotifications(decoded.value);
             appAtomRegistry.set(threadAlertNotificationsReadyAtom, true);
+            // Reads a previous session recorded but Cloud never did: send them once more.
+            if (!resentLocalReads) {
+              resentLocalReads = true;
+              for (const eventId of appAtomRegistry.get(locallyReadNotificationIdsAtom)) {
+                void mutations.markNotificationRead?.(eventId).catch((error: unknown) => {
+                  console.warn("Could not mark thread notification as read.", error);
+                });
+              }
+            }
           } else {
             appAtomRegistry.set(threadAlertNotificationsReadyAtom, false);
             console.warn("Convex returned invalid Focus notifications.");

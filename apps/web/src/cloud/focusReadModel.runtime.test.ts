@@ -1,3 +1,4 @@
+import { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const runtime = vi.hoisted(() => {
@@ -41,6 +42,8 @@ vi.mock("react", async (importOriginal) => ({
 vi.mock("convex/browser", () => ({ ConvexClient: runtime.Client }));
 
 import { focusReadModelAtom } from "@spiritdevs/client-runtime/state/focuses";
+import { sidebarThreadSection } from "../state/sidebarThreadLifecycle";
+import { makeThreadFixture } from "../test-fixtures";
 import { appAtomRegistry, resetAppAtomRegistryForTests } from "../rpc/atomRegistry";
 import { threadAlertNotificationsReadyAtom } from "../threadAlerts/state";
 import { cloudSyncResetMarkerKey } from "./syncReset";
@@ -49,6 +52,9 @@ import {
   focusReadModelStorageKey,
   focusMutationsAtom,
   focusNotificationsAtom,
+  markThreadNotificationsRead,
+  unreadNotificationsStorageKey,
+  unreadNotificationThreadKeysAtom,
   useFocusReadModelRuntime,
 } from "./focusReadModel";
 
@@ -261,4 +267,125 @@ it("keeps the cold Focus gate after sign-out marked this account for a reset", (
   });
   mount("account-a");
   expect(appAtomRegistry.get(focusReadModelAtom)).toBeNull();
+});
+
+describe("cached unread placement", () => {
+  const url = "https://example.convex.cloud";
+  const threadKey = "environment-a:thread-a";
+  function stubStorage(entries: Record<string, string> = {}) {
+    const values = new Map(Object.entries(entries));
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (key: string) => values.get(key) ?? null,
+        setItem: (key: string, value: string) => values.set(key, value),
+      },
+    });
+    return values;
+  }
+  const cache = (unread: readonly string[], locallyRead: readonly string[] = []) =>
+    JSON.stringify({
+      unread: unread.map((eventId) => ({
+        eventId,
+        environmentId: "environment-a",
+        threadId: "thread-a",
+      })),
+      locallyRead,
+    });
+  // An explicitly settled thread sits in Active only while it has unread news.
+  const section = () =>
+    sidebarThreadSection(
+      makeThreadFixture({
+        environmentId: EnvironmentId.make("environment-a"),
+        id: ThreadId.make("thread-a"),
+        settledOverride: "settled",
+      }),
+      {
+        now: "2026-09-12T12:00:00.000Z",
+        autoSettleAfterDays: null,
+        queued: false,
+        unread: appAtomRegistry.get(unreadNotificationThreadKeysAtom).has(threadKey),
+        supportsSettlement: true,
+        supportsSnooze: true,
+        projectCwd: null,
+        changeRequests: new Map(),
+      },
+    ).section;
+
+  it("places a cached unread thread where the unchanged live list will, without alerting", () => {
+    stubStorage({ [unreadNotificationsStorageKey("account-a", url)]: cache(["event-a"]) });
+    const { notifications } = mount("account-a");
+    const cachedSection = section();
+    expect(cachedSection).toBe("active");
+    // Cached events never reach the alert pipeline.
+    expect(appAtomRegistry.get(focusNotificationsAtom)).toEqual([]);
+    expect(appAtomRegistry.get(threadAlertNotificationsReadyAtom)).toBe(false);
+    notifications.receive([notification("event-a")]);
+    expect(section()).toBe(cachedSection);
+  });
+
+  it("silently applies a read recorded on another device", () => {
+    const values = stubStorage({
+      [unreadNotificationsStorageKey("account-a", url)]: cache(["event-a"]),
+    });
+    const { notifications } = mount("account-a");
+    expect(section()).toBe("active");
+    notifications.receive([{ ...notification("event-a"), isRead: true }]);
+    expect(section()).toBe("settled");
+    expect(JSON.parse(values.get(unreadNotificationsStorageKey("account-a", url))!)).toEqual({
+      unread: [],
+      locallyRead: [],
+    });
+  });
+
+  it("keeps a thread read across a reload while Cloud has not recorded the read", () => {
+    const values = stubStorage();
+    const first = mount("account-a");
+    first.notifications.receive([notification("event-a")]);
+    expect(section()).toBe("active");
+    markThreadNotificationsRead(threadKey);
+    expect(section()).toBe("settled");
+    first.stop();
+
+    const second = mount("account-a");
+    expect(section()).toBe("settled");
+    second.notifications.receive([notification("event-a")]);
+    expect(section()).toBe("settled");
+    // The reload sends the read Cloud missed once more.
+    expect(second.client.mutation).toHaveBeenCalledWith(FOCUS_FUNCTION_REFERENCES.markRead, {
+      eventId: "event-a",
+    });
+    // Once Cloud records it, the local acknowledgement is no longer stored.
+    second.notifications.receive([{ ...notification("event-a"), isRead: true }]);
+    expect(JSON.parse(values.get(unreadNotificationsStorageKey("account-a", url))!)).toEqual({
+      unread: [],
+      locallyRead: [],
+    });
+  });
+
+  it("settles a cached unread thread by hand before Cloud answers", () => {
+    stubStorage({ [unreadNotificationsStorageKey("account-a", url)]: cache(["event-a"]) });
+    const { client } = mount("account-a");
+    markThreadNotificationsRead(threadKey);
+    expect(section()).toBe("settled");
+    expect(client.mutation).toHaveBeenCalledWith(FOCUS_FUNCTION_REFERENCES.markRead, {
+      eventId: "event-a",
+    });
+  });
+
+  it("restores nothing for another account, another deployment, or after sign-out", () => {
+    stubStorage({
+      [unreadNotificationsStorageKey("account-a", url)]: cache(["event-a"]),
+      [unreadNotificationsStorageKey("account-b", "https://other.convex.cloud")]: cache([
+        "event-b",
+      ]),
+      [cloudSyncResetMarkerKey("account-c")]: "pending",
+      [unreadNotificationsStorageKey("account-c", url)]: cache(["event-c"]),
+    });
+    const current = mount("account-a");
+    expect(section()).toBe("active");
+    current.render("account-b");
+    expect(section()).toBe("settled");
+    current.render("account-c");
+    expect(section()).toBe("settled");
+  });
 });
