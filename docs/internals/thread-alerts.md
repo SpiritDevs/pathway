@@ -15,6 +15,11 @@ Mobile push preferences continue to use their existing relay path.
 - `apps/web/src/cloud/focusReadModel.ts` supplies the authenticated Convex client.
   `apps/web/src/threadAlerts/state.ts` adds one scoped policy subscription and keeps optimistic
   choices visible until the matching cloud row arrives.
+- `focusReadModel.ts` also keeps a per-account, per-deployment localStorage copy of the unread
+  event identities and this device's unsent read acknowledgements. It places unread threads in the
+  sidebar on the cached first frame until the live list answers. Alert delivery reads only the live
+  list, so cached entries never alert. The sign-out reset sweeps this copy with the rest of the
+  account's cloud-sync namespace.
 - `packages/client-runtime/src/threadAlerts/` owns delivery decisions and transactional IndexedDB
   claims. `apps/web/src/threadAlerts/` mounts the runtime and provides audio and notification adapters.
 - Electron owns native notifications, system sound, window reveal, and queued notification clicks.
