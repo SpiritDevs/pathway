@@ -28,7 +28,10 @@ struct NewAgentThreadMessageEditor: View {
             if isFocused, let trigger {
                 NewAgentThreadSuggestions(model: model, trigger: trigger, select: selectSuggestion)
             }
-            if !model.attachments.drafts.isEmpty { attachmentStrip }
+            if !model.attachments.drafts.isEmpty {
+                attachmentStrip
+                    .simultaneousGesture(TapGesture().onEnded { isFocused = false })
+            }
             AgentComposerTextInput(text: $model.prompt, selection: $selection,
                 isFocused: $isFocused,
                 placeholder: "Ask anything…", pasteImages: pasteImages,
