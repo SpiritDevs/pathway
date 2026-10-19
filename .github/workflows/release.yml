@@ -293,7 +293,7 @@ jobs:
     needs: [preflight, relay_public_config]
     if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.relay_public_config.result == 'success' }}
     runs-on: ${{ fromJSON(vars.FLEET_MACOS_RUNNER || '["self-hosted","fleet-macos-arm64"]') }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     environment:
       name: production
     env:
@@ -342,6 +342,12 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Provision verified Cua
+        if: matrix.platform == 'mac' || matrix.platform == 'linux'
+        uses: ./.github/actions/provision-cua
         with:
           targets: ${{ matrix.rust_target }}
 
@@ -542,6 +548,17 @@ jobs:
             echo "Release app was signed by an unexpected Apple team." >&2
             exit 1
           fi
+          # The Computer Use binaries embed an Info.plist so electron-builder's
+          # re-sign keeps their identifiers; macOS ties TCC grants to them.
+          for nested in \
+            "cua-driver/cua-driver=com.spiritdevs.pathway.cua.driver" \
+            "pathway-helper/pathway-helper=com.spiritdevs.pathway.helper"; do
+            nested_signature="$(/usr/bin/codesign -d --verbose=2 "$app/Contents/Resources/${nested%%=*}" 2>&1)"
+            if ! /usr/bin/grep -Fxq "Identifier=${nested#*=}" <<< "$nested_signature"; then
+              echo "Release ${nested%%=*} must keep signing identifier ${nested#*=}." >&2
+              exit 1
+            fi
+          done
           executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
           actual_arch="$(/usr/bin/lipo -archs "$app/Contents/MacOS/$executable")"
           if [[ "$actual_arch" != "$RELEASE_ARCH" ]]; then
@@ -549,7 +566,7 @@ jobs:
             exit 1
           fi
           xcrun stapler validate "$app"
-          echo "Verified Developer ID signature, Apple team, $RELEASE_ARCH architecture, and stapled notarization ticket."
+          echo "Verified Developer ID signature, Apple team, nested signing identifiers, $RELEASE_ARCH architecture, and stapled notarization ticket."
 
       - name: Collect release assets
         shell: bash

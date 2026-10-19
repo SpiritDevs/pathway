@@ -17,6 +17,25 @@ describe("configureDesktopWebAuthn", () => {
     ).toBeUndefined();
     expect(readDesktopWebAuthnKeychainGroup("{}")).toBeUndefined();
   });
+  it("only accepts the keychain group signed for the packaged flavor", () => {
+    const cuaGroup = "ABC1234567.com.spiritdevs.pathway.cua.webauthn";
+    expect(
+      readDesktopWebAuthnKeychainGroup(
+        JSON.stringify({ pathwayDesktopFlavor: "cua", pathwayWebAuthnKeychainGroup: cuaGroup }),
+      ),
+    ).toBe(cuaGroup);
+    expect(
+      readDesktopWebAuthnKeychainGroup(
+        JSON.stringify({
+          pathwayDesktopFlavor: "cua",
+          pathwayWebAuthnKeychainGroup: "ABC1234567.com.spiritdevs.pathway.webauthn",
+        }),
+      ),
+    ).toBeUndefined();
+    expect(
+      readDesktopWebAuthnKeychainGroup(JSON.stringify({ pathwayWebAuthnKeychainGroup: cuaGroup })),
+    ).toBeUndefined();
+  });
   it("enables the signed application's own Secure Enclave credential group", () => {
     const group = "ABC1234567.com.spiritdevs.pathway.webauthn";
     expect(configureDesktopWebAuthn("darwin", true, group)).toBe(true);

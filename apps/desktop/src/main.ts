@@ -48,6 +48,8 @@ import * as DesktopShutdown from "./app/DesktopShutdown.ts";
 import * as DesktopObservability from "./app/DesktopObservability.ts";
 import * as DesktopServerExposure from "./backend/DesktopServerExposure.ts";
 import * as DesktopClientSettings from "./settings/DesktopClientSettings.ts";
+import * as ComputerEmergencyStopNotice from "./computer/ComputerEmergencyStopNotice.ts";
+import * as DesktopComputerHost from "./computer/DesktopComputerHost.ts";
 import * as DesktopSavedEnvironments from "./settings/DesktopSavedEnvironments.ts";
 import * as DesktopSnapShot from "./snapShot/DesktopSnapShot.ts";
 import * as DesktopDictation from "./dictation/DesktopDictation.ts";
@@ -78,6 +80,7 @@ const desktopEnvironmentLayer = Layer.unwrap(
       platform,
       processArch,
       ...metadata,
+      flavor: DesktopPreReadyPlatform.readPackagedDesktopFlavor(),
     });
   }),
 );
@@ -174,6 +177,8 @@ const desktopDictationLayer = DesktopDictation.layer.pipe(
 const desktopBackendLayer = DesktopBackendPool.layer.pipe(
   Layer.provideMerge(DesktopAppIdentity.layer),
   Layer.provideMerge(DesktopBackendConfiguration.layer),
+  // Inert unless PATHWAY_COMPUTER_USE=1 on macOS.
+  Layer.provideMerge(DesktopComputerHost.layer),
   Layer.provideMerge(DesktopWslEnvironment.layer),
   Layer.provideMerge(DesktopTelemetryPublisher.layer),
   Layer.provideMerge(desktopWindowLayer),
@@ -196,6 +201,8 @@ const desktopApplicationLayer = Layer.mergeAll(
   DesktopLinuxUrlHandler.layer,
   DesktopShellEnvironment.layer,
   desktopSshLayer,
+  // Escape on the desktop also stops the backend's Computer turns.
+  ComputerEmergencyStopNotice.layer,
 ).pipe(
   Layer.provideMerge(desktopSnapShotLayer),
   Layer.provideMerge(desktopDictationLayer),

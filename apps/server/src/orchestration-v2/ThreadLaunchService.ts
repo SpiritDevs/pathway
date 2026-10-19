@@ -63,6 +63,8 @@ export interface ThreadLaunchInitialMessage {
   readonly messageId?: MessageId;
   readonly text: string;
   readonly attachments: ReadonlyArray<ChatAttachment>;
+  readonly enableComputerControl?: boolean | undefined;
+  readonly computerControlGeneration?: number | undefined;
 }
 
 export interface ThreadLaunchInput {
@@ -931,6 +933,12 @@ export const make = Effect.gen(function* () {
               messageId,
               text: input.initialMessage.text,
               attachments: input.initialMessage.attachments,
+              ...(input.initialMessage.enableComputerControl === undefined
+                ? {}
+                : { enableComputerControl: input.initialMessage.enableComputerControl }),
+              ...(input.initialMessage.computerControlGeneration === undefined
+                ? {}
+                : { computerControlGeneration: input.initialMessage.computerControlGeneration }),
               ...(input.generateTitle === true ? { titleSeed: input.title } : {}),
               modelSelection: input.modelSelection,
               dispatchMode: { type: "defer_start" },

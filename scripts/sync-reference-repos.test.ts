@@ -18,6 +18,7 @@ import {
 const encoder = new TextEncoder();
 const effectSmol = referenceRepos[0]!;
 const alchemyEffect = referenceRepos[1]!;
+const synara = referenceRepos[2]!;
 
 function mockHandle(
   options: {
@@ -81,6 +82,17 @@ it.layer(NodeServices.layer)("sync-reference-repos", (it) => {
     }),
   );
 
+  it.effect("follows the latest branch for repos without a pinned version", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const rootDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "sync-reference-repos-unpinned-",
+      });
+
+      assert.equal(yield* resolveReferenceRepoRef(synara, rootDir, false), "main");
+    }),
+  );
+
   it.effect("uses the latest branch without reading package versions", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -99,7 +111,7 @@ it.layer(NodeServices.layer)("sync-reference-repos", (it) => {
       const rootDir = yield* fs.makeTempDirectoryScoped({
         prefix: "sync-reference-repos-read-error-",
       });
-      const sourcePath = path.join(rootDir, effectSmol.versionSourcePath);
+      const sourcePath = path.join(rootDir, effectSmol.version!.sourcePath);
 
       const error = yield* resolveReferenceRepoRef(effectSmol, rootDir, false).pipe(Effect.flip);
 
@@ -121,7 +133,7 @@ it.layer(NodeServices.layer)("sync-reference-repos", (it) => {
       const rootDir = yield* fs.makeTempDirectoryScoped({
         prefix: "sync-reference-repos-parse-error-",
       });
-      const sourcePath = path.join(rootDir, alchemyEffect.versionSourcePath);
+      const sourcePath = path.join(rootDir, alchemyEffect.version!.sourcePath);
       yield* fs.makeDirectory(path.dirname(sourcePath), { recursive: true });
       yield* fs.writeFileString(sourcePath, "{");
 
@@ -145,7 +157,7 @@ it.layer(NodeServices.layer)("sync-reference-repos", (it) => {
       const rootDir = yield* fs.makeTempDirectoryScoped({
         prefix: "sync-reference-repos-resolution-error-",
       });
-      const sourcePath = path.join(rootDir, alchemyEffect.versionSourcePath);
+      const sourcePath = path.join(rootDir, alchemyEffect.version!.sourcePath);
       yield* fs.makeDirectory(path.dirname(sourcePath), { recursive: true });
       yield* fs.writeFileString(sourcePath, '{"dependencies":{}}');
 
@@ -251,7 +263,7 @@ it.layer(NodeServices.layer)("sync-reference-repos", (it) => {
         assert.fail(`Unexpected error: ${error._tag}`);
       }
       assert.equal(error.repoId, "missing");
-      assert.deepStrictEqual(error.expectedRepoIds, ["effect-smol", "alchemy-effect"]);
+      assert.deepStrictEqual(error.expectedRepoIds, ["effect-smol", "alchemy-effect", "synara"]);
       assert.ok(!("cause" in error));
     }),
   );

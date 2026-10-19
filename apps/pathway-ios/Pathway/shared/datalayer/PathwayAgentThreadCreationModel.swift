@@ -38,6 +38,9 @@ final class PathwayAgentThreadCreationModel {
     private(set) var connectionState: PathwayThreadConnectionState = .idle
     private(set) var providers: [PathwayServerProvider] = []
     private(set) var serverConfig: [String: JSONValue] = [:]
+    /// The environment's Computer access policy and this device's scopes there; nil while unknown.
+    @ObservationIgnored var computerAccessPolicy: String?
+    @ObservationIgnored var computerSessionScopes: Set<String>?
     let attachments: PathwayNewThreadAttachments
     var environmentID: String { environment.environment.environmentId }
     var workspaceRoot: String { binding?.binding.localWorkspaceRoot ?? "" }
@@ -279,8 +282,10 @@ final class PathwayAgentThreadCreationModel {
         guard streamTask == nil, let connect else { return }
         connectionState = .connecting
         let environment = environment
-        let rpc = PathwayRPCClient {
-            try await connect.prepare(environment: environment).threadOperationWebSocketURL()
+        let rpc = PathwayRPCClient { [weak self] in
+            let connection = try await connect.prepare(environment: environment)
+            await MainActor.run { self?.computerSessionScopes = connection.scopes }
+            return try connection.threadOperationWebSocketURL()
         }
         self.rpc = rpc
         streamTask = Task { @MainActor [weak self] in
@@ -314,6 +319,9 @@ final class PathwayAgentThreadCreationModel {
     }
 
     func launch() async -> String? {
+        if PathwayComputerInvocation.isBare(prompt), attachments.drafts.isEmpty, initialImageUploads.isEmpty {
+            errorMessage = PathwayComputerInvocation.bareCommandMessage; return nil
+        }
         if let threadQueue { return await enqueueLaunch(using: threadQueue) }
         guard canLaunch, storageAllowsLaunch, rpc != nil || injectedRequest != nil, let selectedProvider, let selectedModel else { return nil }
         isLaunching = true
@@ -344,7 +352,8 @@ final class PathwayAgentThreadCreationModel {
                 modelSelection: selection, runtimeMode: runtimeMode, interactionMode: interactionMode,
                 workspaceMode: workspaceMode, baseReference: baseReference, branch: branch,
                 startFromOrigin: startFromOrigin, temporary: temporary,
-                conversationCompanyID: isConversation ? environment.companyId : nil
+                conversationCompanyID: isConversation ? environment.companyId : nil,
+                computer: computerLaunchFields(for: prompt.trimmingCharacters(in: .whitespacesAndNewlines))
             )
             var fingerprint = PathwayAgentThreadCommands.launchThread(draft, identifier: "draft").objectValue ?? [:]
             fingerprint["uploadsFingerprint"] = .object(["initial": .string(uploadsFingerprint), "files": .array(userUploads)])
@@ -403,6 +412,17 @@ final class PathwayAgentThreadCreationModel {
         }
     }
 
+    /// A new thread's Computer intent: a leading `/computer-use`, or the device setting where the host
+    /// drives a desktop and the path that delivers the launch is known to be allowed to use it.
+    /// `queued` judges the cloud queue's delivery instead of this pairing.
+    func computerLaunchFields(for text: String, queued: Bool = false,
+                              setting: Bool = UserDefaults.standard.bool(forKey: PathwayAgentThreadModel.computerControlDefaultsKey)) -> [String: JSONValue] {
+        let scopes = queued ? PathwayComputerAccess.cloudQueueScopes : computerSessionScopes
+        let enabled = setting && PathwayComputerAccess.supportsComputer(serverConfig: serverConfig)
+            && PathwayComputerAccess.admits(policy: computerAccessPolicy, scopes: scopes)
+        return PathwayComputerInvocation.newChatFields(text: text, controlEnabled: enabled, launches: true, serverConfig: serverConfig)
+    }
+
     func setOption(_ descriptor: PathwayProviderOptionDescriptor, value: JSONValue) {
         optionValues[descriptor.id] = value
     }
@@ -419,7 +439,8 @@ final class PathwayAgentThreadCreationModel {
                 modelSelection: selection, runtimeMode: runtimeMode, interactionMode: interactionMode,
                 workspaceMode: workspaceMode, baseReference: baseReference, branch: branch,
                 startFromOrigin: startFromOrigin, temporary: temporary,
-                conversationCompanyID: isConversation ? environment.companyId : nil)
+                conversationCompanyID: isConversation ? environment.companyId : nil,
+                computer: computerLaunchFields(for: text, queued: true))
             var fingerprintFields = PathwayAgentThreadCommands.launchThread(draft, identifier: "draft").objectValue ?? [:]
             fingerprintFields["uploadsFingerprint"] = .object(["initial": .array(initialImageUploads), "files": .array(attachments.drafts.map { .string($0.id) })])
             let fingerprint = JSONValue.object(fingerprintFields)
@@ -647,6 +668,7 @@ final class PathwayAgentThreadCreationModel {
     }
 
     private func applySettings(_ value: JSONValue?) {
+        if let policy = value?.objectValue?["computer"]?.objectValue?["accessPolicy"]?.stringValue { computerAccessPolicy = policy }
         guard !hasConfiguredDefaults, let settings = value?.objectValue else { return }
         hasConfiguredDefaults = true
         // SwiftFormat places this brace on the next line for the wrapped condition.

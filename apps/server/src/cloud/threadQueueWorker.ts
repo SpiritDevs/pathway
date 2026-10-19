@@ -3,6 +3,7 @@
 /** Accepts cloud-saved user messages into the environment's durable orchestration log. */
 import { api } from "@spiritdevs/backend/convexApi";
 import {
+  AuthOrchestrationOperateScope,
   CommandId,
   OrchestrationV2ThreadLaunchInput,
   OrchestrationV2Command,
@@ -31,15 +32,18 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { createDeterministicAttachmentId, resolveAttachmentPath } from "../attachmentStore.ts";
+import { computerClearance } from "../computer/computerAccessPolicy.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { randomUuidV4 } from "../orchestration-v2/RandomUuid.ts";
 import * as Receipts from "../orchestration-v2/CommandReceiptStore.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import { ComputerDispatchAccess } from "../orchestration-v2/ComputerDispatchAccess.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
 import { forkParkedFiber } from "../serverActivation.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { convexErrorCode, type ConvexServiceTokenProvider } from "./convexServiceToken.ts";
 import { getOrCreateCloudSyncDpopKeyPairFromSecretStore } from "./environmentKeys.ts";
 import {
@@ -316,6 +320,17 @@ export const makeLocalThreadQueueExecutor = Effect.fn("cloud.thread_queue.execut
   const receipts = yield* Receipts.CommandReceiptStoreV2;
   const projects = yield* ProjectService.ProjectService;
   const providers = yield* ProviderRegistry.ProviderRegistry;
+  const settings = yield* ServerSettings.ServerSettingsService;
+  // The queue does not carry the submitter's grant, so a cloud message may operate the
+  // thread and nothing more: Computer only when the policy admits any operator (ADR 0041).
+  const cloudSubmitter = {
+    clearance: settings.getSettings.pipe(
+      Effect.orDie,
+      Effect.flatMap((current) =>
+        computerClearance(current.computer.accessPolicy, [AuthOrchestrationOperateScope]),
+      ),
+    ),
+  };
   const services = yield* Effect.context<
     FileSystem.FileSystem | ServerConfig.ServerConfig | HttpClient.HttpClient
   >();
@@ -462,7 +477,7 @@ export const makeLocalThreadQueueExecutor = Effect.fn("cloud.thread_queue.execut
             createdBy: "user",
             creationSource: submission.input.creationSource ?? "web",
           })
-          .pipe(Effect.asVoid);
+          .pipe(Effect.asVoid, Effect.provideService(ComputerDispatchAccess, cloudSubmitter));
       }
       return threads
         .dispatch({
@@ -478,7 +493,7 @@ export const makeLocalThreadQueueExecutor = Effect.fn("cloud.thread_queue.execut
           dispatchMode: threadQueueDispatchMode(submission.input.dispatchMode),
           createdBy: "user",
         })
-        .pipe(Effect.asVoid);
+        .pipe(Effect.asVoid, Effect.provideService(ComputerDispatchAccess, cloudSubmitter));
     }),
   } satisfies ThreadQueueExecutor;
 });

@@ -66,6 +66,19 @@ describe("cloud queue submission", () => {
       input: { dispatchMode: { type: "queue_after_active" } },
     });
   });
+  it("freezes the Computer intent onto a queued message", () => {
+    const result = buildThreadQueueSubmission(
+      { ...input, enableComputerControl: true, computerControlGeneration: 3 },
+      [],
+    );
+    expect(result).toMatchObject({
+      kind: "message",
+      input: { enableComputerControl: true, computerControlGeneration: 3 },
+    });
+    const plain = buildThreadQueueSubmission(input, []);
+    expect(plain.input).not.toHaveProperty("enableComputerControl");
+    expect(plain.input).not.toHaveProperty("computerControlGeneration");
+  });
   it("creates the first thread with workspace preparation in the durable payload", () => {
     const result = buildThreadQueueSubmission(
       {
@@ -94,6 +107,32 @@ describe("cloud queue submission", () => {
         workspaceStrategy: { type: "worktree", baseRef: "main" },
         initialMessage: { messageId: "message", text: "Do the work" },
       },
+    });
+  });
+  it("carries the Computer intent on a new thread's first message", () => {
+    const result = buildThreadQueueSubmission(
+      {
+        ...input,
+        enableComputerControl: true,
+        computerControlGeneration: 0,
+        bootstrap: {
+          createThread: {
+            projectId: ProjectId.make("project"),
+            title: "New thread",
+            modelSelection: input.modelSelection!,
+            runtimeMode: input.runtimeMode,
+            interactionMode: input.interactionMode,
+            branch: null,
+            worktreePath: null,
+            createdAt: "2026-09-10T00:00:00Z",
+          },
+        },
+      },
+      [],
+    );
+    expect(result).toMatchObject({
+      kind: "launch",
+      input: { initialMessage: { enableComputerControl: true, computerControlGeneration: 0 } },
     });
   });
 });

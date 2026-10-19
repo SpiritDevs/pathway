@@ -1,4 +1,5 @@
 import { SnapShotCoordinator } from "../components/desktop/SnapShotCoordinator";
+import { AgentCursorDesktopSync } from "../components/settings/agentCursorDesktopSync";
 import { DictationAccountCoordinator } from "../dictation/cloud";
 import { type AuthSessionState, type ServerLifecycleWelcomePayload } from "@spiritdevs/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@spiritdevs/client-runtime/environment";
@@ -405,6 +406,7 @@ function RootRouteContent({ pathname }: { readonly pathname: string }) {
         <DocumentTitleSync />
         <GlassAppearanceSync />
         <FontAppearanceSync />
+        <AgentCursorDesktopSync />
         {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
         <ConnectOnboardingDialog />
         <SshPasswordPromptDialog />
