@@ -5,7 +5,6 @@ import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import type { EnvironmentThread } from "./models.ts";
 import { EMPTY_ENVIRONMENT_THREAD_STATE, type EnvironmentThreadState } from "./threadState.ts";
 import { parseThreadKey, threadKey } from "./entities.ts";
-import { THREAD_STATE_IDLE_TTL_MS } from "./threadRetention.ts";
 
 const EMPTY_VISIBLE_TURN_ITEMS: OrchestrationV2ThreadProjection["visibleTurnItems"] = Object.freeze(
   [],
@@ -24,10 +23,7 @@ export function createEnvironmentThreadDetailAtoms<E>(
         AsyncResult.value(get(threadStateAtom(ref.environmentId, ref.threadId))),
         () => EMPTY_ENVIRONMENT_THREAD_STATE,
       ),
-    ).pipe(
-      Atom.setIdleTTL(THREAD_STATE_IDLE_TTL_MS),
-      Atom.withLabel(`environment-thread-state-value:${key}`),
-    );
+    ).pipe(Atom.withLabel(`environment-thread-state-value:${key}`));
   });
 
   const threadAtomFamily = Atom.family((key: string) => {
@@ -40,7 +36,7 @@ export function createEnvironmentThreadDetailAtoms<E>(
       previousProjection = projection;
       previousValue = projection === null ? null : { environmentId: ref.environmentId, projection };
       return previousValue;
-    }).pipe(Atom.setIdleTTL(THREAD_STATE_IDLE_TTL_MS), Atom.withLabel(`environment-thread:${key}`));
+    }).pipe(Atom.withLabel(`environment-thread:${key}`));
   });
 
   const visibleTurnItemsAtomFamily = Atom.family((key: string) =>
@@ -48,27 +44,21 @@ export function createEnvironmentThreadDetailAtoms<E>(
       (get): OrchestrationV2ThreadProjection["visibleTurnItems"] =>
         Option.getOrNull(get(threadStateValueAtomFamily(key)).data)?.visibleTurnItems ??
         EMPTY_VISIBLE_TURN_ITEMS,
-    ).pipe(
-      Atom.setIdleTTL(THREAD_STATE_IDLE_TTL_MS),
-      Atom.withLabel(`environment-thread-visible-turn-items:${key}`),
-    ),
+    ).pipe(Atom.withLabel(`environment-thread-visible-turn-items:${key}`)),
   );
 
   const statusAtomFamily = Atom.family((key: string) =>
     Atom.make((get) => get(threadStateValueAtomFamily(key)).status).pipe(
-      Atom.setIdleTTL(THREAD_STATE_IDLE_TTL_MS),
       Atom.withLabel(`environment-thread-status:${key}`),
     ),
   );
   const errorAtomFamily = Atom.family((key: string) =>
     Atom.make((get) => Option.getOrNull(get(threadStateValueAtomFamily(key)).error)).pipe(
-      Atom.setIdleTTL(THREAD_STATE_IDLE_TTL_MS),
       Atom.withLabel(`environment-thread-error:${key}`),
     ),
   );
   const historyAtomFamily = Atom.family((key: string) =>
     Atom.make((get) => get(threadStateValueAtomFamily(key)).history ?? null).pipe(
-      Atom.setIdleTTL(THREAD_STATE_IDLE_TTL_MS),
       Atom.withLabel(`environment-thread-history:${key}`),
     ),
   );
