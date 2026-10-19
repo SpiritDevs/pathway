@@ -48,19 +48,14 @@ struct PathwayConnectedMailSettings: View {
           }
         }
       }
-      Section("Connect Gmail") {
-        if let setupURL = AppConfiguration.mailSetupURL {
-          Link("Open Gmail setup on web", destination: setupURL)
+      Section {
+        if model.accounts.isEmpty || model.accounts.contains(where: { $0.status != "active" }) {
+          PathwayMailSetupInstructions()
         } else {
-          Text("The mail setup website is not configured for this app.")
-            .foregroundStyle(.secondary)
+          DisclosureGroup("Add or reconnect Gmail") {
+            PathwayMailSetupInstructions()
+          }
         }
-        Text(
-          "Open Email settings on Pathway web and select the same workspace to connect or reconnect Gmail. Once connected, mail appears here automatically."
-        )
-        Text(
-          "Mail and sender knowledge are private to you. Each message gets a Priority or Noise bucket and a reason. Priority messages get a briefing."
-        ).foregroundStyle(.secondary)
       }
       if let error { Text(error).foregroundStyle(.red) }
     }
@@ -88,6 +83,25 @@ struct PathwayConnectedMailSettings: View {
       Text(
         "Copied messages, drafts, and private sender knowledge are removed from Pathway. Gmail messages are unaffected."
       )
+    }
+  }
+}
+
+private struct PathwayMailSetupInstructions: View {
+  var body: some View {
+    Group {
+      if let setupURL = AppConfiguration.mailSetupURL {
+        Link("Open Gmail setup on web", destination: setupURL)
+      } else {
+        Text("The mail setup website is not configured for this app.")
+          .foregroundStyle(.secondary)
+      }
+      Text(
+        "Open Email settings on Pathway web and select the same workspace to connect or reconnect Gmail. Once connected, mail appears here automatically."
+      )
+      Text(
+        "Mail and sender knowledge are private to you. Each message gets a Priority or Noise bucket and a reason. Priority messages get a briefing."
+      ).foregroundStyle(.secondary)
     }
   }
 }
