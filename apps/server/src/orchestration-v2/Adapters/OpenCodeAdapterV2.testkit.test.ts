@@ -208,4 +208,214 @@ describe("OpenCodeAdapterV2 replay testkit", () => {
       ),
     ),
   );
+
+  it.effect("resumes a task child after the parent turn that launched it completes", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const threadId = ThreadId.make("thread-opencode-task-resume");
+        const modelSelection = {
+          instanceId: OPENCODE_DEFAULT_INSTANCE_ID,
+          model: "openai/test-model",
+        } as const;
+        const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          cwd: "/workspace",
+        });
+        const registry = yield* ProviderAdapterRegistryV2;
+        const adapter = yield* registry.get(OPENCODE_DEFAULT_INSTANCE_ID);
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("provider-session-opencode-task-resume"),
+          modelSelection,
+          runtimePolicy,
+        });
+        const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) => Queue.offer(events, event)),
+          Effect.forkScoped,
+        );
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const now = yield* DateTime.now;
+        yield* runtime.startTurn({
+          appThread: {
+            createdBy: "user",
+            creationSource: "web",
+            id: threadId,
+            projectId: ProjectId.make("project-opencode-task-resume"),
+            title: "OpenCode task resume",
+            providerInstanceId: OPENCODE_DEFAULT_INSTANCE_ID,
+            modelSelection,
+            runtimeMode: "approval-required",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            activeProviderThreadId: providerThread.id,
+            lineage: {
+              parentThreadId: null,
+              relationshipToParent: null,
+              rootThreadId: threadId,
+            },
+            forkedFrom: null,
+            createdAt: now,
+            updatedAt: now,
+            archivedAt: null,
+            settledOverride: null,
+            settledAt: null,
+            lastVisitedAt: null,
+            deletedAt: null,
+          },
+          threadId,
+          runId: RunId.make("run-opencode-task-resume"),
+          runOrdinal: 1,
+          providerTurnOrdinal: 1,
+          attemptId: RunAttemptId.make("attempt-opencode-task-resume"),
+          rootNodeId: NodeId.make("node-opencode-task-resume"),
+          providerThread,
+          message: {
+            createdBy: "user",
+            creationSource: "web",
+            messageId: MessageId.make("message-opencode-task-resume"),
+            text: "Delegate a task.",
+            attachments: [],
+          },
+          modelSelection,
+          runtimePolicy,
+        });
+        let childProviderThreadId;
+        let parentCompleted = false;
+        while (true) {
+          const event = yield* Queue.take(events);
+          if (event.type === "app_thread.created") {
+            childProviderThreadId = event.appThread.activeProviderThreadId;
+          }
+          if (event.type === "turn.terminal" && event.providerThreadId === providerThread.id) {
+            assert.strictEqual(event.status, "completed");
+            parentCompleted = true;
+          }
+          if (
+            event.type === "provider_turn.updated" &&
+            event.providerTurn.providerThreadId === childProviderThreadId &&
+            event.providerTurn.status === "running"
+          ) {
+            break;
+          }
+        }
+        assert.isDefined(childProviderThreadId);
+        assert.isTrue(parentCompleted);
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeProviderAdapterRegistryReplayLayer({
+            provider: OPENCODE_PROVIDER,
+            protocol: OPENCODE_SDK_REPLAY_PROTOCOL,
+            version: "test",
+            scenario: "task-resume",
+            entries: [
+              { type: "expect_outbound", frame: { type: "event.subscribe" } },
+              {
+                type: "expect_outbound",
+                frame: { type: "session.create", input: "<any>" },
+              },
+              {
+                type: "emit_inbound",
+                frame: {
+                  type: "sdk.response",
+                  operation: "session.create",
+                  data: { id: "native-opencode-parent", time: { created: 1, updated: 1 } },
+                },
+              },
+              {
+                type: "expect_outbound",
+                frame: { type: "session.promptAsync", input: "<any>" },
+              },
+              {
+                type: "emit_inbound",
+                frame: { type: "sdk.response", operation: "session.promptAsync", data: null },
+              },
+              {
+                type: "emit_inbound",
+                frame: {
+                  type: "sdk.event",
+                  event: {
+                    type: "message.part.updated",
+                    properties: {
+                      part: {
+                        id: "native-task-part",
+                        sessionID: "native-opencode-parent",
+                        messageID: "native-parent-assistant",
+                        type: "tool",
+                        callID: "native-task-call",
+                        tool: "task",
+                        state: {
+                          status: "completed",
+                          input: { prompt: "Look around.", description: "Explore" },
+                          output: "x".repeat(64 * 1024),
+                          title: "Explore",
+                          metadata: { sessionId: "native-opencode-child" },
+                          time: { start: 2, end: 3 },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+              {
+                type: "expect_outbound",
+                frame: { type: "session.get", input: { sessionID: "native-opencode-child" } },
+              },
+              {
+                type: "emit_inbound",
+                frame: {
+                  type: "sdk.response",
+                  operation: "session.get",
+                  data: { id: "native-opencode-child", permission: [] },
+                },
+              },
+              {
+                type: "expect_outbound",
+                frame: { type: "session.update", input: "<any>" },
+              },
+              {
+                type: "emit_inbound",
+                frame: { type: "sdk.response", operation: "session.update", data: null },
+              },
+              {
+                type: "emit_inbound",
+                frame: {
+                  type: "sdk.event",
+                  event: {
+                    type: "session.idle",
+                    properties: { sessionID: "native-opencode-parent" },
+                  },
+                },
+              },
+              {
+                type: "emit_inbound",
+                frame: {
+                  type: "sdk.event",
+                  event: {
+                    type: "message.updated",
+                    properties: {
+                      sessionID: "native-opencode-child",
+                      info: {
+                        id: "native-child-user",
+                        sessionID: "native-opencode-child",
+                        role: "user",
+                        time: { created: 4 },
+                      },
+                    },
+                  },
+                },
+              },
+              { type: "runtime_exit", status: "success" },
+            ],
+          }),
+        ),
+      ),
+    ),
+  );
 });
