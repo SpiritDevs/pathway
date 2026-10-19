@@ -30,8 +30,8 @@ export function patchDeviceHubControlSource(source: string): string {
         request=JSON.parse(packet.subarray(1).toString("utf8"));
         if(!Number.isSafeInteger(request.id)||typeof request.packet!=="string")throw Error("Invalid managed input");
         const input=Buffer.from(request.packet,"base64");
-        if(![3,4,5,6,7,8,9,10,11,12,13,14,15,16].includes(input[0]))throw Error("Unsupported input");
-        await this.pathwayHandleHidMessage(input,socket);
+        if(![3,4,5,6,7,8,9,10,11,12,13,14,15,16,19].includes(input[0]))throw Error("Unsupported input");
+        await this.pathwayHandleHidMessage(input,socket,true);
         await this.softwareKeyboardSync;
         await this.hingeControlUpdate;
         socket.send(Buffer.concat([Buffer.from([254]),Buffer.from(JSON.stringify({id:request.id,ok:true}))]));

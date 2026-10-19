@@ -1,3 +1,4 @@
+import { managedSimulator } from "./managedSimulator.testkit.ts";
 import { describe, expect, it } from "vite-plus/test";
 import * as NodeVM from "node:vm";
 import { patchDeviceHubControlSource } from "./deviceHubControlAdapter.ts";
@@ -98,3 +99,64 @@ describe("pinned iOS HID receipt adapter", () => {
     expect(acknowledged).toBe(true);
   });
 });
+
+for (const entry of ["middleware.js", "serve-sim.js"]) {
+  it(`composes both patches in ${entry} and keeps TV semantic and Watch bounds validation`, async () => {
+    const helper = managedSimulator(entry);
+    const send = (device: string, tag: number, payload: object) =>
+      helper.deliver(
+        device,
+        Buffer.concat([
+          Buffer.from([126]),
+          Buffer.from(
+            JSON.stringify({
+              id: 1,
+              packet: Buffer.concat([
+                Buffer.from([tag]),
+                Buffer.from(JSON.stringify(payload)),
+              ]).toString("base64"),
+            }),
+          ),
+        ]),
+        () => {},
+      );
+    for (const [device, tag, payload] of [
+      ["watch", 10, { delta: 201 }],
+      ["watch", 4, { page: 1, usage: 64 }],
+      ["watch", 19, { button: "select" }],
+      ["tv", 3, { type: "begin", x: 0.5, y: 0.5 }],
+      ["tv", 4, { page: 12, usage: 64 }],
+      ["tv", 10, { delta: 10 }],
+      ["tv", 19, { button: "invented" }],
+    ] as const) {
+      await send(device, tag, payload);
+      expect(helper.receipts.at(-1)?.[0]).toBe(254);
+      expect(JSON.parse(helper.receipts.at(-1)!.subarray(1).toString())).toEqual({
+        id: 1,
+        ok: false,
+      });
+    }
+    expect(helper.calls).toEqual([]);
+    const started = Promise.withResolvers<void>();
+    const completed = Promise.withResolvers<void>();
+    helper.beforeInput(() => {
+      started.resolve();
+      return completed.promise;
+    });
+    const before = helper.receipts.length;
+    const sending = send("tv", 19, { button: "select" });
+    await started.promise;
+    expect(helper.receipts).toHaveLength(before);
+    completed.resolve();
+    await sending;
+    expect(JSON.parse(helper.receipts.at(-1)!.subarray(1).toString())).toEqual({ id: 1, ok: true });
+    helper.beforeInput(async () => {
+      throw Error("native rejected");
+    });
+    await send("watch", 10, { delta: 1 });
+    expect(JSON.parse(helper.receipts.at(-1)!.subarray(1).toString())).toEqual({
+      id: 1,
+      ok: false,
+    });
+  });
+}

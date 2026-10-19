@@ -9,7 +9,7 @@ import type { DeviceHostReady } from "./DeviceHost.ts";
 
 const Reply = Schema.fromJsonString(
   Schema.Struct({
-    id: Schema.String,
+    id: Schema.Int,
     ok: Schema.Boolean,
     error: Schema.optional(Schema.String),
   }),
@@ -30,7 +30,7 @@ export const sendSimulatorInput = Effect.fn("sendSimulatorInput")(function* (
       new Promise<void>((resolve, reject) => {
         const socket = new WebSocket(url);
         socket.binaryType = "arraybuffer";
-        const id = "input";
+        const id = 1;
         let finished = false;
         const finish = (error?: unknown) => {
           if (finished) return;
@@ -47,11 +47,13 @@ export const sendSimulatorInput = Effect.fn("sendSimulatorInput")(function* (
         const abort = () => finish(new Error("Simulator input cancelled"));
         const onOpen = () => {
           try {
+            const { tag, payload } = deviceSimulatorInputPacket(input);
+            const packet = Buffer.concat([
+              Buffer.from([tag]),
+              Buffer.from(JSON.stringify(payload)),
+            ]).toString("base64");
             socket.send(
-              Buffer.concat([
-                Buffer.from([0x12]),
-                Buffer.from(JSON.stringify({ id, ...deviceSimulatorInputPacket(input) })),
-              ]),
+              Buffer.concat([Buffer.from([0x7e]), Buffer.from(JSON.stringify({ id, packet }))]),
             );
           } catch (error) {
             finish(error);
@@ -60,7 +62,7 @@ export const sendSimulatorInput = Effect.fn("sendSimulatorInput")(function* (
         const onMessage = (message: MessageEvent) => {
           if (!(message.data instanceof ArrayBuffer)) return;
           const data = new Uint8Array(message.data);
-          if (data[0] !== 0x12) return;
+          if (data[0] !== 0xfe) return;
           try {
             const reply = decodeReply(new TextDecoder().decode(data.subarray(1)));
             if (reply.id === id)

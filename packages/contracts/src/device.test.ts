@@ -79,3 +79,20 @@ it("maps Siri Remote keyboard controls to button events and Watch crown to rotat
     payload: { page: 12, usage: 0x95 },
   });
 });
+
+it("preserves viewer control proof on every simulator input kind and validates generations", () => {
+  for (const input of [
+    { kind: "digitalCrown", delta: 10 },
+    { kind: "watchButton", button: "side" },
+    { kind: "remoteButton", button: "select" },
+  ]) {
+    const request = { deviceId: "selected", input, control: { viewerId: "viewer", generation: 3 } };
+    expect(decodeInput(request)).toEqual(request);
+    for (const generation of [-1, 1.5, "3"])
+      expect(() =>
+        decodeInput({ ...request, control: { viewerId: "viewer", generation } }),
+      ).toThrow();
+    // Omission reaches authorization, which returns the typed control_required error.
+    expect(decodeInput({ deviceId: "selected", input })).toEqual({ deviceId: "selected", input });
+  }
+});

@@ -1,3 +1,5 @@
+import { managedSimulator } from "./managedSimulator.testkit.ts";
+import { deviceSimulatorInputPacket } from "@spiritdevs/contracts";
 // @effect-diagnostics preferSchemaOverJson:off - these tests construct and inspect the exact vendor wire format.
 import { expect, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Queue } from "effect";
@@ -163,5 +165,60 @@ for (const takeover of [false, true]) {
         expect(acknowledged).toBe(true);
         expect(yield* Queue.size(writes)).toBe(0);
       }).pipe(Effect.scoped),
+  );
+}
+
+for (const input of [
+  { kind: "digitalCrown", delta: -5 },
+  { kind: "watchButton", button: "side" },
+  { kind: "remoteButton", button: "playPause" },
+] as const) {
+  it.effect(`delivers ${input.kind} through the holder's channel and both helper patches`, () =>
+    Effect.gen(function* () {
+      const helper = managedSimulator();
+      const control = yield* make();
+      const deviceId = input.kind === "remoteButton" ? "tv" : "watch";
+      const selected = { hostId: "ssh-mac", deviceId };
+      const held = yield* control.acquire(selected, owner);
+      let receive = (_frame: Buffer): Effect.Effect<boolean> => Effect.succeed(false);
+      const channel = yield* makeDeviceInputChannel(
+        control,
+        { ...selected, owner, generation: held.generation },
+        "ios",
+        (frame) => {
+          const received: Buffer[] = [];
+          return Effect.promise(() =>
+            helper.deliver(deviceId, frame as Uint8Array, (data) => {
+              received.push(data);
+            }),
+          ).pipe(
+            Effect.andThen(
+              Effect.suspend(() => Effect.forEach(received, receive, { discard: true })),
+            ),
+          );
+        },
+      );
+      receive = channel.receipt;
+      const { tag, payload } = deviceSimulatorInputPacket(input);
+      const frame = tagged(tag, payload);
+      yield* channel.input(frame);
+      expect(helper.calls).toHaveLength(1);
+      expect(helper.calls[0]?.method).toBe(
+        input.kind === "remoteButton"
+          ? "remote"
+          : input.kind === "watchButton"
+            ? "buttonHid"
+            : "digitalCrown",
+      );
+      expect(helper.receipts).toHaveLength(1);
+      // A takeover invalidates this socket's generation; it cannot dispatch again.
+      yield* control.acquire(selected, { ...owner, viewerId: "other" });
+      yield* channel.input(frame);
+      expect(helper.calls).toHaveLength(1);
+      const watcher = yield* makeDeviceInputChannel(control, null, "ios", () =>
+        Effect.die("watcher dispatched input"),
+      );
+      yield* watcher.input(frame);
+    }).pipe(Effect.scoped),
   );
 }
