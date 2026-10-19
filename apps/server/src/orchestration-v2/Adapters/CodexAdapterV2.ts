@@ -69,13 +69,17 @@ import {
 } from "../../provider/Drivers/CodexHomeLayout.ts";
 import type { EventNdjsonLogger } from "../../provider/Layers/EventNdjsonLogger.ts";
 import { ProviderEventLoggers } from "../../provider/Layers/ProviderEventLoggers.ts";
-import { mergeProviderInstanceEnvironment } from "../../provider/ProviderInstanceEnvironment.ts";
+import {
+  mergeProviderInstanceEnvironment,
+  providerChildEnvironment,
+} from "../../provider/ProviderInstanceEnvironment.ts";
 import {
   ingestPushedSnapshot,
   mapCodexRateLimitsUpdated,
   type PushedProviderUsageSnapshot,
 } from "../../providerUsage/ProviderUsageService.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { shouldAllowPathwayComputerProviderTool } from "../../mcp/toolkits/computer/computerToolPermission.ts";
 import {
   ProviderAdapterDriverCreateError,
   type ProviderAdapterDriver,
@@ -1287,6 +1291,49 @@ export class CodexAppServerClientFactory extends Context.Service<
   CodexAppServerClientFactoryShape
 >()("@spiritdevs/pathway/orchestration-v2/Adapters/CodexAdapterV2/CodexAppServerClientFactory") {}
 
+/**
+ * Codex asks through an MCP elicitation before it runs an MCP tool. Pathway
+ * approves each Computer call itself (ADR 0048), so its own Computer tools are
+ * accepted for a live admitted turn. A turn being interrupted or already
+ * terminal is not live, so its Computer calls are declined. Pathway has no
+ * prompt for any other MCP approval, so those are declined, as they were
+ * before the handler existed.
+ */
+export function codexMcpElicitationAction(input: {
+  readonly params: CodexSchema.McpServerElicitationRequestParams;
+  readonly runtimePolicy: ProviderAdapterV2RuntimePolicy | undefined;
+  readonly activeTurn: boolean;
+}): CodexSchema.McpServerElicitationRequestResponse["action"] {
+  const meta = input.params._meta;
+  const metaField = (key: string) =>
+    meta !== null && typeof meta === "object" && !Array.isArray(meta)
+      ? Reflect.get(meta, key)
+      : undefined;
+  if (
+    input.runtimePolicy === undefined ||
+    input.params.serverName !== McpProviderSession.PATHWAY_MCP_SERVER_NAME ||
+    metaField("codex_approval_kind") !== "mcp_tool_call"
+  ) {
+    return "decline";
+  }
+  // Current Codex builds omit tool_name; accept only their exact generated prompt.
+  const explicitToolName = metaField("tool_name");
+  const toolName =
+    typeof explicitToolName === "string"
+      ? explicitToolName
+      : /^Allow the pathway MCP server to run tool "([a-z_]+)"\?$/.exec(input.params.message)?.[1];
+  return toolName !== undefined &&
+    shouldAllowPathwayComputerProviderTool({
+      computerControlEnabled: input.runtimePolicy.enableComputerControl === true,
+      activeTurn: input.activeTurn,
+      interactionMode: input.runtimePolicy.interactionMode,
+      runtimeMode: input.runtimePolicy.runtimeMode,
+      permission: { name: McpProviderSession.pathwayMcpToolName(toolName) },
+    })
+    ? "accept"
+    : "decline";
+}
+
 export function codexThreadRuntimeParams(input: {
   readonly threadId: ThreadId | null;
   readonly modelSelection?: { readonly model: string };
@@ -1311,6 +1358,7 @@ export function codexThreadRuntimeParams(input: {
                 http_headers: {
                   Authorization: mcpSession.authorizationHeader,
                 },
+                tool_timeout_sec: McpProviderSession.PATHWAY_MCP_TOOL_TIMEOUT_MS / 1000,
               },
             },
           },
@@ -1327,14 +1375,14 @@ export const makeCodexAppServerSpawnCommand = Effect.fn(
   readonly env?: NodeJS.ProcessEnv | undefined;
   readonly extendEnv?: boolean | undefined;
 }) {
-  const spawnCommand = yield* resolveSpawnCommand(input.command, input.args, {
-    ...(input.env === undefined ? {} : { env: input.env }),
-    ...(input.extendEnv === undefined ? {} : { extendEnv: input.extendEnv }),
+  const environment = yield* providerChildEnvironment({
+    env: input.env,
+    extendEnv: input.extendEnv,
   });
+  const spawnCommand = yield* resolveSpawnCommand(input.command, input.args, environment);
   return ChildProcess.make(spawnCommand.command, spawnCommand.args, {
     ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
-    ...(input.env === undefined ? {} : { env: input.env }),
-    ...(input.extendEnv === undefined ? {} : { extendEnv: input.extendEnv }),
+    ...environment,
     shell: spawnCommand.shell,
   });
 });
@@ -1578,7 +1626,7 @@ export const layer: Layer.Layer<
     return makeCodexAdapterV2({
       instanceId: CODEX_DEFAULT_INSTANCE_ID,
       settings: DEFAULT_CODEX_SETTINGS,
-      environment: hostEnvironment,
+      environment: mergeProviderInstanceEnvironment(undefined, hostEnvironment),
       clientFactory,
       fileSystem,
       idAllocator,
@@ -4712,6 +4760,33 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               ),
             } satisfies CodexSchema.ApplyPatchApprovalResponse;
           }).pipe(Effect.orDie),
+        );
+
+        yield* client.handleServerRequest("mcpServer/elicitation/request", (payload) =>
+          Effect.gen(function* () {
+            const turnId = payload.turnId;
+            const context =
+              turnId == null || finishedNativeTurns.has(turnId)
+                ? undefined
+                : yield* awaitActiveTurn(turnId);
+            const activeTurn =
+              context?.providerThread.nativeThreadRef?.nativeId === payload.threadId
+                ? context
+                : undefined;
+            // Mirrors Synara's stop guard: a Stop in flight or a settled turn
+            // never auto-accepts a Computer call.
+            const live =
+              activeTurn !== undefined &&
+              !finishedNativeTurns.has(activeTurn.nativeTurnId) &&
+              !(yield* Ref.get(interruptingNativeTurns)).has(activeTurn.nativeTurnId);
+            return {
+              action: codexMcpElicitationAction({
+                params: payload,
+                runtimePolicy: activeTurn?.input.runtimePolicy,
+                activeTurn: live,
+              }),
+            } satisfies CodexSchema.McpServerElicitationRequestResponse;
+          }),
         );
 
         yield* client.handleServerRequest("item/tool/requestUserInput", (payload, rpcRequestId) =>

@@ -2,6 +2,7 @@ import {
   EnvironmentId,
   isPathwayEnvironmentDescriptor,
   PATHWAY_APPLICATION_ID,
+  requestableEnvironmentScopes,
   type ExecutionEnvironmentDescriptor,
 } from "@spiritdevs/contracts";
 import type { RelayManagedEndpoint } from "@spiritdevs/contracts/relay";
@@ -283,7 +284,7 @@ export const make = Effect.gen(function* () {
         httpBaseUrl: bootstrap.endpoint.httpBaseUrl,
         credential: bootstrap.credential,
         dpopProof: bootstrapProof,
-        scopes: presentation.scopes,
+        scopes: requestableEnvironmentScopes(presentation.scopes, descriptor.capabilities),
         clientMetadata: presentation.metadata,
       }).pipe(
         Effect.mapError(mapRemoteEnvironmentError),

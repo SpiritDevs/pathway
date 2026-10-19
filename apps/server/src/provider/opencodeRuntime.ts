@@ -31,6 +31,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { isWindowsCommandNotFound } from "../processRunner.ts";
 import { collectStreamAsString } from "./providerSnapshot.ts";
+import { providerChildEnvironment } from "./ProviderInstanceEnvironment.ts";
 import * as NetService from "@spiritdevs/shared/Net";
 import { HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
 import { resolveSpawnCommand } from "@spiritdevs/shared/shell";
@@ -408,16 +409,14 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const netService = yield* NetService.NetService;
   const hostPlatform = yield* HostProcessPlatform;
-  const resolveCommand = (command: string, args: ReadonlyArray<string>, env?: NodeJS.ProcessEnv) =>
-    resolveSpawnCommand(command, args, env ? { env } : {});
-
   const runOpenCodeCommand: OpenCodeRuntimeShape["runOpenCodeCommand"] = (input) =>
     Effect.gen(function* () {
-      const spawnCommand = yield* resolveCommand(input.binaryPath, input.args, input.environment);
+      const environment = yield* providerChildEnvironment({ env: input.environment });
+      const spawnCommand = yield* resolveSpawnCommand(input.binaryPath, input.args, environment);
       const child = yield* spawner.spawn(
         ChildProcess.make(spawnCommand.command, spawnCommand.args, {
           shell: spawnCommand.shell,
-          ...(input.environment ? { env: input.environment } : { extendEnv: true }),
+          ...environment,
         }),
       );
       const [stdout, stderr, code] = yield* Effect.all(
@@ -469,25 +468,28 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
         ));
       const timeoutMs = input.timeoutMs ?? DEFAULT_OPENCODE_SERVER_TIMEOUT_MS;
       const args = ["serve", `--hostname=${hostname}`, `--port=${port}`];
-      const spawnCommand = yield* resolveCommand(input.binaryPath, args, input.environment);
+      const environment = yield* providerChildEnvironment({
+        env: {
+          ...input.environment,
+          // Respect an OPENCODE_CONFIG_CONTENT provided by the caller or
+          // the inherited process environment, only falling back to the
+          // empty config when neither is set. Setting it unconditionally
+          // previously clobbered the user's opencode config, hiding their
+          // providers/models. The value is set explicitly (rather than
+          // relying on inheritance) because a provided `input.environment`
+          // replaces the host environment.
+          OPENCODE_CONFIG_CONTENT: resolveOpenCodeConfigContent(input.environment),
+        },
+        extendEnv: input.environment === undefined,
+      });
+      const spawnCommand = yield* resolveSpawnCommand(input.binaryPath, args, environment);
 
       const child = yield* spawner
         .spawn(
           ChildProcess.make(spawnCommand.command, spawnCommand.args, {
             detached: hostPlatform !== "win32",
             shell: spawnCommand.shell,
-            env: {
-              ...input.environment,
-              // Respect an OPENCODE_CONFIG_CONTENT provided by the caller or
-              // the inherited process environment, only falling back to the
-              // empty config when neither is set. Setting it unconditionally
-              // previously clobbered the user's opencode config, hiding their
-              // providers/models. The value is set explicitly (rather than
-              // relying on inheritance) because `extendEnv` is false whenever
-              // `input.environment` is provided.
-              OPENCODE_CONFIG_CONTENT: resolveOpenCodeConfigContent(input.environment),
-            },
-            extendEnv: input.environment === undefined,
+            ...environment,
           }),
         )
         .pipe(

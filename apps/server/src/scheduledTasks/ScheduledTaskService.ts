@@ -29,11 +29,15 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { ComputerDispatchAccess } from "../orchestration-v2/ComputerDispatchAccess.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { ProviderAllowanceRuntime } from "../providerUsage/AllowanceRuntime.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { isMissedFixedTimeRun, isSameSchedule, nextScheduledRunAt } from "./Schedule.ts";
+
+/** Starts the id of every user message a scheduled run sends, so a run can tell nobody typed it. */
+export const SCHEDULED_TASK_MESSAGE_ID_PREFIX = "scheduled-task-message:";
 
 const decodeTask = Schema.decodeUnknownEffect(ScheduledTask);
 const decodeScheduleJson = Schema.decodeUnknownEffect(
@@ -482,7 +486,7 @@ export const layer = Layer.effect(
 
         const fireKey = `${active.id}:${DateTime.toEpochMillis(startedAt)}:${trigger}`;
         const commandId = CommandId.make(`scheduled-task:${fireKey}`);
-        const messageId = MessageId.make(`scheduled-task-message:${fireKey}`);
+        const messageId = MessageId.make(`${SCHEDULED_TASK_MESSAGE_ID_PREFIX}${fireKey}`);
         const targetThreadId = active.threadId ?? ThreadId.make(`thread:scheduled:${fireKey}`);
         const inheritAllowance = Effect.gen(function* () {
           if (!active.allowanceParentThreadId || active.allowanceParentThreadId === targetThreadId)
@@ -528,6 +532,8 @@ export const layer = Layer.effect(
                       creationSource: active.creationSource,
                     }),
                   ),
+                  // A schedule is the server sending for itself (ADR 0041).
+                  Effect.provideService(ComputerDispatchAccess, ComputerDispatchAccess.server),
                 ),
               )
             : yield* Effect.exit(
@@ -546,6 +552,8 @@ export const layer = Layer.effect(
                       creationSource: active.creationSource,
                     }),
                   ),
+                  // A schedule is the server sending for itself (ADR 0041).
+                  Effect.provideService(ComputerDispatchAccess, ComputerDispatchAccess.server),
                 ),
               );
 

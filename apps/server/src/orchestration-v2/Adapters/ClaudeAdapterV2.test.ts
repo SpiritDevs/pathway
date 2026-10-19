@@ -349,6 +349,8 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
       headers: {
         Authorization: "Bearer secret-claude-token",
       },
+      // Computer calls outlive provider defaults; Claude's limit is per server.
+      timeout: 1_200_000,
     },
   } as const;
 
@@ -548,6 +550,7 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
             headers: {
               Authorization: "Bearer secret-claude-token",
             },
+            timeout: 1_200_000,
           },
         },
       });
