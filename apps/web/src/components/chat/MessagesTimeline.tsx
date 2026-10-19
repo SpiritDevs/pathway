@@ -2430,6 +2430,7 @@ function SubagentGroupTimelineRow({
   const items = row.projectedItems.flatMap(({ item }) => (item.type === "subagent" ? [item] : []));
   return (
     <SubagentCard
+      environmentId={ctx.activeThreadEnvironmentId}
       items={items}
       providerStatuses={ctx.providerStatuses}
       subagents={ctx.subagents}
@@ -2498,6 +2499,7 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
   if (isV2LifecycleItem(item)) {
     return (
       <V2LifecycleRow
+        environmentId={ctx.activeThreadEnvironmentId}
         item={item}
         createdAt={row.createdAt}
         timestampFormat={ctx.timestampFormat}

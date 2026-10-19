@@ -40,6 +40,7 @@ import {
   OrchestrationV2ShellSnapshot,
   OrchestrationV2ThreadDetailSnapshotWire,
   OrchestrationV2ThreadPayloadFormat,
+  OrchestrationV2ItemDetailField,
   OrchestrationV2ToolOutput,
   OrchestrationV2ThreadHistoryRequest,
 } from "./orchestrationV2.ts";
@@ -542,6 +543,8 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
     HttpApiEndpoint.get("toolOutput", "/api/orchestration/threads/:threadId/items/:itemId/output", {
       headers: OptionalBearerHeaders,
       params: Schema.Struct({ threadId: ThreadId, itemId: TurnItemId }),
+      // Older clients omit the field and mean `output`.
+      query: Schema.Struct({ field: Schema.optionalKey(OrchestrationV2ItemDetailField) }),
       success: OrchestrationV2ToolOutput,
       error: EnvironmentOrchestrationThreadSnapshotErrors,
     }).middleware(EnvironmentAuthenticatedAuth),

@@ -1,15 +1,29 @@
 import {
+  EnvironmentId,
   ProviderInstanceId,
   ThreadId,
   TurnItemId,
   type OrchestrationV2TurnItem,
 } from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
-import { createElement } from "react";
+import { act, createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vite-plus/test";
+import { create, type ReactTestRenderer } from "react-test-renderer";
+import { describe, expect, it, vi } from "vite-plus/test";
+
+const requests = vi.hoisted(() => ({
+  load: vi.fn(),
+  fetch: vi.fn((input: unknown) => input),
+}));
+vi.mock("@spiritdevs/client-runtime/state/threads", () => ({
+  fetchEnvironmentItemDetail: requests.fetch,
+}));
+vi.mock("../../lib/runtime", () => ({ runtime: { runPromise: requests.load } }));
+vi.mock("../../state/session", () => ({ readPreparedConnection: () => ({ prepared: true }) }));
 
 import { isV2LifecycleItem, SubagentCard, V2LifecycleRow } from "./V2LifecycleRow";
+
+const environmentId = EnvironmentId.make("environment:local");
 
 describe("V2LifecycleRow", () => {
   it("groups subagents into one card with a count and status summary", () => {
@@ -43,6 +57,7 @@ describe("V2LifecycleRow", () => {
 
     const markup = renderToStaticMarkup(
       createElement(SubagentCard, {
+        environmentId,
         items: [
           subagent("fix-cache", "running", null),
           subagent("audit", "completed", "- No **bugs** found in `cache.ts`"),
@@ -90,6 +105,7 @@ describe("V2LifecycleRow", () => {
 
     const markup = renderToStaticMarkup(
       createElement(V2LifecycleRow, {
+        environmentId,
         item,
         createdAt: "2026-08-14T00:00:00.000Z",
         timestampFormat: "locale",
@@ -130,6 +146,7 @@ describe("V2LifecycleRow", () => {
 
     const markup = renderToStaticMarkup(
       createElement(V2LifecycleRow, {
+        environmentId,
         item,
         createdAt: "2026-08-14T00:00:00.000Z",
         timestampFormat: "locale",
@@ -175,6 +192,7 @@ describe("V2LifecycleRow", () => {
 
     const markup = renderToStaticMarkup(
       createElement(V2LifecycleRow, {
+        environmentId,
         item,
         createdAt: "2026-08-14T00:00:00.000Z",
         timestampFormat: "locale",
@@ -188,5 +206,72 @@ describe("V2LifecycleRow", () => {
     expect(markup).toContain("gpt-5.6-sol");
     expect(markup).toContain("Show compaction summary");
     expect(markup).not.toContain("Continue the feature");
+  });
+
+  it("fetches a previewed subagent result only when its full text is asked for", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const now = DateTime.makeUnsafe("2026-08-14T00:00:00.000Z");
+    const item = {
+      id: TurnItemId.make("subagent:large"),
+      threadId: ThreadId.make("thread-parent"),
+      runId: null,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 1,
+      status: "completed",
+      title: "Subagent: audit",
+      startedAt: now,
+      completedAt: now,
+      updatedAt: now,
+      type: "subagent",
+      subagentId: "node:audit",
+      origin: "app_owned",
+      driver: "codex",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      childThreadId: null,
+      prompt: "Audit",
+      result: "head\n… omitted …\ntail",
+      resultPreview: { totalBytes: 70_000, format: "text" },
+    } as Extract<OrchestrationV2TurnItem, { type: "subagent" }>;
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        createElement(SubagentCard, {
+          environmentId,
+          items: [item],
+          providerStatuses: [],
+          subagents: [],
+          onOpenThread: () => {},
+        }),
+      );
+    });
+    const button = (label: string) =>
+      renderer.root
+        .findAllByType("button")
+        .find((candidate) => String(candidate.props.children).startsWith(label));
+    const resultText = () =>
+      renderer.root.findByProps({ "data-v2-subagent-result": "true" }).props.children;
+    await act(async () => {
+      renderer.root.findByProps({ "data-v2-subagent-result-disclosure": "true" }).props.onClick();
+    });
+    expect(resultText()).toBe("head\n… omitted …\ntail");
+    expect(requests.load).not.toHaveBeenCalled();
+    requests.load.mockResolvedValue({ text: "the complete result" });
+    await act(async () => {
+      await button("Show all 69 KB")!.props.onClick();
+    });
+    expect(requests.fetch).toHaveBeenCalledWith({
+      prepared: { prepared: true },
+      threadId: item.threadId,
+      itemId: item.id,
+      field: "result",
+    });
+    expect(resultText()).toBe("the complete result");
+    expect(button("Show all")).toBeUndefined();
+    await act(async () => renderer.unmount());
+    vi.unstubAllGlobals();
   });
 });

@@ -8,4 +8,4 @@ After an archive finishes, Restore conversation makes it available again. Cancel
 
 ## Long tool output
 
-Large command and tool results show an output preview in the conversation details. Choose **Show all** to load the complete output from the connected environment. If the environment is disconnected, reconnect and try again. The complete result stays saved on the environment.
+Large command and tool results, tool inputs, file-change diffs, and subagent results show a preview with the start and end of the text. Choose **Show all** in the conversation details, or under a subagent's expanded result, to load the complete text from the connected environment. If the environment is disconnected, reconnect and try again. The complete text stays saved on the environment.

@@ -16,7 +16,7 @@ const requests = vi.hoisted(() => ({
   connection: vi.fn(),
 }));
 vi.mock("@spiritdevs/client-runtime/state/threads", () => ({
-  fetchEnvironmentToolOutput: requests.fetch,
+  fetchEnvironmentItemDetail: requests.fetch,
 }));
 vi.mock("../../lib/runtime", () => ({ runtime: { runPromise: requests.load } }));
 vi.mock("../../state/session", () => ({ readPreparedConnection: requests.connection }));
@@ -125,7 +125,7 @@ it("keeps both preview edges and fetches inherited output only when expanded", a
   expect(
     renderer!.root
       .findAllByType("button")
-      .some((button) => button.props.disabled && button.props.children === "Loading output…"),
+      .some((button) => button.props.disabled && button.props.children === "Loading…"),
   ).toBe(true);
   await act(async () => {
     finish({ text: "complete output" });
@@ -194,4 +194,36 @@ it("expands legacy inline output locally", async () => {
   });
   expect(outputText()).toBe(fullOutput);
   expect(requests.load).not.toHaveBeenCalled();
+});
+
+it("fetches a previewed file-change diff by field when expanded", async () => {
+  if (row.item.type !== "command_execution") throw new Error("Expected command");
+  const { input: _, output: __, outputPreview: ___, exitCode: ____, ...base } = row.item;
+  const diff = "--- a\n+++ b\n… omitted …\n@@ end";
+  await act(async () => {
+    renderer = create(
+      view({
+        ...row,
+        item: {
+          ...base,
+          type: "file_change",
+          fileName: "src/large.ts",
+          diffStr: diff,
+          diffStrPreview: { totalBytes: 1_400_000, format: "text" },
+        },
+      }),
+    );
+  });
+  expect(outputText()).toBe(diff);
+  requests.load.mockResolvedValue({ text: "complete diff" });
+  await act(async () => {
+    await expandButton().props.onClick();
+  });
+  expect(requests.fetch).toHaveBeenCalledWith({
+    prepared,
+    threadId: sourceThreadId,
+    itemId: row.item.id,
+    field: "diffStr",
+  });
+  expect(outputText()).toBe("complete diff");
 });
