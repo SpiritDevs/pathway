@@ -22,6 +22,7 @@ import { isCommandAvailable, resolveSpawnCommand } from "@spiritdevs/shared/shel
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
 import * as FileSystem from "effect/FileSystem";
@@ -29,6 +30,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as ChildProcess from "effect/unstable/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 
@@ -320,27 +323,19 @@ const resolveAvailableEditors = Effect.fn("externalLauncher.resolveAvailableEdit
   return yield* buildAvailableEditors(platform, env);
 });
 
-// Editor discovery walks PATH for every known editor and runs for every
-// client connect (the server config embeds the available editors). Memoize
-// the discovered set for a bounded window so repeat connects skip even the
-// per-command cache lookups in @spiritdevs/shared/shell.
-//
-// This deliberately does not use `Effect.cachedWithTTL`: that memoizes the
-// first caller's Exit whatever it is, including an interrupt. Callers run this
-// on the connection fiber under a timeout (`resolveAvailableEditorsForConfig`),
-// so one client disconnecting mid-scan would cache the interrupt and replay it
-// to every later connect for the whole TTL, breaking `server.getConfig`
-// permanently. Storing only on success means an interrupted scan leaves the
-// cache untouched and the next connect simply rescans.
+// Editor discovery walks PATH for every known editor. Server config embeds the
+// result, so it must never hold a client connect: config reads the current
+// snapshot (empty until the first scan lands), and a missing or expired
+// snapshot starts one shared background scan. Scans run in the launcher's
+// scope, not on a caller's fiber, so a client disconnecting mid-scan cannot
+// cancel or poison them, and only a completed scan replaces the snapshot.
 // Expiry uses the monotonic clock (Clock.currentTimeNanos), matching the
 // command-resolution cache in @spiritdevs/shared/shell, so a backward wall-clock
 // adjustment cannot keep an expired entry alive.
 const EDITOR_DISCOVERY_CACHE_TTL_NANOS = 60_000_000_000n;
 
-interface EditorDiscoveryCacheEntry {
-  readonly editors: ReadonlyArray<EditorId>;
-  readonly expiresAtNanos: bigint;
-}
+export const sameEditors = (left: ReadonlyArray<EditorId>, right: ReadonlyArray<EditorId>) =>
+  left.length === right.length && left.every((editor, index) => editor === right[index]);
 
 /**
  * ExternalLauncher - Service tag for browser/editor launch operations.
@@ -348,7 +343,12 @@ interface EditorDiscoveryCacheEntry {
 export class ExternalLauncher extends Context.Service<
   ExternalLauncher,
   {
+    /** Editors from a fresh discovery scan, waiting for one when the snapshot is stale. */
     readonly resolveAvailableEditors: () => Effect.Effect<ReadonlyArray<EditorId>>;
+    /** The current editor snapshot without waiting; a stale one refreshes in the background. */
+    readonly availableEditorsSnapshot: Effect.Effect<ReadonlyArray<EditorId>>;
+    /** The current editor snapshot, then each changed list a later scan finds. */
+    readonly availableEditorsChanges: Stream.Stream<ReadonlyArray<EditorId>>;
     /** Launch a URL target in the default browser. */
     readonly launchBrowser: (target: string) => Effect.Effect<void, ExternalLauncherError>;
     /**
@@ -508,28 +508,73 @@ export const make = Effect.gen(function* () {
       Effect.provideService(Path.Path, path),
     );
 
-  const editorDiscoveryCache = yield* Ref.make<Option.Option<EditorDiscoveryCacheEntry>>(
-    Option.none(),
-  );
-  const cachedAvailableEditors = Effect.gen(function* () {
+  const scope = yield* Effect.scope;
+  const discoveredEditors = yield* SubscriptionRef.make<ReadonlyArray<EditorId>>([]);
+  const discoveryExpiresAtNanos = yield* Ref.make<Option.Option<bigint>>(Option.none());
+  const discoveryInFlight = yield* Ref.make<
+    Option.Option<Deferred.Deferred<ReadonlyArray<EditorId>>>
+  >(Option.none());
+
+  const discoveryIsFresh = Effect.gen(function* () {
+    const expiresAtNanos = yield* Ref.get(discoveryExpiresAtNanos);
     const nowNanos = yield* Clock.currentTimeNanos;
-    const entry = yield* Ref.get(editorDiscoveryCache);
-    if (Option.isSome(entry) && entry.value.expiresAtNanos > nowNanos) {
-      return entry.value.editors;
-    }
+    return Option.isSome(expiresAtNanos) && expiresAtNanos.value > nowNanos;
+  });
+
+  const scanEditors = Effect.gen(function* () {
+    const startedAtNanos = yield* Clock.currentTimeNanos;
     const editors = yield* provideCommandResolutionServices(resolveAvailableEditors());
     yield* Ref.set(
-      editorDiscoveryCache,
-      Option.some({
-        editors,
-        expiresAtNanos: nowNanos + EDITOR_DISCOVERY_CACHE_TTL_NANOS,
-      }),
+      discoveryExpiresAtNanos,
+      Option.some(startedAtNanos + EDITOR_DISCOVERY_CACHE_TTL_NANOS),
     );
+    if (!sameEditors(yield* SubscriptionRef.get(discoveredEditors), editors)) {
+      yield* SubscriptionRef.set(discoveredEditors, editors);
+    }
     return editors;
   });
 
+  // Joins the scan in flight or starts one in the launcher's scope.
+  const refreshEditors = Effect.uninterruptible(
+    Effect.gen(function* () {
+      const next = yield* Deferred.make<ReadonlyArray<EditorId>>();
+      const current = yield* Ref.modify(discoveryInFlight, (inFlight) =>
+        Option.isSome(inFlight)
+          ? ([inFlight.value, inFlight] as const)
+          : ([next, Option.some(next)] as const),
+      );
+      if (current === next) {
+        yield* scanEditors.pipe(
+          Effect.onExit((exit) =>
+            Ref.set(discoveryInFlight, Option.none()).pipe(
+              Effect.andThen(Deferred.done(next, exit)),
+            ),
+          ),
+          Effect.forkIn(scope),
+        );
+      }
+      return current;
+    }),
+  );
+
+  const availableEditorsSnapshot = Effect.gen(function* () {
+    if (!(yield* discoveryIsFresh)) {
+      yield* refreshEditors;
+    }
+    return yield* SubscriptionRef.get(discoveredEditors);
+  });
+
+  const freshAvailableEditors = Effect.gen(function* () {
+    if (yield* discoveryIsFresh) {
+      return yield* SubscriptionRef.get(discoveredEditors);
+    }
+    return yield* Deferred.await(yield* refreshEditors);
+  });
+
   return ExternalLauncher.of({
-    resolveAvailableEditors: () => cachedAvailableEditors,
+    resolveAvailableEditors: () => freshAvailableEditors,
+    availableEditorsSnapshot,
+    availableEditorsChanges: SubscriptionRef.changes(discoveredEditors),
     launchBrowser: (target) =>
       launchBrowser(target).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
