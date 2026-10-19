@@ -4,6 +4,17 @@ on:
   push:
     branches:
       - main
+    paths:
+      - infra/relay/**
+      - packages/backend/**
+      - packages/client-runtime/**
+      - packages/contracts/**
+      - packages/shared/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - tsconfig.base.json
+      - .github/workflows/deploy-relay.yml
 
 permissions:
   contents: read
