@@ -58,6 +58,7 @@ import {
   type RelayClientInstallProgressEvent,
   type ServerSelfUpdateError,
   type ServerSelfUpdateProgressEvent,
+  type ServerSettingsPatch,
   ServerProviderAuthenticationError,
   type FilesystemBrowseFailure,
   FilesystemBrowseError,
@@ -75,10 +76,11 @@ import {
   type TerminalMetadataStreamEvent,
   WS_METHODS,
   WsRpcGroup,
+  WsComputerRpcGroup,
 } from "@spiritdevs/contracts";
 import { resolveServerBackgroundActivitySettings } from "@spiritdevs/shared/backgroundActivitySettings";
 import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
-import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
+import { type RpcGroup, RpcSerialization } from "effect/unstable/rpc";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
@@ -87,6 +89,7 @@ import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
 import { threadHistoryNeedsSnapshot } from "./orchestration-v2/ThreadHistory.ts";
+import { ComputerDispatchAccess } from "./orchestration-v2/ComputerDispatchAccess.ts";
 import { EffectOutboxV2 } from "./orchestration-v2/EffectOutbox.ts";
 import type { OrchestratorV2Error } from "./orchestration-v2/Orchestrator.ts";
 import { issuePullRequestFromStatus } from "./orchestration-v2/RunFinalizationService.ts";
@@ -106,6 +109,7 @@ import {
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as OrchestrationEventStore from "./persistence/Services/OrchestrationEventStore.ts";
 import { userFacingDispatchErrorMessage } from "./orchestration-v2/UserFacingErrors.ts";
+import { computerClearance } from "./computer/computerAccessPolicy.ts";
 import {
   observeRpcEffect as instrumentRpcEffect,
   observeRpcStream as instrumentRpcStream,
@@ -128,6 +132,7 @@ import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import { RemoteBrowser } from "./preview/RemoteBrowser.ts";
 import { remoteBrowserRpcHandlers } from "./preview/RemoteBrowserRpc.ts";
+import { makeWsComputerRpcLayer, serveRpcWebSocket } from "./computer/wsComputerRpcLayer.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import {
   attachmentMetadataMatchesStoredPath,
@@ -153,7 +158,10 @@ import * as ProjectService from "./project/ProjectService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
-import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
+import {
+  extraScopeForServerSettingsPatch,
+  requiredScopeForRpcMethod,
+} from "./auth/RpcAuthorization.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
@@ -458,7 +466,12 @@ function projectFileFailureContext(
 
 const PROVIDER_STATUS_DEBOUNCE_MS = 200;
 
-const ServerWsRpcGroup = WsRpcGroup;
+// Computer RPCs are served by their own handler layer (see makeWsComputerRpcLayer).
+const ServerWsRpcGroup = WsRpcGroup.omit(
+  ...([...WsComputerRpcGroup.requests.keys()] as ReadonlyArray<
+    RpcGroup.Rpcs<typeof WsComputerRpcGroup>["_tag"]
+  >),
+);
 // When a resuming client's cursor is more than this many events behind the
 // current head, skip the per-event catch-up replay and send a fresh shell
 // snapshot instead. Replaying each intervening event costs a shell refetch;
@@ -555,6 +568,59 @@ export const refreshLocalGitStatusAfterMutation = Effect.fn(
   );
   yield* Fiber.join(refreshFiber).pipe(Effect.timeoutOption(maxWait));
   return result;
+});
+
+const environmentAuthorizationError = (requiredScope: AuthEnvironmentScope) =>
+  new EnvironmentAuthorizationError({
+    message: `The authenticated token is missing required scope: ${requiredScope}.`,
+    requiredScope,
+  });
+
+/**
+ * Applies a settings patch for a session holding `scopes`. The RPC's own scope is
+ * checked by the caller; a patch touching Computer policy also needs `access:write`.
+ */
+const updateServerSettingsForSession = (
+  serverSettings: ServerSettings.ServerSettingsService["Service"],
+  scopes: ReadonlyArray<AuthEnvironmentScope>,
+  patch: ServerSettingsPatch,
+) =>
+  Effect.gen(function* () {
+    const extraScope = extraScopeForServerSettingsPatch(patch);
+    if (extraScope !== null && !scopes.includes(extraScope)) {
+      return yield* environmentAuthorizationError(extraScope);
+    }
+    return yield* serverSettings.updateSettings(patch);
+  });
+
+/**
+ * The settings RPCs for one authenticated session, whose scopes gate a
+ * Computer policy patch. `observe` applies the RPC's own scope and tracing,
+ * as it does for every other method.
+ */
+export const serverSettingsRpcHandlers = (
+  serverSettings: ServerSettings.ServerSettingsService["Service"],
+  session: EnvironmentAuth.AuthenticatedSession,
+  observe: <A, E>(
+    method: string,
+    effect: Effect.Effect<A, E>,
+    traceAttributes: Readonly<Record<string, unknown>>,
+  ) => Effect.Effect<A, E | EnvironmentAuthorizationError>,
+) => ({
+  [WS_METHODS.serverGetSettings]: (_input: unknown) =>
+    observe(
+      WS_METHODS.serverGetSettings,
+      serverSettings.getSettings.pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
+      { "rpc.aggregate": "server" },
+    ),
+  [WS_METHODS.serverUpdateSettings]: ({ patch }: { readonly patch: ServerSettingsPatch }) =>
+    observe(
+      WS_METHODS.serverUpdateSettings,
+      updateServerSettingsForSession(serverSettings, session.scopes, patch).pipe(
+        Effect.map(ServerSettings.redactServerSettingsForClient),
+      ),
+      { "rpc.aggregate": "server" },
+    ),
 });
 
 const makeWsRpcLayer = (
@@ -688,25 +754,30 @@ const makeWsRpcLayer = (
       const emailCapture = yield* EmailCapture.EmailCaptureService;
       const emailTriggers = yield* EmailTrigger.EmailTriggerService;
       const issueActor = yield* resolveIssueConnectionActor(currentSession, issueTracker);
-      const authorizationError = (requiredScope: AuthEnvironmentScope) =>
-        new EnvironmentAuthorizationError({
-          message: `The authenticated token is missing required scope: ${requiredScope}.`,
-          requiredScope,
-        });
       const authorizeEffect = <A, E, R>(
         requiredScope: AuthEnvironmentScope,
         effect: Effect.Effect<A, E, R>,
       ): Effect.Effect<A, E | EnvironmentAuthorizationError, R> =>
         currentSession.scopes.includes(requiredScope)
           ? effect
-          : Effect.fail(authorizationError(requiredScope));
+          : Effect.fail(environmentAuthorizationError(requiredScope));
+      // ADR 0041: every message this session sends that asks for Computer is
+      // checked against the access policy where the orchestrator admits it.
+      const computerDispatchAccess = {
+        clearance: serverSettings.getSettings.pipe(
+          Effect.orDie,
+          Effect.flatMap((settings) =>
+            computerClearance(settings.computer.accessPolicy, currentSession.scopes),
+          ),
+        ),
+      };
       const authorizeStream = <A, E, R>(
         requiredScope: AuthEnvironmentScope,
         stream: Stream.Stream<A, E, R>,
       ): Stream.Stream<A, E | EnvironmentAuthorizationError, R> =>
         currentSession.scopes.includes(requiredScope)
           ? stream
-          : Stream.fail(authorizationError(requiredScope));
+          : Stream.fail(environmentAuthorizationError(requiredScope));
       const observeRpcEffect = <A, E, R>(
         method: string,
         effect: Effect.Effect<A, E, R>,
@@ -714,7 +785,9 @@ const makeWsRpcLayer = (
       ) =>
         instrumentRpcEffect(
           method,
-          authorizeEffect(requiredScopeForRpcMethod(method), effect),
+          authorizeEffect(requiredScopeForRpcMethod(method), effect).pipe(
+            Effect.provideService(ComputerDispatchAccess, computerDispatchAccess),
+          ),
           traceAttributes,
         );
       const issueRpcEffect = <A, R>(
@@ -1556,6 +1629,8 @@ const makeWsRpcLayer = (
                             : { messageId: input.initialMessage.messageId }),
                           text: input.initialMessage.text,
                           attachments: input.initialMessage.attachments,
+                          enableComputerControl: input.initialMessage.enableComputerControl,
+                          computerControlGeneration: input.initialMessage.computerControlGeneration,
                         },
                       }),
                   createdBy: "user",
@@ -1808,26 +1883,7 @@ const makeWsRpcLayer = (
             }),
             { "rpc.aggregate": "server" },
           ),
-        [WS_METHODS.serverGetSettings]: (_input) =>
-          observeRpcEffect(
-            WS_METHODS.serverGetSettings,
-            serverSettings.getSettings.pipe(
-              Effect.map(ServerSettings.redactServerSettingsForClient),
-            ),
-            {
-              "rpc.aggregate": "server",
-            },
-          ),
-        [WS_METHODS.serverUpdateSettings]: ({ patch }) =>
-          observeRpcEffect(
-            WS_METHODS.serverUpdateSettings,
-            serverSettings
-              .updateSettings(patch)
-              .pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
-            {
-              "rpc.aggregate": "server",
-            },
-          ),
+        ...serverSettingsRpcHandlers(serverSettings, currentSession, observeRpcEffect),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) =>
           observeRpcEffect(
             WS_METHODS.serverDiscoverSourceControl,
@@ -3124,41 +3180,42 @@ export const websocketRpcRouteLayer = Layer.unwrap(
             failEnvironmentInternal("internal_error", error),
           ),
         );
-        const rpcWebSocketHttpEffect = yield* RpcServer.toHttpEffectWebsocket(ServerWsRpcGroup, {
-          disableTracing: true,
-        }).pipe(
-          Effect.provide(
-            makeWsRpcLayer(session, previewAutomationBroker, providerUsageUpdates).pipe(
-              Layer.provideMerge(RpcSerialization.layerJson),
-              Layer.provide(ProviderMaintenanceRunner.layer),
-              Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
-              Layer.provide(Layer.succeed(RemoteBrowser, remoteBrowser)),
-              // One server-lifetime service means clients share the same PR caches, and a WS
-              // mutation invalidates the HTTP diff cache that every client reads from.
-              Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
-              Layer.provide(
-                SourceControlDiscovery.layer.pipe(
-                  Layer.provide(
-                    SourceControlProviderRegistry.layer.pipe(
-                      Layer.provide(
-                        Layer.mergeAll(
-                          AzureDevOpsCli.layer,
-                          BitbucketApi.layer,
-                          GitHubCli.layer,
-                          GitLabCli.layer,
-                        ),
-                      ),
-                      Layer.provideMerge(GitVcsDriver.layer),
-                      Layer.provide(
-                        VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer)),
+        const rpcWebSocketHttpEffect = yield* serveRpcWebSocket(
+          WsRpcGroup,
+          Layer.merge(
+            makeWsRpcLayer(session, previewAutomationBroker, providerUsageUpdates),
+            makeWsComputerRpcLayer(session),
+          ).pipe(
+            Layer.provideMerge(RpcSerialization.layerJson),
+            Layer.provide(ProviderMaintenanceRunner.layer),
+            Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
+            Layer.provide(Layer.succeed(RemoteBrowser, remoteBrowser)),
+            // One server-lifetime service means clients share the same PR caches, and a WS
+            // mutation invalidates the HTTP diff cache that every client reads from.
+            Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
+            Layer.provide(
+              SourceControlDiscovery.layer.pipe(
+                Layer.provide(
+                  SourceControlProviderRegistry.layer.pipe(
+                    Layer.provide(
+                      Layer.mergeAll(
+                        AzureDevOpsCli.layer,
+                        BitbucketApi.layer,
+                        GitHubCli.layer,
+                        GitLabCli.layer,
                       ),
                     ),
+                    Layer.provideMerge(GitVcsDriver.layer),
+                    Layer.provide(
+                      VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer)),
+                    ),
                   ),
-                  Layer.provide(VcsProcess.layer),
                 ),
+                Layer.provide(VcsProcess.layer),
               ),
             ),
           ),
+          session.sessionId,
         );
         return yield* Effect.acquireUseRelease(
           sessions.markConnected(session.sessionId),

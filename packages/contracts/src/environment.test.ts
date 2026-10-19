@@ -1,7 +1,8 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { ExecutionEnvironmentDescriptor } from "./environment.ts";
+import { AuthStandardClientScopes } from "./auth.ts";
+import { ExecutionEnvironmentDescriptor, requestableEnvironmentScopes } from "./environment.ts";
 
 const decodeDescriptor = Schema.decodeUnknownSync(ExecutionEnvironmentDescriptor);
 
@@ -65,5 +66,19 @@ describe("ExecutionEnvironmentDescriptor", () => {
         },
       }).capabilities.fileAttachments?.maxUploadBytes,
     ).toBe(50 * 1024 * 1024);
+  });
+});
+
+describe("requestableEnvironmentScopes", () => {
+  it("requests computer:operate only from servers that advertise it", () => {
+    expect(
+      requestableEnvironmentScopes(AuthStandardClientScopes, {
+        repositoryIdentity: true,
+        computerOperateScope: true,
+      }),
+    ).toEqual(AuthStandardClientScopes);
+    expect(
+      requestableEnvironmentScopes(AuthStandardClientScopes, { repositoryIdentity: true }),
+    ).toEqual(AuthStandardClientScopes.filter((scope) => scope !== "computer:operate"));
   });
 });

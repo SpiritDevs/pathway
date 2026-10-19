@@ -302,7 +302,7 @@ export const layer: Layer.Layer<
     return makeGrokAdapterV2({
       instanceId: GROK_DEFAULT_INSTANCE_ID,
       settings: DEFAULT_GROK_SETTINGS,
-      environment: hostEnvironment,
+      environment: mergeProviderInstanceEnvironment(undefined, hostEnvironment),
       childProcessSpawner,
       crypto,
       fileSystem,

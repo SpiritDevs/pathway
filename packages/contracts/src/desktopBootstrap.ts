@@ -23,6 +23,11 @@ export const DesktopBackendBootstrap = Schema.Struct({
   desktopTelemetryFd: Schema.optionalKey(PositiveInt),
   desktopTelemetryControlFd: Schema.optionalKey(PositiveInt),
   resourceMonitorPath: Schema.optionalKey(TrimmedNonEmptyString),
+  /**
+   * Authenticates the backend to the desktop Computer host listening at
+   * `PATHWAY_CUA_HOST_SOCKET`. It travels in the bootstrap envelope, never argv or env.
+   */
+  cuaHostCapability: Schema.optionalKey(TrimmedNonEmptyString),
 });
 
 export type DesktopBackendBootstrap = typeof DesktopBackendBootstrap.Type;

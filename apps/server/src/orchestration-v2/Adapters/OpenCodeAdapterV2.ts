@@ -52,6 +52,10 @@ import * as Stream from "effect/Stream";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import {
+  qualifiedPathwayComputerToolName,
+  shouldAllowPathwayComputerProviderTool,
+} from "../../mcp/toolkits/computer/computerToolPermission.ts";
 import type { EventNdjsonLogger } from "../../provider/Layers/EventNdjsonLogger.ts";
 import { ProviderEventLoggers } from "../../provider/Layers/ProviderEventLoggers.ts";
 import {
@@ -499,6 +503,49 @@ export function openCodeMcpRegistration(input: {
   };
 }
 
+/** OpenCode's key, and so its permission name, for an MCP server's tool. */
+function openCodeMcpToolKey(serverName: string, toolName: string): string {
+  const sanitize = (value: string) => value.replace(/[^a-zA-Z0-9_-]/g, "_");
+  return `${sanitize(serverName)}_${sanitize(toolName)}`;
+}
+
+/**
+ * Pathway approves each Computer call itself (ADR 0048), so OpenCode's own prompt is skipped.
+ *
+ * OpenCode names an MCP tool's permission `<server>_<tool>`, which does not say
+ * which server owns it: a `pathway_computer` server's `click` is also
+ * `pathway_computer_click`. So only an exact Pathway Computer key is skipped,
+ * and only while Pathway is registered and no other configured server
+ * (`mcpServerNames`, from OpenCode's MCP status) could produce the same key.
+ */
+export function openCodeAllowsComputerPermission(
+  runtimePolicy: ProviderAdapterV2RuntimePolicy,
+  permission: { readonly permission: string; readonly metadata: unknown },
+  mcpServerNames: ReadonlyArray<string>,
+): boolean {
+  const toolName = qualifiedPathwayComputerToolName(permission.permission);
+  if (
+    toolName === undefined ||
+    permission.permission !==
+      openCodeMcpToolKey(McpProviderSession.PATHWAY_MCP_SERVER_NAME, toolName) ||
+    !mcpServerNames.includes(McpProviderSession.PATHWAY_MCP_SERVER_NAME) ||
+    mcpServerNames.some(
+      (serverName) =>
+        serverName !== McpProviderSession.PATHWAY_MCP_SERVER_NAME &&
+        permission.permission.startsWith(openCodeMcpToolKey(serverName, "")),
+    )
+  ) {
+    return false;
+  }
+  return shouldAllowPathwayComputerProviderTool({
+    computerControlEnabled: runtimePolicy.enableComputerControl === true,
+    activeTurn: true,
+    interactionMode: runtimePolicy.interactionMode,
+    runtimeMode: runtimePolicy.runtimeMode,
+    permission: { name: permission.permission, metadata: permission.metadata },
+  });
+}
+
 const OPENCODE_ALWAYS_ALLOWED_PERMISSIONS = [
   "question",
   "read",
@@ -857,6 +904,15 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
         if (mcpRegistration !== undefined) {
           yield* runOpenCodeSdk("mcp.add", () => client.mcp.add(mcpRegistration));
         }
+        // Every MCP server OpenCode has configured, for Computer permission
+        // ownership. An unreadable status leaves it empty, so OpenCode keeps asking.
+        const mcpServerNames: ReadonlyArray<string> =
+          mcpRegistration === undefined
+            ? []
+            : yield* runOpenCodeSdk("mcp.status", () => client.mcp.status()).pipe(
+                Effect.map((response) => Object.keys(response.data ?? {})),
+                Effect.orElseSucceed(() => []),
+              );
 
         const now = yield* DateTime.now;
         let sessionEntity: OrchestrationV2ProviderSession = {
@@ -2130,6 +2186,20 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
             case "permission.asked": {
               const state = threads.get(event.properties.sessionID);
               if (state?.activeTurn !== null && state?.activeTurn !== undefined) {
+                if (
+                  openCodeAllowsComputerPermission(
+                    state.activeTurn.runtimePolicy,
+                    event.properties,
+                    mcpServerNames,
+                  )
+                ) {
+                  const reply = { requestID: event.properties.id, reply: "once" as const };
+                  const replied = yield* sdkCall("permission.reply", reply, () =>
+                    client.permission.reply(reply),
+                  ).pipe(Effect.exit);
+                  // A failed auto-reply falls back to asking, so the call is never stranded.
+                  if (Exit.isSuccess(replied)) return;
+                }
                 yield* emitRuntimeRequest(state, state.activeTurn, event.properties.id, {
                   type: "permission",
                   value: event.properties,
@@ -2936,7 +3006,7 @@ export const layer: Layer.Layer<ProviderAdapterV2, never, OpenCodeAdapterV2Drive
       return makeOpenCodeAdapterV2({
         instanceId: OPENCODE_DEFAULT_INSTANCE_ID,
         settings: DEFAULT_OPENCODE_SETTINGS,
-        environment: hostEnvironment,
+        environment: mergeProviderInstanceEnvironment(undefined, hostEnvironment),
         runtime: openCodeRuntime,
         idAllocator,
         serverConfig,

@@ -4,6 +4,7 @@ import type {
   DesktopRuntimeArch,
   DesktopRuntimeInfo,
 } from "@spiritdevs/contracts";
+import type { PathwayDesktopFlavor } from "@spiritdevs/shared/desktopFlavor";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -13,8 +14,12 @@ import * as Path from "effect/Path";
 
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopConfig from "./DesktopConfig.ts";
-import { resolveLinuxDesktopEntryName } from "./DesktopEarlyElectronStartup.ts";
-import { resolveDesktopBaseDir, resolveDesktopStateDir } from "./DesktopStatePaths.ts";
+import { resolveDesktopRuntimeIdentity } from "./DesktopEarlyElectronStartup.ts";
+import {
+  resolveDesktopBaseDir,
+  resolveDesktopStateDir,
+  resolveFlavorPathwayHome,
+} from "./DesktopStatePaths.ts";
 import { isNightlyDesktopVersion } from "../updates/updateChannels.ts";
 
 export interface MakeDesktopEnvironmentInput {
@@ -27,6 +32,8 @@ export interface MakeDesktopEnvironmentInput {
   readonly isPackaged: boolean;
   readonly resourcesPath: string;
   readonly runningUnderArm64Translation: boolean;
+  /** Read from the packaged package.json; absent means production. */
+  readonly flavor?: PathwayDesktopFlavor | undefined;
 }
 
 export class DesktopEnvironment extends Context.Service<
@@ -38,6 +45,9 @@ export class DesktopEnvironment extends Context.Service<
     readonly processArch: string;
     readonly isPackaged: boolean;
     readonly isDevelopment: boolean;
+    readonly flavor: PathwayDesktopFlavor;
+    /** Renderer origin scheme; Clerk also registers it for OAuth callbacks. */
+    readonly desktopScheme: string;
     readonly appVersion: string;
     readonly appPath: string;
     readonly resourcesPath: string;
@@ -144,6 +154,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
   const homeDirectory = input.homeDirectory;
   const devServerUrl = config.devServerUrl;
   const isDevelopment = Option.isSome(devServerUrl);
+  const identity = resolveDesktopRuntimeIdentity({ isDevelopment, flavor: input.flavor });
   const appDataDirectory =
     input.platform === "win32"
       ? Option.getOrElse(config.appDataDirectory, () =>
@@ -152,26 +163,39 @@ const make = Effect.fn("desktop.environment.make")(function* (
       : input.platform === "darwin"
         ? path.join(homeDirectory, "Library", "Application Support")
         : Option.getOrElse(config.xdgConfigHome, () => path.join(homeDirectory, ".config"));
+  const pathwayHome = resolveFlavorPathwayHome({
+    pathwayHome: config.pathwayHome,
+    isolated: identity.flavor === "cua",
+  });
+  if (
+    Option.isNone(pathwayHome) &&
+    Option.exists(config.pathwayHome, (home) => home.trim() !== "")
+  ) {
+    yield* Effect.logWarning("Ignoring PATHWAY_HOME: the cua flavor always uses its own home.");
+  }
   const baseDir = resolveDesktopBaseDir({
     homeDirectory,
     joinPath: path.join,
-    pathwayHome: config.pathwayHome,
+    pathwayHome,
+    defaultHomeDirName: identity.defaultHomeDirName,
   });
   const rootDir = path.resolve(input.dirname, "../../..");
   const appRoot = input.isPackaged && !isDevelopment ? input.appPath : rootDir;
-  const branding = resolveDesktopAppBranding({
+  const stageBranding = resolveDesktopAppBranding({
     isDevelopment,
     appVersion: input.appVersion,
   });
+  const branding =
+    identity.displayName === undefined
+      ? stageBranding
+      : { ...stageBranding, displayName: identity.displayName };
   const displayName = branding.displayName;
   const stateDir = resolveDesktopStateDir({
     baseDir,
     isDevelopment,
     joinPath: path.join,
-    pathwayHome: config.pathwayHome,
+    pathwayHome,
   });
-  const userDataDirName = isDevelopment ? "pathway-dev" : "pathway";
-  const legacyUserDataDirName = isDevelopment ? "Pathway (Dev)" : "Pathway (Alpha)";
   const linuxApplicationsDir = path.join(
     Option.getOrElse(config.xdgDataHome, () => path.join(homeDirectory, ".local", "share")),
     "applications",
@@ -185,6 +209,8 @@ const make = Effect.fn("desktop.environment.make")(function* (
     processArch: input.processArch,
     isPackaged: input.isPackaged,
     isDevelopment,
+    flavor: identity.flavor,
+    desktopScheme: identity.scheme,
     appVersion: input.appVersion,
     appPath: input.appPath,
     resourcesPath,
@@ -219,15 +245,13 @@ const make = Effect.fn("desktop.environment.make")(function* (
     otlpExportIntervalMs: config.otlpExportIntervalMs,
     branding,
     displayName,
-    appUserModelId: Option.getOrElse(config.appUserModelIdOverride, () =>
-      isDevelopment ? "com.spiritdevs.pathway.dev" : "com.spiritdevs.pathway",
-    ),
-    linuxDesktopEntryName: resolveLinuxDesktopEntryName(isDevelopment),
-    linuxWmClass: isDevelopment ? "pathway-dev" : "pathway",
+    appUserModelId: Option.getOrElse(config.appUserModelIdOverride, () => identity.appUserModelId),
+    linuxDesktopEntryName: identity.linuxDesktopEntryName,
+    linuxWmClass: identity.linuxWmClass,
     linuxApplicationsDir,
     appImagePath: config.appImagePath,
-    userDataDirName,
-    legacyUserDataDirName,
+    userDataDirName: identity.userDataDirName,
+    legacyUserDataDirName: identity.legacyUserDataDirName,
     defaultDesktopSettings: DesktopAppSettings.resolveDefaultDesktopSettings(input.appVersion),
     runtimeInfo: resolveDesktopRuntimeInfo({
       platform: input.platform,

@@ -142,8 +142,14 @@ struct AgentThreadComposerSuggestions: View {
                     ]
                 }
             }
+            if trigger.range.location == 0, model.supportsComputer, !model.computerAccessDenied {
+                commands.append(.init(id: "builtin:computer-use", title: "/\(PathwayComputerInvocation.slashCommand)", detail: "Use Pathway Computer for this request only",
+                                      symbol: "desktopcomputer", action: .insert("/\(PathwayComputerInvocation.slashCommand) ")))
+            }
             commands += (trigger.range.location == 0 ? composerCatalog["slashCommands"]?.arrayValue ?? [] : []).compactMap { value in
-                guard let fields = value.objectValue, let name = fields["name"]?.stringValue else { return nil }
+                // The server reads `/computer-use` from the message, so a provider command of that name never runs.
+                guard let fields = value.objectValue, let name = fields["name"]?.stringValue,
+                      name.trimmingCharacters(in: .whitespaces).lowercased() != PathwayComputerInvocation.slashCommand else { return nil }
                 return .init(id: "command:\(name)", title: "/\(name)",
                              detail: fields["description"]?.stringValue ?? fields["input"]?.objectValue?["hint"]?.stringValue ?? "Provider command",
                              symbol: "terminal", action: .insert("/\(name) "))

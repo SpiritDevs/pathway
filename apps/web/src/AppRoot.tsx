@@ -1,6 +1,7 @@
 import { RouterProvider } from "@tanstack/react-router";
 
 import { ElectronBrowserHost } from "./browser/ElectronBrowserHost";
+import { ComputerEventBridges } from "./components/computer/ComputerEventBridges";
 import { PreviewAutomationHosts } from "./components/preview/PreviewAutomationHosts";
 import { AppAtomRegistryProvider } from "./rpc/atomRegistry";
 import type { AppRouter } from "./router";
@@ -15,6 +16,7 @@ export function AppRoot({ router }: { readonly router: AppRouter }) {
     <AppAtomRegistryProvider>
       <RouterProvider router={router} />
       <PreviewAutomationHosts />
+      <ComputerEventBridges />
       <ElectronBrowserHost />
     </AppAtomRegistryProvider>
   );
