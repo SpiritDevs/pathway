@@ -2,6 +2,7 @@ import type {
   OrchestrationV2AppThread,
   OrchestrationV2ConversationMessage,
   OrchestrationV2DomainEvent,
+  OrchestrationV2LatestVisibleMessageSummary,
   OrchestrationV2ProjectedTurnItem,
   OrchestrationV2Run,
   OrchestrationV2Subagent,
@@ -24,6 +25,7 @@ import {
   OrchestrationV2ContextTransferJson as OrchestrationV2ContextTransferJsonSchema,
   OrchestrationV2ConversationMessageJson as OrchestrationV2ConversationMessageJsonSchema,
   OrchestrationV2ExecutionNodeJson as OrchestrationV2ExecutionNodeJsonSchema,
+  OrchestrationV2LatestVisibleMessageSummaryJson as OrchestrationV2LatestVisibleMessageSummaryJsonSchema,
   OrchestrationV2PlanArtifact as OrchestrationV2PlanArtifactSchema,
   OrchestrationV2ProviderSessionJson as OrchestrationV2ProviderSessionJsonSchema,
   OrchestrationV2ProviderThreadJson as OrchestrationV2ProviderThreadJsonSchema,
@@ -659,7 +661,7 @@ type ShellThreadRow = {
   readonly activity_run_status: string | null;
   readonly last_error: string | null;
   readonly pending_request_payload_json: string | null;
-  readonly latest_message_payload_json: string | null;
+  readonly latest_message_preview_json: string | null;
   readonly latest_user_message_at: string | null;
   readonly has_actionable_proposed_plan: number;
   readonly item_count: number;
@@ -764,6 +766,9 @@ const decodeRuntimeRequestPayload = Schema.decodeUnknownEffect(
 );
 const decodeMessagePayload = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationV2ConversationMessageJsonSchema),
+);
+const decodeLatestVisibleMessagePreview = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(OrchestrationV2LatestVisibleMessageSummaryJsonSchema),
 );
 const decodePlanArtifact = Schema.decodeUnknownEffect(OrchestrationV2PlanArtifactSchema);
 const decodePlanPayload = (json: string) => decodePlanArtifact(parseEncodedPayload(json));
@@ -1237,7 +1242,7 @@ type ShellThreadState = {
   readonly activityRunStatus: ShellActivityRunStatus | null;
   readonly lastError: string | null;
   readonly pendingRuntimeRequest: OrchestrationV2ThreadProjection["runtimeRequests"][number] | null;
-  readonly latestVisibleMessage: OrchestrationV2ConversationMessage | null;
+  readonly latestVisibleMessage: OrchestrationV2LatestVisibleMessageSummary | null;
   readonly latestUserMessageAt: DateTime.Utc | null;
   readonly attachedPullRequest: OrchestrationV2ThreadShell["attachedPullRequest"];
   readonly detachedPullRequestUrls: OrchestrationV2ThreadShell["detachedPullRequestUrls"];
@@ -3029,12 +3034,23 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 LIMIT 1
               ) AS pending_request_payload_json,
               (
-                SELECT message.payload_json
+                -- Only the preview crosses into JavaScript. substr counts code
+                -- points, so the shell's UTF-16 slice still has enough text.
+                SELECT json_object(
+                  'id', json_extract(message.payload_json, '$.id'),
+                  'role', json_extract(message.payload_json, '$.role'),
+                  'text', substr(
+                    json_extract(message.payload_json, '$.text'),
+                    1,
+                    ${LATEST_VISIBLE_MESSAGE_PREVIEW_MAX_CHARS}
+                  ),
+                  'updatedAt', json_extract(message.payload_json, '$.updatedAt')
+                )
                 FROM orchestration_v2_projection_messages message
                 WHERE message.thread_id = t.thread_id
                 ORDER BY message.updated_at DESC, message.message_id DESC
                 LIMIT 1
-              ) AS latest_message_payload_json,
+              ) AS latest_message_preview_json,
               (
                 SELECT message.updated_at
                 FROM orchestration_v2_projection_messages message
@@ -3306,9 +3322,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             ? null
             : yield* decodeRuntimeRequestPayload(row.pending_request_payload_json);
         const latestVisibleMessage =
-          row.latest_message_payload_json === null
+          row.latest_message_preview_json === null
             ? null
-            : yield* decodeMessagePayload(row.latest_message_payload_json);
+            : yield* decodeLatestVisibleMessagePreview(row.latest_message_preview_json);
         const latestRunId = row.latest_run_id === null ? null : RunId.make(row.latest_run_id);
         const latestRunStatus = shellStatusFromStoredRunStatus(row.latest_run_status);
         const pendingBackgroundTasks = [
