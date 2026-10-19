@@ -38,7 +38,7 @@ import {
   updateThreadHistoryIndex,
   type ThreadHistoryWatermarks,
 } from "./threadHistory.ts";
-import { THREAD_STATE_IDLE_TTL_MS } from "./threadRetention.ts";
+import { makeRetainedThreadSnapshots } from "./threadRetention.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
 import {
   EMPTY_ENVIRONMENT_THREAD_STATE,
@@ -96,28 +96,74 @@ function snapshotHistory(history: OrchestrationV2ThreadHistory): OrchestrationV2
   };
 }
 
+// Projections already written to the persistent cache, with the sequence they
+// were written at, so closing an unchanged thread does not re-encode it.
+const persistedSequences = new WeakMap<OrchestrationV2ThreadProjection, number>();
+
+/**
+ * Hands a thread's last snapshot from one live instance to the next. `load`
+ * runs when an instance starts; `save` runs when it closes, with `undefined`
+ * when the closing state cannot resume by cursor.
+ */
+export interface ThreadSnapshotRetention {
+  readonly load: () => OrchestrationV2ThreadDetailSnapshot | undefined;
+  readonly save: (snapshot: OrchestrationV2ThreadDetailSnapshot | undefined) => void;
+}
+
+function retainedThreadState(
+  snapshot: OrchestrationV2ThreadDetailSnapshot,
+  request: (direction: ThreadHistoryDirection) => void = () => {},
+  retry: () => void = () => {},
+): EnvironmentThreadState {
+  return {
+    data: Option.some(snapshot.projection),
+    status: "cached",
+    error: Option.none(),
+    ...(snapshot.history === undefined
+      ? {}
+      : { history: { ...snapshot.history, isLoading: false, error: null, request, retry } }),
+  };
+}
+
 export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make")(function* (
   threadId: ThreadIdType,
-  options?: { readonly reprobe?: Stream.Stream<unknown> },
+  options?: {
+    readonly reprobe?: Stream.Stream<unknown>;
+    readonly retention?: ThreadSnapshotRetention;
+  },
 ) {
   const supervisor = yield* EnvironmentSupervisor;
   const cache = yield* EnvironmentCacheStore;
   const snapshotLoader = yield* ThreadSnapshotLoader;
   const wakeups = yield* Effect.serviceOption(ConnectionWakeups.ConnectionWakeups);
   const environmentId = supervisor.target.environmentId;
-  const cached = yield* cache.loadThread(environmentId, threadId).pipe(
-    Effect.catch((error) =>
-      Effect.logWarning("Could not load cached thread.").pipe(
-        Effect.annotateLogs({
-          environmentId,
-          threadId,
-          error: error.message,
-        }),
-        Effect.as(Option.none<OrchestrationV2ThreadDetailSnapshot>()),
-      ),
-    ),
-  );
-  const cachedThread = Option.map(cached, (snapshot) => snapshot.projection);
+  // A retained snapshot is at least as new as the persistent cache, which only
+  // stores settled runs, and needs no storage read.
+  const retained = options?.retention?.load();
+  const cached =
+    retained !== undefined
+      ? Option.some(retained)
+      : yield* cache.loadThread(environmentId, threadId).pipe(
+          Effect.tap(
+            Option.match({
+              onNone: () => Effect.void,
+              onSome: (snapshot) =>
+                Effect.sync(() =>
+                  persistedSequences.set(snapshot.projection, snapshot.snapshotSequence),
+                ),
+            }),
+          ),
+          Effect.catch((error) =>
+            Effect.logWarning("Could not load cached thread.").pipe(
+              Effect.annotateLogs({
+                environmentId,
+                threadId,
+                error: error.message,
+              }),
+              Effect.as(Option.none<OrchestrationV2ThreadDetailSnapshot>()),
+            ),
+          ),
+        );
   const historyRequests = yield* Queue.unbounded<ThreadHistoryDirection>();
   let requestPending = false;
   let latestPending = false;
@@ -143,24 +189,17 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     Queue.offerUnsafe(historyRequests, direction);
   };
   const retryHistory = () => requestHistory(lastDirection);
-  const cachedHistory = Option.getOrUndefined(cached)?.history;
-  let refreshCachedHistory = cachedHistory?.hasNewer === true;
-  const state = yield* SubscriptionRef.make<EnvironmentThreadState>({
-    data: cachedThread,
-    status: statusWithoutLiveData(cachedThread),
-    error: Option.none(),
-    ...(cachedHistory === undefined
-      ? {}
-      : {
-          history: {
-            ...cachedHistory,
-            isLoading: false,
-            error: null,
-            request: requestHistory,
-            retry: retryHistory,
-          },
-        }),
-  });
+  let refreshCachedHistory = Option.getOrUndefined(cached)?.history?.hasNewer === true;
+  const state = yield* SubscriptionRef.make<EnvironmentThreadState>(
+    Option.match(cached, {
+      onNone: (): EnvironmentThreadState => ({
+        data: Option.none(),
+        status: "empty",
+        error: Option.none(),
+      }),
+      onSome: (snapshot) => retainedThreadState(snapshot, requestHistory, retryHistory),
+    }),
+  );
   // Seed the resume cursor from the cached snapshot so a warm cache can catch up
   // via `afterSequence` instead of re-downloading the full thread body.
   const lastSequence = yield* SubscriptionRef.make(
@@ -186,7 +225,11 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   const persist = Effect.fn("EnvironmentThreadState.persist")(function* (
     snapshot: OrchestrationV2ThreadDetailSnapshot,
   ) {
+    if (persistedSequences.get(snapshot.projection) === snapshot.snapshotSequence) return;
     yield* cache.saveThread(environmentId, snapshot).pipe(
+      Effect.tap(() =>
+        Effect.sync(() => persistedSequences.set(snapshot.projection, snapshot.snapshotSequence)),
+      ),
       Effect.catch((error) =>
         Effect.logWarning("Could not persist the thread cache.").pipe(
           Effect.annotateLogs({
@@ -767,28 +810,40 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     ).pipe(Stream.runForEach(applyItem)),
   );
 
+  // Finalizers run in reverse order, so this one runs before the stream fiber
+  // is interrupted. The projection lock lets an in-flight event finish, keeping
+  // the data and its cursor together.
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => {
       active = false;
     }).pipe(
-      Effect.andThen(Effect.all([SubscriptionRef.get(state), SubscriptionRef.get(lastSequence)])),
-      Effect.flatMap(([current, snapshotSequence]) =>
-        Option.match(current.data, {
-          onNone: () => Effect.void,
-          onSome: (projection) =>
-            shouldPersistThread(projection) &&
-            importedThroughSequence <= snapshotSequence &&
-            current.history?.hasNewer !== true
-              ? persist({
-                  snapshotSequence,
-                  projection,
-                  ...(current.history === undefined
-                    ? {}
-                    : { history: snapshotHistory(current.history) }),
-                })
-              : Effect.void,
-        }),
+      Effect.andThen(
+        projectionMutex.withPermits(1)(
+          Effect.gen(function* () {
+            const current = yield* SubscriptionRef.get(state);
+            const snapshotSequence = yield* SubscriptionRef.get(lastSequence);
+            if (
+              Option.isNone(current.data) ||
+              importedThroughSequence > snapshotSequence ||
+              current.history?.hasNewer === true
+            )
+              return undefined;
+            return {
+              snapshotSequence,
+              projection: current.data.value,
+              ...(current.history === undefined
+                ? {}
+                : { history: snapshotHistory(current.history) }),
+            };
+          }),
+        ),
       ),
+      Effect.flatMap((snapshot) => {
+        options?.retention?.save(snapshot);
+        return snapshot !== undefined && shouldPersistThread(snapshot.projection)
+          ? persist(snapshot)
+          : Effect.void;
+      }),
     ),
   );
 
@@ -798,19 +853,22 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
 export function threadStateChanges(
   environmentId: EnvironmentIdType,
   threadId: ThreadIdType,
-  reprobe?: Stream.Stream<unknown>,
+  options?: Parameters<typeof makeEnvironmentThreadState>[1],
 ) {
   return followStreamInEnvironment(
     environmentId,
     Stream.unwrap(
-      makeEnvironmentThreadState(threadId, reprobe === undefined ? undefined : { reprobe }).pipe(
-        Effect.map(SubscriptionRef.changes),
-      ),
+      makeEnvironmentThreadState(threadId, options).pipe(Effect.map(SubscriptionRef.changes)),
     ),
   );
 }
 
 /**
+ * A thread's live stream runs only while something observes its state. When
+ * the last observer leaves, the stream closes and its snapshot and cursor are
+ * retained in a bounded per-registry cache, so reopening paints at once and
+ * resumes by cursor.
+ *
  * `reprobeSignal` names an atom whose changes should re-check a thread parked
  * as deleted, typically the thread's shell, so a thread that materializes late
  * does not wait out the reprobe backoff.
@@ -827,19 +885,28 @@ export function createEnvironmentThreadStateAtoms<R, E>(
     ) => Atom.Atom<unknown>;
   },
 ) {
+  const retainedAtom = Atom.make(() => makeRetainedThreadSnapshots()).pipe(
+    Atom.keepAlive,
+    Atom.withLabel("environment-thread-retained-snapshots"),
+  );
+
   const sourceFamily = Atom.family((key: string) => {
     const { environmentId, threadId } = parseThreadKey(key);
     const reprobeSignal = options?.reprobeSignal?.(environmentId, threadId);
     return runtime
       .atom(
-        (get) =>
-          threadStateChanges(
-            environmentId,
-            threadId,
-            reprobeSignal === undefined
-              ? undefined
-              : get.stream(reprobeSignal, { withoutInitialValue: true }),
-          ),
+        (get) => {
+          const retained = get(retainedAtom);
+          return threadStateChanges(environmentId, threadId, {
+            ...(reprobeSignal === undefined
+              ? {}
+              : { reprobe: get.stream(reprobeSignal, { withoutInitialValue: true }) }),
+            retention: {
+              load: () => retained.get(key),
+              save: (snapshot) => retained.set(key, snapshot),
+            },
+          });
+        },
         { initialValue: EMPTY_ENVIRONMENT_THREAD_STATE },
       )
       .pipe(Atom.withLabel(`environment-thread-state-source:${key}`));
@@ -850,14 +917,21 @@ export function createEnvironmentThreadStateAtoms<R, E>(
   );
 
   const family = Atom.family((key: string) =>
-    Atom.make((get) =>
-      get(loadEnabledFamily(key))
-        ? get(sourceFamily(key))
-        : AsyncResult.success(STOPPED_ENVIRONMENT_THREAD_STATE),
-    ).pipe(
-      Atom.setIdleTTL(THREAD_STATE_IDLE_TTL_MS),
-      Atom.withLabel(`environment-thread-state:${key}`),
-    ),
+    Atom.make((get) => {
+      if (!get(loadEnabledFamily(key)))
+        return AsyncResult.success(STOPPED_ENVIRONMENT_THREAD_STATE);
+      const result = get(sourceFamily(key));
+      // A reopened stream has not emitted yet. Paint the retained snapshot
+      // until it does, so switching back to a thread is never blank.
+      const value = AsyncResult.value(result);
+      if (
+        Option.isSome(value) &&
+        (Option.isSome(value.value.data) || value.value.status !== "empty")
+      )
+        return result;
+      const snapshot = get(retainedAtom).get(key);
+      return snapshot === undefined ? result : AsyncResult.success(retainedThreadState(snapshot));
+    }).pipe(Atom.withLabel(`environment-thread-state:${key}`)),
   );
 
   return {

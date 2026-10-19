@@ -26,6 +26,12 @@ install (477 active threads, 8 projects, a 2,688-item thread) measured on
   target check is a single-row existence query
   (`threadProjectionExists`, `apps/server/src/orchestration-v2/ThreadHistory.ts`).
   It no longer assembles the thread shell inside a transaction.
+- Clients hold a thread subscription only while some view observes the thread.
+  When the last observer leaves, the client closes the stream and keeps the
+  projection with its sequence in a small in-memory LRU
+  (`packages/client-runtime/src/state/threadRetention.ts`). Reopening paints
+  that snapshot immediately and resumes with `afterSequence`, so offscreen
+  threads cost no stream or reconnect fan-out.
 - A history page (`history: { limit }`) pages the turn items, and the
   orchestrator narrows `nodes`, `attempts` and `providerTurns` to what the
   following reference (`narrowHistoryPageSupport`):

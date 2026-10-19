@@ -49,7 +49,9 @@ import {
   ThreadSnapshotLoader,
   type EnvironmentThreadState,
   type ThreadSnapshotLoadResult,
+  type ThreadSnapshotRetention,
 } from "./threads.ts";
+import { makeRetainedThreadSnapshots } from "./threadRetention.ts";
 
 const TARGET = new PrimaryConnectionTarget({
   environmentId: EnvironmentId.make("environment-1"),
@@ -130,6 +132,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   readonly controlledPages?: boolean;
   readonly socketPage?: OrchestrationV2ThreadDetailSnapshot;
   readonly reprobe?: Stream.Stream<unknown>;
+  readonly retention?: ThreadSnapshotRetention;
 }) {
   const pageLoads = yield* Queue.unbounded<{
     request: OrchestrationV2ThreadHistoryRequest;
@@ -151,6 +154,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   const wakeups = yield* Queue.unbounded<ConnectionWakeups.ConnectionWakeup>();
   const savedThreads = yield* Ref.make<ReadonlyArray<OrchestrationV2ThreadDetailSnapshot>>([]);
   const removedThreads = yield* Ref.make<ReadonlyArray<ThreadId>>([]);
+  const cacheLoads = yield* Ref.make(0);
   const supervisorState = yield* SubscriptionRef.make<SupervisorConnectionState>(
     AVAILABLE_CONNECTION_STATE,
   );
@@ -234,14 +238,16 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     loadShell: () => Effect.succeed(Option.none()),
     saveShell: () => Effect.void,
     loadThread: (_environmentId, threadId) =>
-      Effect.succeed(
-        threadId === THREAD_ID && options?.cached !== undefined
-          ? Option.some({
-              snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
-              projection: options.cached,
-              ...(options.cachedHistory === undefined ? {} : { history: options.cachedHistory }),
-            })
-          : Option.none(),
+      Ref.update(cacheLoads, (count) => count + 1).pipe(
+        Effect.as(
+          threadId === THREAD_ID && options?.cached !== undefined
+            ? Option.some({
+                snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
+                projection: options.cached,
+                ...(options.cachedHistory === undefined ? {} : { history: options.cachedHistory }),
+              })
+            : Option.none(),
+        ),
       ),
     saveThread: (_environmentId, snapshot) =>
       Ref.update(savedThreads, (current) => [...current, snapshot]),
@@ -255,10 +261,10 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     clearVcsRefs: () => Effect.void,
     clear: () => Effect.void,
   });
-  const threadState = yield* makeEnvironmentThreadState(
-    THREAD_ID,
-    options?.reprobe === undefined ? undefined : { reprobe: options.reprobe },
-  ).pipe(
+  const threadState = yield* makeEnvironmentThreadState(THREAD_ID, {
+    ...(options?.reprobe === undefined ? {} : { reprobe: options.reprobe }),
+    ...(options?.retention === undefined ? {} : { retention: options.retention }),
+  }).pipe(
     Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
     Effect.provideService(Persistence.EnvironmentCacheStore, cache),
     Effect.provideService(ThreadSnapshotLoader, snapshotLoader),
@@ -292,6 +298,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     supervisorSession,
     savedThreads,
     removedThreads,
+    cacheLoads,
     wakeups,
     httpNotFound,
     httpUnauthorized,
@@ -939,6 +946,85 @@ describe("EnvironmentThreads", () => {
 
       expect(Option.isNone(state.data)).toBe(true);
       expect(yield* Ref.get(harness.removedThreads)).toEqual([THREAD_ID]);
+    }),
+  );
+
+  it.effect("retains the last applied data and cursor together when the stream closes", () =>
+    Effect.gen(function* () {
+      const retained = makeRetainedThreadSnapshots();
+      const retention: ThreadSnapshotRetention = {
+        load: () => retained.get(THREAD_ID),
+        save: (value) => retained.set(THREAD_ID, value),
+      };
+      const scope = yield* Scope.make();
+      const harness = yield* makeHarness({ retention }).pipe(Scope.provide(scope));
+      yield* Queue.offer(harness.inputs, snapshot(BASE_PROJECTION, 3));
+      yield* Queue.offer(harness.inputs, titleUpdated("Live title", 4));
+      yield* awaitThreadState(
+        harness.observed,
+        (value) => Option.isSome(value.data) && value.data.value.thread.title === "Live title",
+      );
+      yield* Scope.close(scope, Exit.void);
+
+      const kept = retained.get(THREAD_ID);
+      expect(kept?.snapshotSequence).toBe(4);
+      expect(kept?.projection.thread.title).toBe("Live title");
+    }),
+  );
+
+  it.effect(
+    "reopens from a retained snapshot without reading the cache and resumes by cursor",
+    () =>
+      Effect.gen(function* () {
+        const retained = makeRetainedThreadSnapshots();
+        retained.set(THREAD_ID, {
+          snapshotSequence: CACHED_SNAPSHOT_SEQUENCE + 5,
+          projection: { ...BASE_PROJECTION, thread: { ...BASE_PROJECTION.thread, title: "Kept" } },
+        });
+        // The persistent cache holds an older settled snapshot; retention wins.
+        const harness = yield* makeHarness({
+          cached: BASE_PROJECTION,
+          retention: {
+            load: () => retained.get(THREAD_ID),
+            save: (value) => retained.set(THREAD_ID, value),
+          },
+        });
+        const first = yield* Queue.take(harness.observed);
+        expect(Option.getOrThrow(first.data).thread.title).toBe("Kept");
+
+        yield* Queue.offer(
+          harness.inputs,
+          titleUpdated("Resumed title", CACHED_SNAPSHOT_SEQUENCE + 6),
+        );
+        yield* awaitThreadState(
+          harness.observed,
+          (value) => Option.isSome(value.data) && value.data.value.thread.title === "Resumed title",
+        );
+        expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(
+          CACHED_SNAPSHOT_SEQUENCE + 5,
+        );
+        expect(yield* Ref.get(harness.cacheLoads)).toBe(0);
+        expect(yield* Ref.get(harness.loaderCalls)).toBe(0);
+      }),
+  );
+
+  it.effect("drops the retained snapshot of a deleted thread", () =>
+    Effect.gen(function* () {
+      const retained = makeRetainedThreadSnapshots();
+      const scope = yield* Scope.make();
+      const harness = yield* makeHarness({
+        cached: BASE_PROJECTION,
+        retention: {
+          load: () => retained.get(THREAD_ID),
+          save: (value) => retained.set(THREAD_ID, value),
+        },
+      }).pipe(Scope.provide(scope));
+      retained.set(THREAD_ID, { snapshotSequence: 1, projection: BASE_PROJECTION });
+      yield* Queue.offer(harness.inputs, deleted(CACHED_SNAPSHOT_SEQUENCE + 1));
+      yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
+      yield* Scope.close(scope, Exit.void);
+
+      expect(retained.get(THREAD_ID)).toBeUndefined();
     }),
   );
 
