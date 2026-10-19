@@ -48,7 +48,7 @@ const DESKTOP_RENDERER_ORIGINS = ["pathway://app", "pathway-dev://app"];
 const SVG_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
 
 // #region DEBUG
-const CLOUD_SYNC_DEBUG_PATH = "/Users/coreybaines/GitHub/pathway/.codex/logs/debug.log";
+const CLOUD_SYNC_DEBUG_PATH = "/Users/coreybaines/Github/pathway/.claude/debug.log";
 const CLOUD_SYNC_DEBUG_ROUTE = "/api/__debug/cloud-sync";
 const encodeCloudSyncDebugEvent = Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 

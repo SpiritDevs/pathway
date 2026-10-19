@@ -16,6 +16,19 @@ import { syncedIssueDomainFromReplica } from "~/cloud/issueDomainReadModel";
 import type { SidebarProjectGroupMember, SidebarProjectSnapshot } from "~/sidebarProjectGrouping";
 import { useProjectGroups } from "../projects/useProjectGroups";
 
+// #region DEBUG
+function traceIssueProjectIdentity(
+  event: string,
+  fields: Readonly<Record<string, string | number | boolean | null>>,
+): void {
+  void fetch("/api/__debug/cloud-sync", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ hypothesis: "ISSUE_PROJECT_IDENTITY", event, fields }),
+  }).catch(() => undefined);
+}
+// #endregion DEBUG
+
 export interface IssueProjectChoice {
   readonly id: ProjectId;
   readonly title: string;
@@ -299,6 +312,26 @@ export function useIssueProjectOptions(): ReadonlyArray<IssueProjectOption> {
       // exactly one company is selected; in All it would make the create destination ambiguous.
       return allCompanies ? options.filter((option) => option.companyProject !== null) : options;
     });
+    // #region DEBUG
+    traceIssueProjectIdentity("scoped-options-built", {
+      replicaCount: replicas.size,
+      groupCount: groups.length,
+      optionCount: scopedOptions.length,
+      options: JSON.stringify(
+        scopedOptions.map((option) => ({
+          id: option.id,
+          title: option.title,
+          cloudProjectId: option.companyProject?.id ?? null,
+          companyIds: option.companyIds,
+          environmentIds: option.environmentProjects.map((project) => project.environmentId),
+          bindingProjectIds: option.environmentBindings.map((binding) => binding.cloudProjectId),
+          repositoryKeys: option.environmentBindings.map(
+            (binding) => binding.repositoryIdentity?.canonicalKey ?? null,
+          ),
+        })),
+      ),
+    });
+    // #endregion DEBUG
     if (!allCompanies) return scopedOptions;
 
     // Menus and filters use the project id as their value. In All, represent a replicated id once,
