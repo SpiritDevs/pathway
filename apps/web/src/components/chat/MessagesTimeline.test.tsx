@@ -2672,8 +2672,10 @@ it("keeps both history boundaries and unloaded index markers available in an emp
         hasOlder: true,
         hasNewer: true,
         isLoading: false,
+        isPrefetching: false,
         error: null,
         request: () => {},
+        prefetch: () => {},
         retry: () => {},
         index: [
           { messageId: MessageId.make("old"), role: "user", preview: "Old prompt" },
@@ -2690,6 +2692,30 @@ it("keeps both history boundaries and unloaded index markers available in an emp
   expect(markup).not.toContain('data-maintain-scroll-at-end="enabled"');
 });
 
+it("loads adjacent history in the background without a loading banner", () => {
+  const markup = renderToStaticMarkup(
+    <MessagesTimeline
+      {...buildProps()}
+      timelineEntries={[]}
+      liveFollowEnabled={false}
+      history={{
+        hasOlder: true,
+        hasNewer: false,
+        isLoading: false,
+        isPrefetching: true,
+        error: null,
+        request: () => {},
+        prefetch: () => {},
+        retry: () => {},
+        index: [],
+      }}
+    />,
+  );
+  expect(markup).not.toContain("Loading messages from remote");
+  expect(markup).not.toContain('role="status"');
+  expect(markup).toMatch(/<button[^>]*disabled[^>]*>.*Load older messages from remote/);
+});
+
 it("makes a failed remote history request retryable without clearing the timeline", () => {
   const markup = renderToStaticMarkup(
     <MessagesTimeline
@@ -2699,8 +2725,10 @@ it("makes a failed remote history request retryable without clearing the timelin
         hasOlder: true,
         hasNewer: false,
         isLoading: false,
+        isPrefetching: false,
         error: "Connection closed",
         request: () => {},
+        prefetch: () => {},
         retry: () => {},
         index: [],
       }}

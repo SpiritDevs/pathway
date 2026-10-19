@@ -64,22 +64,28 @@ export function deriveTimelineMinimapItems(
   return items;
 }
 
-/** Load only on movement toward an edge, never from initial layout or a prepend. */
-export function resolveTimelineHistoryScrollRequest(input: {
+/** Adjacent pages start loading this many viewports before their edge scrolls into view. */
+export const TIMELINE_HISTORY_PREFETCH_VIEWPORTS = 2.5;
+const TIMELINE_HISTORY_MIN_PREFETCH_PX = 120;
+
+/** Prefetch only on user movement toward an edge, never from initial layout or a prepend. */
+export function resolveTimelineHistoryPrefetch(input: {
   readonly previousScroll: number | null;
   readonly scroll: number;
-  readonly atEnd: boolean;
+  readonly scrollLength: number;
+  readonly distanceToEnd: number;
   readonly liveFollowEnabled: boolean;
   readonly userScrollDirection: "older" | "newer" | "either" | null;
   readonly history: Pick<
     EnvironmentThreadHistory,
-    "hasOlder" | "hasNewer" | "isLoading" | "error"
+    "hasOlder" | "hasNewer" | "isLoading" | "isPrefetching" | "error"
   > | null;
 }): "older" | "newer" | null {
   const { history, previousScroll, scroll } = input;
   if (
     !history ||
     history.isLoading ||
+    history.isPrefetching ||
     history.error ||
     previousScroll === null ||
     input.liveFollowEnabled ||
@@ -87,18 +93,22 @@ export function resolveTimelineHistoryScrollRequest(input: {
   ) {
     return null;
   }
+  const runway = Math.max(
+    TIMELINE_HISTORY_MIN_PREFETCH_PX,
+    input.scrollLength * TIMELINE_HISTORY_PREFETCH_VIEWPORTS,
+  );
   if (
     history.hasOlder &&
     input.userScrollDirection !== "newer" &&
     scroll < previousScroll &&
-    scroll <= 120
+    scroll <= runway
   )
     return "older";
   if (
     history.hasNewer &&
     input.userScrollDirection !== "older" &&
     scroll > previousScroll &&
-    input.atEnd
+    input.distanceToEnd <= runway
   )
     return "newer";
   return null;

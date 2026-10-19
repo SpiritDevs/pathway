@@ -141,7 +141,7 @@ import {
 import {
   deriveTimelineMinimapItems,
   resolveTimelineHistoryNavigation,
-  resolveTimelineHistoryScrollRequest,
+  resolveTimelineHistoryPrefetch,
   type TimelineMinimapItem,
 } from "./MessagesTimeline.history";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
@@ -897,16 +897,27 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
     const scrollTop = state.scroll ?? 0;
     const scrollBottom = scrollTop + (state.scrollLength ?? 0);
-    const historyRequest = resolveTimelineHistoryScrollRequest({
+    const prefetch = resolveTimelineHistoryPrefetch({
       previousScroll: previousHistoryScrollRef.current,
       scroll: scrollTop,
-      atEnd: isAtEnd === true,
+      scrollLength: state.scrollLength ?? 0,
+      distanceToEnd:
+        state.contentLength === undefined
+          ? isAtEnd
+            ? 0
+            : Number.POSITIVE_INFINITY
+          : state.contentLength - scrollBottom,
       liveFollowEnabled,
       userScrollDirection: historyScrollDirectionRef.current,
       history,
     });
     previousHistoryScrollRef.current = scrollTop;
-    if (historyRequest && pendingHistoryMessageRef.current === null) requestHistory(historyRequest);
+    if (prefetch && pendingHistoryMessageRef.current === null) {
+      // Background pages keep follow, anchor, and marker intent. One page per
+      // gesture, so layout corrections after a page lands cannot chain fetches.
+      historyScrollDirectionRef.current = null;
+      history?.prefetch(prefetch);
+    }
 
     for (const item of minimapItems) {
       const strip = minimapStripMap.get(item.id);
@@ -937,7 +948,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     contentInsetEndAdjustment,
     history,
     liveFollowEnabled,
-    requestHistory,
   ]);
 
   useEffect(() => {
@@ -1100,7 +1110,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         {history?.hasOlder ? (
           <TimelineHistoryBoundary
             direction="older"
-            isLoading={history.isLoading}
+            isLoading={history.isLoading || history.isPrefetching}
             onLoad={() => requestHistory("older")}
           />
         ) : null}
@@ -1128,6 +1138,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     [
       history?.hasOlder,
       history?.isLoading,
+      history?.isPrefetching,
       onOpenThread,
       parentThreadLink,
       requestHistory,
@@ -1140,14 +1151,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         {history?.hasNewer ? (
           <TimelineHistoryBoundary
             direction="newer"
-            isLoading={history.isLoading}
+            isLoading={history.isLoading || history.isPrefetching}
             onLoad={() => requestHistory("newer")}
           />
         ) : null}
         {TIMELINE_LIST_FOOTER}
       </>
     ),
-    [history?.hasNewer, history?.isLoading, requestHistory],
+    [history?.hasNewer, history?.isLoading, history?.isPrefetching, requestHistory],
   );
 
   // Stable renderItem — no closure deps. Row components read shared state

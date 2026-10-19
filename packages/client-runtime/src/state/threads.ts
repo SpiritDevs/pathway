@@ -10,6 +10,7 @@ import {
   type ThreadId as ThreadIdType,
 } from "@spiritdevs/contracts";
 import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -54,6 +55,12 @@ import {
 // deleted or invalid id still reaches the deleted state. At the subscription's
 // 250ms retry cadence this allows about ten seconds to materialize.
 export const THREAD_NOT_FOUND_MAX_ATTEMPTS = 40;
+
+interface HistoryLoad {
+  readonly direction: ThreadHistoryDirection;
+  readonly prefetch: boolean;
+  readonly cancel: Deferred.Deferred<void>;
+}
 
 // A deletion confirmed from a 404 stays provisional: shells can reference a
 // thread whose create commit takes longer than the bounded retry window (slow
@@ -118,9 +125,9 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     ),
   );
   const cachedThread = Option.map(cached, (snapshot) => snapshot.projection);
-  const historyRequests = yield* Queue.unbounded<ThreadHistoryDirection>();
-  let requestPending = false;
-  let latestPending = false;
+  const historyRequests = yield* Queue.unbounded<HistoryLoad>();
+  let pendingLoad: HistoryLoad | null = null;
+  let queuedNavigation: ThreadHistoryDirection | null = null;
   let lastDirection: ThreadHistoryDirection = "latest";
   let active = true;
   let historyGeneration = 0;
@@ -130,19 +137,33 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   let contentSequence = 0;
   let indexSequence = 0;
   let pageEvents: Array<Extract<OrchestrationV2ThreadStreamItem, { kind: "event" }>> | null = null;
+  const startHistoryLoad = (direction: ThreadHistoryDirection, prefetch: boolean) => {
+    pendingLoad = { direction, prefetch, cancel: Deferred.makeUnsafe<void>() };
+    Queue.offerUnsafe(historyRequests, pendingLoad);
+  };
   const requestHistory = (direction: ThreadHistoryDirection) => {
     if (!active || !historySupported) return;
-    if (requestPending) {
-      if (direction === "latest") {
-        latestPending = true;
-        historyGeneration += 1;
-      }
-      return;
+    if (pendingLoad === null) return startHistoryLoad(direction, false);
+    // Latest always wins; a jump also replaces a prefetch for the window it is about to discard.
+    if (direction === "latest" || (typeof direction === "object" && pendingLoad.prefetch)) {
+      queuedNavigation = direction;
+      historyGeneration += 1;
+      if (pendingLoad.prefetch) Deferred.doneUnsafe(pendingLoad.cancel, Effect.void);
     }
-    requestPending = true;
-    Queue.offerUnsafe(historyRequests, direction);
+  };
+  const prefetchHistory = (direction: "older" | "newer") => {
+    if (!active || !historySupported || pendingLoad !== null) return;
+    startHistoryLoad(direction, true);
   };
   const retryHistory = () => requestHistory(lastDirection);
+  const idleHistory = {
+    isLoading: false,
+    isPrefetching: false,
+    error: null,
+    request: requestHistory,
+    prefetch: prefetchHistory,
+    retry: retryHistory,
+  };
   const cachedHistory = Option.getOrUndefined(cached)?.history;
   let refreshCachedHistory = cachedHistory?.hasNewer === true;
   const state = yield* SubscriptionRef.make<EnvironmentThreadState>({
@@ -152,13 +173,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     ...(cachedHistory === undefined
       ? {}
       : {
-          history: {
-            ...cachedHistory,
-            isLoading: false,
-            error: null,
-            request: requestHistory,
-            retry: retryHistory,
-          },
+          history: { ...cachedHistory, ...idleHistory },
         }),
   });
   // Seed the resume cursor from the cached snapshot so a warm cache can catch up
@@ -325,13 +340,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         resolveThreadProjectionPayload(item.projection),
         item.history === undefined
           ? null
-          : {
-              ...item.history,
-              isLoading: false,
-              error: null,
-              request: requestHistory,
-              retry: retryHistory,
-            },
+          : { ...item.history, ...idleHistory },
       );
       return;
     }
@@ -423,40 +432,9 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     ),
   );
 
-  const loadHistory = Effect.fn("EnvironmentThreadState.loadHistory")(function* (
-    direction: ThreadHistoryDirection,
+  const fetchHistoryPage = Effect.fn("EnvironmentThreadState.fetchHistoryPage")(function* (
+    request: OrchestrationV2ThreadHistoryRequest,
   ) {
-    lastDirection = direction;
-    const started = yield* projectionMutex.withPermits(1)(
-      Effect.gen(function* () {
-        const initial = yield* SubscriptionRef.get(state);
-        const history = initial.history;
-        if (history === undefined || Option.isNone(initial.data)) return null;
-        if (direction === "older" && (!history.hasOlder || history.beforeCursor === undefined))
-          return null;
-        if (direction === "newer" && (!history.hasNewer || history.afterCursor === undefined))
-          return null;
-        const request: OrchestrationV2ThreadHistoryRequest = {
-          limit: 50,
-          ...(direction === "older"
-            ? { before: history.beforeCursor! }
-            : direction === "newer"
-              ? { after: history.afterCursor! }
-              : typeof direction === "object"
-                ? { around: direction.aroundMessageId }
-                : {}),
-        };
-        const generation = historyGeneration;
-        pageEvents = [];
-        yield* SubscriptionRef.update(state, (current) => ({
-          ...current,
-          history: { ...history, isLoading: true, error: null },
-        }));
-        return { request, generation };
-      }),
-    );
-    if (started === null) return;
-    const { request, generation } = started;
     const prepared = yield* SubscriptionRef.get(supervisor.prepared);
     let result = Option.isSome(prepared)
       ? yield* snapshotLoader.load(prepared.value, threadId, request)
@@ -487,6 +465,49 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         );
       }
     }
+    return result;
+  });
+
+  const loadHistory = Effect.fn("EnvironmentThreadState.loadHistory")(function* ({
+    direction,
+    prefetch,
+    cancel,
+  }: HistoryLoad) {
+    lastDirection = direction;
+    const started = yield* projectionMutex.withPermits(1)(
+      Effect.gen(function* () {
+        const initial = yield* SubscriptionRef.get(state);
+        const history = initial.history;
+        if (history === undefined || Option.isNone(initial.data)) return null;
+        if (direction === "older" && (!history.hasOlder || history.beforeCursor === undefined))
+          return null;
+        if (direction === "newer" && (!history.hasNewer || history.afterCursor === undefined))
+          return null;
+        const request: OrchestrationV2ThreadHistoryRequest = {
+          limit: 50,
+          ...(direction === "older"
+            ? { before: history.beforeCursor! }
+            : direction === "newer"
+              ? { after: history.afterCursor! }
+              : typeof direction === "object"
+                ? { around: direction.aroundMessageId }
+                : {}),
+        };
+        const generation = historyGeneration;
+        pageEvents = [];
+        yield* SubscriptionRef.update(state, (current) => ({
+          ...current,
+          history: { ...history, isLoading: !prefetch, isPrefetching: prefetch, error: null },
+        }));
+        return { request, generation };
+      }),
+    );
+    if (started === null) return;
+    const { request, generation } = started;
+    // A superseded prefetch stops waiting on the network; the generation check discards it.
+    const result = yield* fetchHistoryPage(request).pipe(
+      Effect.raceFirst(Deferred.await(cancel).pipe(Effect.as({ _tag: "Unavailable" as const }))),
+    );
     yield* projectionMutex.withPermits(1)(
       Effect.gen(function* () {
         if (generation !== historyGeneration) return;
@@ -502,6 +523,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
             history: {
               ...current.history!,
               isLoading: false,
+              isPrefetching: false,
               error: "Could not load messages from remote. Try again.",
             },
           }));
@@ -542,13 +564,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         yield* SubscriptionRef.update(state, (value) => ({
           ...value,
           data: Option.some(projection),
-          history: {
-            ...mergedHistory,
-            isLoading: false,
-            error: null,
-            request: requestHistory,
-            retry: retryHistory,
-          },
+          history: { ...mergedHistory, ...idleHistory },
         }));
       }),
     );
@@ -560,10 +576,10 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         Effect.ensuring(
           Effect.sync(() => {
             pageEvents = null;
-            if (latestPending && active) {
-              latestPending = false;
-              Queue.offerUnsafe(historyRequests, "latest");
-            } else requestPending = false;
+            pendingLoad = null;
+            const navigation = queuedNavigation;
+            queuedNavigation = null;
+            if (navigation !== null && active) startHistoryLoad(navigation, false);
           }),
         ),
       ),
