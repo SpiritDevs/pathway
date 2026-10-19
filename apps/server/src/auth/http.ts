@@ -39,6 +39,8 @@ import * as SessionStore from "./SessionStore.ts";
 import { traceAuthenticatedRelayRequest, traceRelayRequest } from "../cloud/traceRelayRequest.ts";
 import { deriveAuthClientMetadata } from "./utils.ts";
 import { verifyRequestDpopProof } from "./dpop.ts";
+import { conversationShareIdFromSubject } from "@spiritdevs/contracts";
+import { sharedConversationHttpRequestAllowed } from "../conversationSharing/ThreadAccess.ts";
 
 const CREDENTIAL_RESPONSE_HEADERS = {
   "cache-control": "no-store",
@@ -186,6 +188,15 @@ export const environmentAuthenticatedAuthLayer = Layer.effect(
             failEnvironmentInternal("internal_error", error),
           ),
         );
+        if (
+          conversationShareIdFromSubject(session.subject) !== null &&
+          !sharedConversationHttpRequestAllowed(
+            request.method,
+            new URL(request.url, "http://environment.local").pathname,
+          )
+        ) {
+          return yield* failEnvironmentAuthInvalid("invalid_credential");
+        }
         return yield* httpEffect.pipe(
           Effect.provideService(EnvironmentAuthenticatedPrincipal, {
             ...session,

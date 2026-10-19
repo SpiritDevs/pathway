@@ -7,7 +7,7 @@ import {
   type EnvironmentThreadState,
   createThreadEnvironmentAtoms,
 } from "@spiritdevs/client-runtime/state/threads";
-import type { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
+import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@spiritdevs/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
@@ -16,9 +16,41 @@ import {
   cloudEnvironmentThreadsAtom,
   companyScopedEnvironmentThreads,
 } from "../cloud/agentThreadReadModel";
+import { personalConversationsAtom } from "../cloud/conversationSharing";
 import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { environmentSnapshotAtom } from "./shell";
+
+const personalConversationEnvironmentIdsAtom = Atom.make((get) => [
+  ...new Set(get(personalConversationsAtom).map((conversation) => conversation.environmentId)),
+]);
+
+const personalEnvironmentThreadsAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make(
+    (get): ReadonlyArray<OrchestrationV2ThreadShell> =>
+      get(personalConversationsAtom)
+        .filter(
+          (conversation) =>
+            conversation.environmentId === environmentId &&
+            conversation.shell.archivedAt === null &&
+            conversation.shell.deletedAt === null,
+        )
+        .map(({ shell }) => ({
+          ...shell,
+          latestVisibleMessage:
+            shell.latestVisibleMessage === null
+              ? null
+              : { ...shell.latestVisibleMessage, text: "" },
+        })),
+  ),
+);
+
+const discoveredEnvironmentThreadsAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make((get) => [
+    ...get(cloudEnvironmentThreadsAtom(environmentId)),
+    ...get(personalEnvironmentThreadsAtom(environmentId)),
+  ]),
+);
 
 const companyScopedThreadSnapshotAtom = Atom.family((environmentId: EnvironmentId) =>
   Atom.make((get) => {
@@ -42,7 +74,8 @@ export const environmentThreadDetails = createEnvironmentThreadDetailAtoms(
 export const environmentThreadShells = createEnvironmentThreadShellAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
   snapshotAtom: companyScopedThreadSnapshotAtom,
-  fallbackThreadsAtom: cloudEnvironmentThreadsAtom,
+  fallbackThreadsAtom: discoveredEnvironmentThreadsAtom,
+  discoveryEnvironmentIdsAtom: personalConversationEnvironmentIdsAtom,
 });
 
 const EMPTY_THREAD_STATE_ATOM = Atom.make(AsyncResult.success(EMPTY_ENVIRONMENT_THREAD_STATE)).pipe(

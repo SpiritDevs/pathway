@@ -56,7 +56,7 @@ export function ThreadAlertBell({
   policies,
   modifierHeld = false,
 }: {
-  projectKey: string;
+  projectKey: string | null;
   threadKey: string;
   policies: readonly AlertPolicyRow[] | null;
   modifierHeld?: boolean;

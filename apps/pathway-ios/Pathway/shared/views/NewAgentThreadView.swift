@@ -24,8 +24,8 @@ struct NewAgentThreadView: View {
                     )
                 } else if projectOptions.isEmpty {
                     unavailable(
-                        title: "No connected projects",
-                        message: "A project must be available in a Pathway Connect environment before you can start a thread."
+                        title: "No connected environments",
+                        message: "Connect an environment before starting a conversation."
                     )
                 } else if let selectedProject {
                     NewAgentThreadComposer(
@@ -43,12 +43,24 @@ struct NewAgentThreadView: View {
                     )
                 }
             }
-            .navigationTitle(selectedProjectID == nil ? "Choose Project" : "New Agent Thread")
+            .navigationTitle(selectedProjectID == nil ? "Choose Project" : selectedProject?.isConversation == true ? "New Conversation" : "New Agent Thread")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", action: close)
                         .disabled(isChangingBinding)
+                }
+                if let model, selectedProjectID != nil {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button {
+                            model.temporary.toggle()
+                        } label: {
+                            Label("Temporary", systemImage: "clock.badge.xmark")
+                                .foregroundStyle(model.temporary ? Color.accentColor : Color.secondary)
+                        }
+                        .accessibilityValue(model.temporary ? "On" : "Off")
+                        .disabled(!model.canChangeTemporary || isChangingBinding)
+                    }
                 }
                 if capturedDraft != nil, !appliedCapture, let model, model.errorMessage != nil {
                     ToolbarItem(placement: .primaryAction) {
@@ -80,7 +92,7 @@ struct NewAgentThreadView: View {
     }
 
     private var bindingOptions: [PathwayNewThreadBindingOption] {
-        appModel.cloud.environmentBindings.compactMap { binding in
+        let projects = appModel.cloud.environmentBindings.compactMap { binding -> PathwayNewThreadBindingOption? in
             guard
                 let environment = appModel.cloud.environments.first(where: {
                     $0.companyId == binding.companyId
@@ -98,14 +110,21 @@ struct NewAgentThreadView: View {
                 projectName: project.project.name,
                 companyName: appModel.cloud.companyName(for: binding.companyId) ?? "Pathway"
             )
-        }.sorted {
+        }
+        var seen: Set<String> = []
+        let conversations = appModel.cloud.environments.compactMap { environment -> PathwayNewThreadBindingOption? in
+            guard seen.insert(environment.environment.environmentId).inserted else { return nil }
+            return PathwayNewThreadBindingOption(binding: nil, environment: environment,
+                projectID: "conversation", projectName: "Conversation", companyName: "Personal")
+        }
+        return (projects + conversations).sorted {
             $0.label.localizedStandardCompare($1.label) == .orderedAscending
         }
     }
 
     private var projectOptions: [PathwayNewThreadProjectOption] {
         let groups = Dictionary(grouping: bindingOptions) { option in
-            "\(option.binding.companyId):\(option.projectID)"
+            option.binding.map { "\($0.companyId):\(option.projectID)" } ?? "conversation"
         }
         return groups.compactMap { id, bindings in
             guard let first = bindings.first else { return nil }
@@ -194,8 +213,8 @@ struct NewAgentThreadView: View {
         }
         if let option = bindingOptions.first(where: { $0.id == selectedBindingID }) {
             appModel.pendingThreadRoute = PathwayPendingThreadRoute(
-                companyId: option.binding.companyId,
-                environmentId: option.binding.binding.environmentId,
+                companyId: option.environment.companyId,
+                environmentId: option.environment.environment.environmentId,
                 threadId: threadID
             )
         }
@@ -233,12 +252,12 @@ private struct NewAgentThreadComposer: View {
             VStack(spacing: 12) {
                 Spacer(minLength: 54)
 
-                Text("What should we build")
+                Text(project.isConversation ? "What would you like to discuss?" : "What should we build")
                     .font(.largeTitle.weight(.regular))
 
                 Button(action: chooseProject) {
                     HStack(spacing: 5) {
-                        Text("in \(project.name)?")
+                        Text(project.isConversation ? "Conversation" : "in \(project.name)?")
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Image(systemName: "chevron.down")
@@ -261,7 +280,7 @@ private struct NewAgentThreadComposer: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 4) {
                 if let model {
-                    workspaceSummary(model)
+                    if !model.isConversation { workspaceSummary(model) }
                     composer(model).disabled(model.isImportingCapture)
                 } else {
                     HStack(spacing: 10) {
@@ -337,6 +356,7 @@ private struct NewAgentThreadComposer: View {
                         : "folder"
                 )
             }
+            .disabled(model.temporary)
             .accessibilityHint("Changes the workspace used for the new thread")
 
             if model.workspaceMode == "worktree" {

@@ -173,6 +173,9 @@ describe("cloud mint credential handler", () => {
     readonly clientEnvironmentId?: EnvironmentId;
     readonly includeConnectGrant?: boolean;
     readonly resolvedActor?: string | null;
+    readonly conversation?: boolean;
+    readonly shareRevoked?: boolean;
+    readonly shareUserId?: string;
   }
 
   const makeMintHarness = Effect.fn("CloudHttpTest.makeMintHarness")(function* (
@@ -250,6 +253,27 @@ describe("cloud mint credential handler", () => {
         Effect.succeed(
           options.resolvedActor === undefined ? ACTING_CLOUD_USER_ID : options.resolvedActor,
         ),
+      resolveConversationShare: () =>
+        Effect.succeed(
+          options.shareRevoked === true
+            ? null
+            : {
+                shareId: "share-conversation",
+                environmentId: TARGET_ENVIRONMENT_ID,
+                threadId: "thread-conversation" as never,
+                ownerUserId: LINKED_CLOUD_USER_ID,
+                userId: "conversation-recipient",
+                membershipId: "membership-recipient",
+                access: "view",
+                conversations: [
+                  {
+                    threadId: "thread-conversation" as never,
+                    ownerUserId: LINKED_CLOUD_USER_ID,
+                    access: "view",
+                  },
+                ],
+              },
+        ),
     };
     const now = yield* DateTime.now;
     const nowSeconds = Math.floor(now.epochMilliseconds / 1_000);
@@ -258,7 +282,12 @@ describe("cloud mint credential handler", () => {
     const payload = {
       iss: normalizeRelayIssuer(RELAY_ISSUER),
       aud: `pathway-env:${TARGET_ENVIRONMENT_ID}`,
-      sub: environmentSubject ? INITIATING_ENVIRONMENT_ID : LINKED_CLOUD_USER_ID,
+      sub:
+        options.conversation === true
+          ? (options.shareUserId ?? "conversation-recipient")
+          : environmentSubject
+            ? INITIATING_ENVIRONMENT_ID
+            : LINKED_CLOUD_USER_ID,
       jti: "mint-proof-jti",
       iat: nowSeconds,
       exp: nowSeconds + 120,
@@ -267,7 +296,18 @@ describe("cloud mint credential handler", () => {
       ...(options.clientEnvironmentId ? { clientEnvironmentId: options.clientEnvironmentId } : {}),
       clientProofKeyThumbprint: "client-proof-thumbprint",
       cnf: { jkt: "client-proof-thumbprint" },
-      ...(includeConnectGrant ? { connectGrant } : {}),
+      ...(includeConnectGrant
+        ? {
+            connectGrant:
+              options.conversation === true
+                ? {
+                    ...connectGrant,
+                    conversationShareId: "share-conversation",
+                    conversationUserId: "conversation-recipient",
+                  }
+                : connectGrant,
+          }
+        : {}),
       nonce: "mint-proof-nonce",
       scope: ["environment:connect"],
     } satisfies RelayCloudMintCredentialProofPayload;
@@ -303,6 +343,32 @@ describe("cloud mint credential handler", () => {
         initiatingEnvironmentId: INITIATING_ENVIRONMENT_ID,
       });
       expect(harness.secretReads).not.toContain(CLOUD_LINKED_USER_ID);
+    }),
+  );
+
+  it.effect("mints a conversation-only session for a shared recipient", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeMintHarness({ conversation: true });
+      yield* harness.run;
+      expect(harness.pairingInputs[0]).toMatchObject({
+        subject: "conversation-share:share-conversation",
+        scopes: ["orchestration:read", "orchestration:operate"],
+      });
+      expect(harness.pairingInputs[0]?.scopes).not.toContain("terminal:operate");
+    }),
+  );
+
+  it.effect("refuses revoked shares and grants presented by another user", () =>
+    Effect.gen(function* () {
+      for (const options of [
+        { conversation: true, shareRevoked: true },
+        { conversation: true, shareUserId: "other-user" },
+      ]) {
+        const harness = yield* makeMintHarness(options);
+        const error = yield* Effect.flip(harness.run);
+        expect(error._tag).toBe("EnvironmentHttpUnauthorizedError");
+        expect(harness.pairingInputs).toEqual([]);
+      }
     }),
   );
 

@@ -102,3 +102,26 @@ describe("confirm dialog coordinator", () => {
     return expect(confirmation).resolves.toBe(true);
   });
 });
+
+it("preserves review and discard choices while queued confirmations transition", async () => {
+  resetConfirmDialogForTests();
+  const unregister = registerConfirmDialogHost();
+  const first = requestConfirmDialog("First?")!;
+  const onReview = () => undefined;
+  const second = requestConfirmDialog("Delete temporary conversation?", {
+    variant: "destructive",
+    confirmLabel: "Discard and delete",
+    onReview,
+  })!;
+  respondToConfirmDialog(false);
+  await first;
+  completeConfirmDialogClose();
+  expect(readConfirmDialogState()).toMatchObject({
+    status: "confirming",
+    actions: { confirmLabel: "Discard and delete", onReview },
+  });
+  respondToConfirmDialog(false);
+  await expect(second).resolves.toBe(false);
+  completeConfirmDialogClose();
+  unregister();
+});

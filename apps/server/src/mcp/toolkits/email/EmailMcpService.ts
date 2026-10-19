@@ -89,6 +89,7 @@ export const EmailMcpProjectScopeLive = Layer.effect(
               ),
             ),
           );
+        if (projection.thread.projectId === null) return yield* failure("not-found", "Choose an email project explicitly for a conversation without a project.");
         return { type: "project", projectId: projection.thread.projectId };
       }),
     });

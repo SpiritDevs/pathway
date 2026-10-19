@@ -536,11 +536,13 @@ async function toggleCurrentThreadAlerts(environmentId: string, threadId: string
   const threadKey = alertThreadScopeKey(environmentId, threadId);
   const view = threadPolicyView(
     policies,
-    alertProjectScopeKey(
-      environmentId,
-      thread.projectId,
-      project?.repositoryIdentity?.canonicalKey,
-    ),
+    thread.projectId === null
+      ? null
+      : alertProjectScopeKey(
+          environmentId,
+          thread.projectId,
+          project?.repositoryIdentity?.canonicalKey,
+        ),
     threadKey,
   );
   await mutations.upsert({
@@ -999,13 +1001,23 @@ function OpenCommandPaletteDialog(props: {
   );
   const { entries: workspacePickerEntries, resolveProjectRef } = useWorkspaceProjectPicker({
     groups: projectGroups,
-    preferredProjectRef: contextualProjectRef,
+    preferredProjectRef: contextualProjectRef?.projectId
+      ? {
+          environmentId: contextualProjectRef.environmentId,
+          projectId: contextualProjectRef.projectId,
+        }
+      : null,
   });
   const projectPickerEntries = useMemo(
     () =>
       buildSidebarProjectPickerEntries({
         groups: projectGroups,
-        preferredProjectRef: contextualProjectRef,
+        preferredProjectRef: contextualProjectRef?.projectId
+          ? {
+              environmentId: contextualProjectRef.environmentId,
+              projectId: contextualProjectRef.projectId,
+            }
+          : null,
       }),
     [contextualProjectRef, projectGroups],
   );
@@ -1898,6 +1910,22 @@ function OpenCommandPaletteDialog(props: {
           environmentId: activeThread.environmentId,
           threadId: activeThread.id,
         });
+      },
+    });
+  }
+
+  const conversationEnvironmentId =
+    activeThread?.environmentId ?? activeDraftThread?.environmentId ?? primaryEnvironmentId;
+  if (conversationEnvironmentId) {
+    actionItems.push({
+      kind: "action",
+      value: "action:new-conversation",
+      searchTerms: ["new conversation", "chat", "personal", "no project"],
+      title: "New conversation",
+      icon: <SquarePenIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        setActiveFocusId(ALL_FOCUS_ID);
+        await handleNewThread({ environmentId: conversationEnvironmentId, projectId: null });
       },
     });
   }

@@ -8,6 +8,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   ALL_FOCUS_ID,
+  focusIncludesConversations,
   focusIsVisible,
   groupSearchResultsByFocus,
   resolveActiveFocusId,
@@ -38,6 +39,17 @@ const assignment = (focusId: FocusId, projectKey: FocusProjectKey): FocusAssignm
 });
 
 describe("Focus project scoping", () => {
+  it("shows conversations in All by default and in each Focus that opts in", () => {
+    const focuses = [focus(WORK, "a"), { ...focus(PERSONAL, "b"), includeConversations: true }];
+    expect(focusIncludesConversations(focuses, ALL_FOCUS_ID)).toBe(true);
+    expect(focusIncludesConversations(focuses, WORK)).toBe(false);
+    expect(focusIncludesConversations(focuses, PERSONAL)).toBe(true);
+    expect(focusIncludesConversations([], PERSONAL)).toBe(false);
+    expect(
+      focusIncludesConversations([{ ...focus(WORK, "a"), includeConversations: true }], WORK),
+    ).toBe(true);
+  });
+
   it("uses null for All and a project-key set for a user Focus", () => {
     const assignments = [assignment(WORK, WORK_PROJECT), assignment(PERSONAL, PERSONAL_PROJECT)];
 
@@ -86,6 +98,16 @@ describe("Focus project scoping", () => {
 });
 
 describe("Focus visibility", () => {
+  it("keeps conversation Focuses visible and selected when their projects are in another company", () => {
+    const focuses = [{ ...focus(WORK, "a"), includeConversations: true }];
+    const assignments = [assignment(WORK, WORK_PROJECT)];
+    const visibleProjectKeys = new Set([PERSONAL_PROJECT]);
+    expect(visibleFocuses({ focuses, assignments, visibleProjectKeys })).toEqual(focuses);
+    expect(
+      resolveActiveFocusId({ preferredId: WORK, focuses, assignments, visibleProjectKeys }),
+    ).toBe(WORK);
+  });
+
   it("shows an empty Focus and one with a company-visible assignment; hides assigned-but-invisible", () => {
     const assignments = [assignment(WORK, WORK_PROJECT)];
     const visibleProjectKeys: ReadonlySet<string> = new Set([PERSONAL_PROJECT]);
@@ -117,6 +139,42 @@ describe("Focus visibility", () => {
 });
 
 describe("Focus search grouping", () => {
+  it.each([ALL_FOCUS_ID, WORK, PERSONAL])(
+    "lists a conversation once with %s active despite membership in two Focuses",
+    (activeFocusId) => {
+      const focuses = [WORK, PERSONAL].map((id) => ({
+        ...focus(id, id),
+        includeConversations: true,
+      }));
+      const conversation = { id: "conversation", projectKey: null };
+      const projectThread = { id: "attached", projectKey: WORK_PROJECT };
+      const groups = groupSearchResultsByFocus({
+        results: [conversation, projectThread],
+        focuses,
+        assignments: [assignment(WORK, WORK_PROJECT)],
+        activeFocusId,
+        projectKey: (result) => result.projectKey,
+      });
+      expect(groups.flatMap((group) => group.results)).toHaveLength(2);
+      expect(groups.find((group) => group.results.includes(conversation))?.focusId).toBe(
+        activeFocusId,
+      );
+      expect(groups.find((group) => group.results.includes(projectThread))?.focusId).toBe(WORK);
+    },
+  );
+
+  it("keeps conversations under All when the active Focus does not include them", () => {
+    const groups = groupSearchResultsByFocus({
+      results: [{ projectKey: "scratch" }],
+      focuses: [focus(WORK, "a"), { ...focus(PERSONAL, "b"), includeConversations: true }],
+      assignments: [],
+      activeFocusId: WORK,
+      projectKey: (result) => result.projectKey,
+      isConversation: () => true,
+    });
+    expect(groups.map((group) => group.focusId)).toEqual([ALL_FOCUS_ID]);
+  });
+
   it("puts the active Focus first, preserves result order, and leaves unassigned under All", () => {
     const focuses = [focus(WORK, "a"), focus(PERSONAL, "b")];
     const assignments = [assignment(WORK, WORK_PROJECT), assignment(PERSONAL, PERSONAL_PROJECT)];

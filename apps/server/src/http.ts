@@ -3,6 +3,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
+  conversationShareIdFromSubject,
 } from "@spiritdevs/contracts";
 import { isDevProxiedPath } from "@spiritdevs/shared/devProxy";
 import { decodeOtlpTraceRecords } from "@spiritdevs/shared/observability";
@@ -201,7 +202,10 @@ const authenticateRawRouteWithScope = (
         failEnvironmentInternal("internal_error", error),
       ),
     );
-    if (!session.scopes.includes(scope)) {
+    if (
+      conversationShareIdFromSubject(session.subject) !== null ||
+      !session.scopes.includes(scope)
+    ) {
       return yield* failEnvironmentScopeRequired(scope);
     }
   });

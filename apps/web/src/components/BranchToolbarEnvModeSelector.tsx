@@ -93,7 +93,9 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
           />
         )}
         <span className="min-w-0 flex-1 truncate">
-          {workspaceDisplayName ?? resolveLockedWorkspaceLabel(activeWorktreePath)}
+          {effectiveEnvMode === "worktree" && !activeWorktreePath
+            ? resolveEnvModeLabel("worktree")
+            : (workspaceDisplayName ?? resolveLockedWorkspaceLabel(activeWorktreePath))}
         </span>
         {displayMode === "panel" ? (
           <span className="shrink-0 text-[10px] font-normal text-muted-foreground/70">

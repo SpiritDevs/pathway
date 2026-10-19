@@ -643,10 +643,13 @@ export function buildCodexTurnStartParams(input: {
       input.runtimePolicy.approvalPolicy === undefined
         ? runtimeModeDefaults.approvalPolicy
         : yield* decodeTurnApprovalPolicy(input.runtimePolicy.approvalPolicy);
-    const sandboxPolicy =
+    const baseSandboxPolicy =
       input.runtimePolicy.sandboxPolicy === undefined
         ? runtimeModeDefaults.sandboxPolicy
         : yield* decodeTurnSandboxPolicy(input.runtimePolicy.sandboxPolicy);
+    const sandboxPolicy = baseSandboxPolicy?.type === "workspaceWrite" && input.runtimePolicy.additionalDirectories !== undefined
+      ? { ...baseSandboxPolicy, writableRoots: [...new Set([...(baseSandboxPolicy.writableRoots ?? []), ...input.runtimePolicy.additionalDirectories])] }
+      : baseSandboxPolicy;
     const selected = resolveCodexTurnOptions(input.modelSelection, input.modelCapabilities);
     const effort =
       selected.effort === undefined ? undefined : yield* decodeTurnReasoningEffort(selected.effort);

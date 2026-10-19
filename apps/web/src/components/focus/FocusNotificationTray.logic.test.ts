@@ -84,6 +84,38 @@ describe("Focus notification labels", () => {
 });
 
 describe("Focus notification rows", () => {
+  it.each(["all", WORK, PERSONAL] as const)(
+    "shows each conversation event once with %s active when several Focuses include it",
+    (activeFocusId) => {
+      const groups = buildFocusNotificationRows({
+        notifications: [
+          notification("conversation", 30, { projectKey: null }),
+          notification("attached-project-thread", 20),
+        ],
+        unreadCount: 1,
+        focuses: [WORK_FOCUS, PERSONAL_FOCUS].map((focus) => ({
+          ...focus,
+          includeConversations: true,
+        })),
+        assignments: [{ focusId: WORK, projectKey: PROJECT }],
+        activeFocusId,
+        threadTitlesByKey: new Map(),
+        projectNamesByKey: new Map(),
+      });
+      const rows = groups.flatMap((group) => group.rows);
+      expect(rows).toHaveLength(2);
+      expect(rows.find((row) => row.notification.id === "conversation")).toMatchObject({
+        focusId: activeFocusId,
+        projectName: "Conversation",
+        unread: true,
+      });
+      expect(rows.find((row) => row.notification.id === "attached-project-thread")).toMatchObject({
+        focusId: WORK,
+        unread: false,
+      });
+    },
+  );
+
   it("keeps rows newest-first within groups and computes unread flags globally", () => {
     const groups = buildFocusNotificationRows({
       notifications: [

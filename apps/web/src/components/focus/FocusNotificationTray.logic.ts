@@ -1,6 +1,7 @@
 import { scopedThreadKey, scopeThreadRef } from "@spiritdevs/client-runtime/environment";
 import {
   ALL_FOCUS_ID,
+  focusIncludesConversations,
   sortFocuses,
   type ActiveFocusId,
 } from "@spiritdevs/client-runtime/state/focuses";
@@ -58,16 +59,24 @@ export function buildFocusNotificationRows(input: {
   readonly projectNamesByKey: ReadonlyMap<string, string>;
 }): ReadonlyArray<FocusNotificationGroupModel> {
   const orderedFocuses = sortFocuses(input.focuses);
-  const focusById = new Map(orderedFocuses.map((focus) => [focus.id, focus] as const));
+  const focusById = new Map<ActiveFocusId, Focus>(
+    orderedFocuses.map((focus) => [focus.id, focus] as const),
+  );
   const focusIdByProjectKey = new Map(
     input.assignments.map((assignment) => [assignment.projectKey, assignment.focusId] as const),
   );
   const unreadCount = Math.max(0, Math.trunc(input.unreadCount));
+  const conversationFocusId = focusIncludesConversations(input.focuses, input.activeFocusId)
+    ? input.activeFocusId
+    : ALL_FOCUS_ID;
 
   const rows = input.notifications
     .toSorted((left, right) => right.createdAt - left.createdAt || right.id.localeCompare(left.id))
     .map((notification, index) => {
-      const assignedFocusId = focusIdByProjectKey.get(notification.projectKey);
+      const assignedFocusId =
+        notification.projectKey === null
+          ? conversationFocusId
+          : focusIdByProjectKey.get(notification.projectKey);
       const focus = assignedFocusId === undefined ? undefined : focusById.get(assignedFocusId);
       return {
         notification,
@@ -77,8 +86,10 @@ export function buildFocusNotificationRows(input: {
             scopedThreadKey(scopeThreadRef(notification.environmentId, notification.threadId)),
           ) ?? truncatedId(notification.threadId),
         projectName:
-          input.projectNamesByKey.get(notification.projectKey) ??
-          truncatedId(projectIdFromKey(notification.projectKey)),
+          notification.projectKey === null
+            ? "Conversation"
+            : (input.projectNamesByKey.get(notification.projectKey) ??
+              truncatedId(projectIdFromKey(notification.projectKey))),
         focusId: focus?.id ?? ALL_FOCUS_ID,
         focusName: focus?.name ?? "All",
         unread: notification.isRead === undefined ? index < unreadCount : !notification.isRead,

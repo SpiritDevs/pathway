@@ -20,6 +20,7 @@ import {
 import { QuestionAnswerDelivery } from "./QuestionAnswerDelivery.ts";
 import { RunFinalizationService } from "./RunFinalizationService.ts";
 import { ResourceCleanupService } from "./ResourceCleanupService.ts";
+import { ProjectionStoreV2 } from "./ProjectionStore.ts";
 import {
   EffectOutboxV2,
   REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS,
@@ -94,6 +95,7 @@ export const executorLayer: Layer.Layer<
   Effect.gen(function* () {
     const runFinalization = yield* RunFinalizationService;
     const resourceCleanup = yield* ResourceCleanupService;
+    const projectionStore = yield* Effect.serviceOption(ProjectionStoreV2);
     const checkpointRollback = yield* CheckpointRollbackServiceV2;
     const providerSessions = yield* ProviderSessionManagerV2;
     const providerTurnControl = yield* ProviderTurnControlServiceV2;
@@ -329,6 +331,75 @@ export const executorLayer: Layer.Layer<
                   }),
               ),
             );
+          case "workspace.cleanup": {
+            const request = effect.request;
+            return Effect.gen(function* () {
+              if (
+                resourceCleanup.cleanupWorkspace === undefined ||
+                Option.isNone(projectionStore)
+              ) {
+                return yield* new OrchestrationEffectExecutionError({
+                  effectId: effect.id,
+                  effectType: request.type,
+                  cause: "Workspace cleanup is unavailable.",
+                });
+              }
+              yield* Effect.forEach(
+                request.providerSessionIds,
+                (providerSessionId) =>
+                  providerSessions.detach({
+                    providerSessionId,
+                    threadId: effect.threadId,
+                    revokeMcpCredential: true,
+                    detail: "Temporary thread deleted.",
+                  }),
+                { concurrency: 1, discard: true },
+              );
+              yield* resourceCleanup.cleanupTerminals(effect.threadId);
+              const shell = yield* projectionStore.value.getShellSnapshot();
+              const otherThreads = [...shell.threads, ...shell.archivedThreads].filter(
+                (thread) => thread.id !== effect.threadId && thread.deletedAt === null,
+              );
+              if (
+                request.worktreePath !== undefined &&
+                otherThreads.some((thread) => thread.worktreePath === request.worktreePath)
+              ) {
+                return yield* new OrchestrationEffectExecutionError({
+                  effectId: effect.id,
+                  effectType: request.type,
+                  cause: "Another thread is using this worktree; its files were kept.",
+                });
+              }
+              const conversationDirectory =
+                request.conversationDirectory !== undefined &&
+                !otherThreads.some(
+                  (thread) => thread.conversationDirectory === request.conversationDirectory,
+                )
+                  ? request.conversationDirectory
+                  : undefined;
+              yield* resourceCleanup.cleanupWorkspace({
+                threadId: effect.threadId,
+                projectId: request.projectId,
+                ...(conversationDirectory === undefined ? {} : { conversationDirectory }),
+                ...(request.worktreePath === undefined
+                  ? {}
+                  : { worktreePath: request.worktreePath }),
+                ...(request.discardChanges === undefined
+                  ? {}
+                  : { discardChanges: request.discardChanges }),
+                ...(request.ownedBranch === undefined ? {} : { ownedBranch: request.ownedBranch }),
+              });
+            }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationEffectExecutionError({
+                    effectId: effect.id,
+                    effectType: request.type,
+                    cause,
+                  }),
+              ),
+            );
+          }
           case "thread-title.generate":
             return threadTitleRegeneration
               .execute({

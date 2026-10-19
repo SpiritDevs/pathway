@@ -135,6 +135,40 @@ describe("Focus notifications", () => {
     );
   });
 
+  it("does not fan personal conversation events out through environment links", async () => {
+    const h = harness();
+    await seed(h, ["user-1", "user-2"]);
+    await expect(
+      h.relay.mutation(api.focusNotifications.record, {
+        ...event("personal"),
+        projectKey: null,
+      }),
+    ).resolves.toBe(0);
+    await expect(h.user.query(api.focusNotifications.list, {})).resolves.toEqual([]);
+    await expect(h.secondUser.query(api.focusNotifications.list, {})).resolves.toEqual([]);
+  });
+
+  it("delivers personal events only to the owner before shared discovery is published", async () => {
+    const h = harness();
+    await seed(h, ["user-1", "user-2"]);
+    await h.user.mutation(api.threadAlertPolicies.upsert, {
+      scopeKind: "global",
+      scopeKey: "global",
+      choices: { completion: true, permission: false, input: false, failure: false },
+    });
+    await expect(
+      h.relay.mutation(api.focusNotifications.record, {
+        ...event("owned-personal"),
+        projectKey: null,
+        ownerUserId: "user-1",
+      }),
+    ).resolves.toBe(1);
+    expect(await h.user.query(api.focusNotifications.list, {})).toEqual([
+      expect.objectContaining({ projectKey: null, alertEligibleAtCreation: true }),
+    ]);
+    expect(await h.secondUser.query(api.focusNotifications.list, {})).toEqual([]);
+  });
+
   it("stamps records from the transaction clock above the read watermark", async () => {
     const h = harness();
     await seed(h);

@@ -454,3 +454,16 @@ describe("canSettle", () => {
     expect(effectiveSettled(blocked, { now: NOW, autoSettleAfterDays: 3 })).toBe(false);
   });
 });
+
+
+describe("temporary thread settlement", () => {
+  it("keeps temporary threads visible until the environment accepts settlement", () => {
+    const shell = { ...makeShell({ activityAt: STALE }), temporary: true };
+    expect(effectiveSettled(shell, { now: NOW, autoSettleAfterDays: 1 })).toBe(false);
+    expect(effectiveSettled(shell, { now: NOW, autoSettleAfterDays: 1, changeRequestState: "merged" })).toBe(false);
+  });
+  it("restores normal inactivity settlement after Keep conversation", () => {
+    const shell = { ...makeShell({ activityAt: STALE }), temporary: false };
+    expect(effectiveSettled(shell, { now: NOW, autoSettleAfterDays: 1 })).toBe(true);
+  });
+});

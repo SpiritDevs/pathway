@@ -139,3 +139,18 @@ describe("buildThreadActionMenuItems", () => {
     expect(archiveItem?.disabled).toBe(true);
   });
 });
+
+it("offers Keep conversation without Force settle for temporary threads", () => {
+  const actions = ids({
+    ...baseState,
+    temporary: true,
+    supports: { ...baseState.supports, forceSettlement: true },
+  });
+  expect(actions).toContain("keep-conversation");
+  expect(actions).toContain("settle-after-completion");
+  expect(actions).not.toContain("force-settle");
+});
+
+it("limits view-only recipients to copying the thread identity", () => {
+  expect(ids({ ...baseState, readOnly: true, temporary: true })).toEqual(["copy-thread-id"]);
+});

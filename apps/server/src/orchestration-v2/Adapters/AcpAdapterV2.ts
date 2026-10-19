@@ -922,6 +922,11 @@ function acpWorkspaceWriteAllowsMutation(
     const canonicalCwd = acpCanonicalPathForContainment(cwd);
     if (canonicalCwd !== undefined) roots.push(canonicalCwd);
   }
+  for (const directory of runtimePolicy.additionalDirectories ?? []) {
+    const resolved = resolveAcpPermissionPath(directory, process.cwd());
+    const canonicalRoot = resolved === undefined ? undefined : acpCanonicalPathForContainment(resolved);
+    if (canonicalRoot !== undefined) roots.push(canonicalRoot);
+  }
   const writableRoots = sandboxPolicy.writableRoots;
   if (Array.isArray(writableRoots)) {
     for (const writableRoot of writableRoots) {

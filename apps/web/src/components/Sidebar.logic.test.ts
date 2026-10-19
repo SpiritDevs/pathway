@@ -2070,3 +2070,18 @@ describe("sortPinnedThreadsForSidebar", () => {
     expect(sorted.map((thread) => thread.id)).toEqual(["a", "b"]);
   });
 });
+
+describe("projectless conversation scopes", () => {
+  it("includes conversations in All and in opted-in Focuses", () => {
+    const conversation = makeThreadFixture({ projectId: null });
+    const project = makeThreadFixture({ id: ThreadId.make("project-thread") });
+    expect(filterSidebarV2VisibleThreads([conversation, project], null)).toEqual([
+      conversation,
+      project,
+    ]);
+    expect(filterSidebarV2VisibleThreads([conversation, project], new Set(), true)).toEqual([
+      conversation,
+    ]);
+    expect(filterSidebarV2VisibleThreads([conversation, project], new Set(), false)).toEqual([]);
+  });
+});

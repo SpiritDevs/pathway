@@ -20,6 +20,7 @@ export function selectSidebarDraftRows(input: {
   serverThreadKeys: ReadonlySet<string>;
   routeDraftId: string | null;
   scopedProjectKeys: ReadonlySet<string> | null;
+  includeConversations?: boolean;
   frozenActive: { routeDraftId: string | null; row: SidebarDraftRowData | null };
 }): SidebarDraftRowData[] {
   const rows: SidebarDraftRowData[] = [];
@@ -30,8 +31,10 @@ export function selectSidebarDraftRows(input: {
         scopedThreadKey(scopeThreadRef(session.environmentId, session.threadId)),
       ) ||
       !threadIsVisibleAt(session, "agents") ||
-      (input.scopedProjectKeys !== null &&
-        !input.scopedProjectKeys.has(`${session.environmentId}:${session.projectId}`))
+      (session.projectId === null
+        ? !(input.includeConversations ?? input.scopedProjectKeys === null)
+        : input.scopedProjectKeys !== null &&
+          !input.scopedProjectKeys.has(`${session.environmentId}:${session.projectId}`))
     ) {
       continue;
     }

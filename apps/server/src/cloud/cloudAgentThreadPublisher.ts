@@ -10,6 +10,7 @@ import {
 } from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
 import { ConvexError } from "convex/values";
+import { makeFunctionReference } from "convex/server";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
@@ -69,7 +70,7 @@ export function isUnpublishableAgentThreadRefusal(cause: unknown): boolean {
 }
 
 interface CloudAgentThreadPublisherOptions {
-  readonly companyId: CompanyId;
+  readonly companyId: CompanyId | null;
   readonly environmentId: EnvironmentId;
   readonly convexUrl: string;
   readonly tokens: ConvexServiceTokenProvider;
@@ -156,15 +157,33 @@ export const makeCloudAgentThreadPublisher = Effect.fn("cloud.agent_thread_publi
           const encoded = encodeCloudShell(cloudSafeThreadShell(shell));
           const identity = encodeCloudShellIdentity(cloudSafeThreadShell(shell));
           if ((yield* Ref.get(published)).get(shell.id) === identity) return;
+          if (shell.projectId === null) {
+            if (options.companyId !== null || shell.ownerUserId === undefined) return;
+            yield* authorized((convex) => convex.mutation(makeFunctionReference<"mutation">("conversationShares:upsert"), {
+              environmentId: options.environmentId, threadId: shell.id,
+              ownerUserId: shell.ownerUserId, shell: encoded,
+            }));
+            yield* Ref.update(published, (current) => new Map(current).set(shell.id, identity));
+            return;
+          }
+          if (options.companyId === null) {
+            yield* authorized((convex) => convex.mutation(makeFunctionReference<"mutation">("conversationShares:remove"), {
+              environmentId: options.environmentId, threadId: shell.id,
+            }));
+            yield* Ref.update(published, (current) => { const next = new Map(current); next.delete(shell.id); return next; });
+            return;
+          }
           const now = yield* Clock.currentTimeMillis;
           const nextProbeAt = (yield* Ref.get(parkedThreads)).get(shell.id);
           if (nextProbeAt !== undefined && now < nextProbeAt) return;
+          const projectId = shell.projectId;
+          const companyId = options.companyId;
           const outcome = yield* authorized((convex) =>
             convex.mutation(api.agentThreads.upsert, {
-              companyId: options.companyId,
+              companyId,
               environmentId: options.environmentId,
               threadId: shell.id,
-              localProjectId: shell.projectId,
+              localProjectId: projectId,
               shell: encoded,
             }),
           ).pipe(
@@ -177,17 +196,17 @@ export const makeCloudAgentThreadPublisher = Effect.fn("cloud.agent_thread_publi
           );
           if (outcome === "unbound") {
             const announced = yield* Ref.get(announcedUnboundProjects);
-            if (!announced.has(shell.projectId)) {
+            if (!announced.has(projectId)) {
               yield* Effect.logInfo(
                 "Cloud Agent Thread project has no active binding on this environment; its threads stay local until it is assigned",
                 {
                   companyId: options.companyId,
                   environmentId: options.environmentId,
-                  projectId: shell.projectId,
+                  projectId: projectId,
                 },
               );
               yield* Ref.update(announcedUnboundProjects, (current) =>
-                new Set(current).add(shell.projectId),
+                new Set(current).add(projectId),
               );
             }
             const until = now + Duration.toMillis(AGENT_THREAD_UNBOUND_PARK_INTERVAL);
@@ -205,30 +224,29 @@ export const makeCloudAgentThreadPublisher = Effect.fn("cloud.agent_thread_publi
       );
 
     const remove = (threadId: ThreadId) =>
-      authorized((convex) =>
-        convex.mutation(api.agentThreads.remove, {
-          companyId: options.companyId,
-          environmentId: options.environmentId,
-          threadId,
-        }),
-      ).pipe(
-        Effect.tap(() =>
-          Ref.update(published, (current) => {
-            const next = new Map(current);
-            next.delete(threadId);
-            return next;
+      authorized((convex) => options.companyId === null
+        ? convex.mutation(makeFunctionReference<"mutation">("conversationShares:remove"), {
+            environmentId: options.environmentId, threadId,
+          })
+        : convex.mutation(api.agentThreads.remove, {
+            companyId: options.companyId, environmentId: options.environmentId, threadId,
           }),
-        ),
+      ).pipe(
+        Effect.tap(() => Ref.update(published, (current) => {
+          const next = new Map(current); next.delete(threadId); return next;
+        })),
         Effect.asVoid,
       );
 
     const reconcileIds = (threadIds: ReadonlyArray<ThreadId>) =>
-      authorized((convex) =>
-        convex.mutation(api.agentThreads.reconcile, {
-          companyId: options.companyId,
-          environmentId: options.environmentId,
-          currentThreadIds: [...threadIds],
-        }),
+      authorized((convex) => options.companyId === null
+        ? convex.mutation(makeFunctionReference<"mutation">("conversationShares:reconcile"), {
+            environmentId: options.environmentId, threadIds: [...threadIds],
+          })
+        : convex.mutation(api.agentThreads.reconcile, {
+            companyId: options.companyId, environmentId: options.environmentId,
+            currentThreadIds: [...threadIds],
+          }),
       ).pipe(Effect.asVoid);
 
     return { publish, remove, reconcileIds } as const;
@@ -253,7 +271,9 @@ export const runCloudAgentThreadPublisher = Effect.fn("cloud.agent_thread_publis
 
     const reconcile = Effect.gen(function* () {
       const snapshot = yield* threads.getShellSnapshot();
-      const shells = [...snapshot.threads, ...snapshot.archivedThreads];
+      const shells = [...snapshot.threads, ...snapshot.archivedThreads].filter((shell) =>
+        options.companyId === null ? shell.projectId === null : shell.projectId !== null,
+      );
       // One unpublishable shell (a thread whose project binding was revoked,
       // a shell the deployed validator rejects) must not abort the cycle:
       // every other shell still publishes and stale removals below still run.
@@ -323,6 +343,9 @@ export const cloudAgentThreadPublisherLayer = (): Layer.Layer<
             secrets,
             dpopKeys,
           });
+          yield* runCloudAgentThreadPublisher({
+            companyId: null, environmentId, convexUrl: config.settings.convexUrl, tokens,
+          }).pipe(Effect.forkScoped);
           yield* superviseCloudSyncCompanies({
             discover: () =>
               discoverCloudSyncCompanyIds({

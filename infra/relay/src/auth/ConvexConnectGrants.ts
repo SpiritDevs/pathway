@@ -45,6 +45,12 @@ const make = Effect.gen(function* () {
         environmentId: result.environmentId,
         membershipId: result.membershipId,
         permission: result.permission,
+        ...(result.conversationShareId === undefined
+          ? {}
+          : { conversationShareId: result.conversationShareId }),
+        ...(result.conversationUserId === undefined
+          ? {}
+          : { conversationUserId: result.conversationUserId }),
       });
     }).pipe(
       Effect.catch(() =>

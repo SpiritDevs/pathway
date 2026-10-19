@@ -158,8 +158,12 @@ const makeRelayBroker = Effect.fn("clientRuntime.connection.broker.makeRelay")(f
           const clientEnvironmentId = yield* identity.environmentId.pipe(
             Effect.withSpan("relay.connection.environmentIdentity.resolve"),
           );
+          const connectGrant = target.conversationShareId === undefined ? undefined : session.conversationConnectGrant === undefined
+            ? yield* new ConnectionBlockedError({ reason: "configuration", detail: "Conversation sharing is not supported by this client." })
+            : yield* session.conversationConnectGrant(target.conversationShareId);
           const connected = yield* relay
             .connectEnvironment({
+              ...(connectGrant === undefined ? {} : { connectGrant }),
               clerkToken,
               scopes: [RelayEnvironmentConnectScope],
               environmentId: target.environmentId,

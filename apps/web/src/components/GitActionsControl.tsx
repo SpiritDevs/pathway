@@ -1531,6 +1531,7 @@ export default function GitActionsControl({
       syncThreadBranchAfterGitAction(actionResult);
       const warnsAboutLegacyAutoSettlement =
         activeServerThread !== null &&
+        !activeServerThread.temporary &&
         shouldWarnAboutLegacyPushAutoSettlement({
           capability: serverConfig?.environment.capabilities.pushAutoSettlement === true,
           result: actionResult,

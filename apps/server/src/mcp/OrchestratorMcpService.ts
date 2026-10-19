@@ -736,6 +736,9 @@ const make = Effect.gen(function* () {
         threadId === scope.threadId
           ? parent
           : yield* loadProjectThread(parent.thread.projectId, threadId);
+      if (parent.thread.projectId === null && target.thread.lineage.rootThreadId !== parent.thread.lineage.rootThreadId) {
+        return yield* failure("capability_denied", "A conversation can access only its own thread family.");
+      }
       return { parent, target } as const;
     });
 
@@ -1073,6 +1076,7 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         yield* requireCapability(scope);
         const parent = yield* loadProjection(scope.threadId);
+        if (parent.thread.projectId === null) return yield* failure("invalid_request", "Attach a project before scheduling work.");
         const bindToCurrentThread = input.bindToCurrentThread ?? true;
         const derivedTitle = input.prompt.split("\n")[0]?.trim() ?? "";
         const title =
@@ -1134,7 +1138,7 @@ const make = Effect.gen(function* () {
         yield* requireCapability(scope);
         const parent = yield* loadProjection(scope.threadId);
         const existing = yield* loadScopedScheduledTask(
-          parent.thread.projectId,
+          parent.thread.projectId ?? (yield* failure("invalid_request", "Attach a project before managing scheduled work.")),
           input.scheduledTaskId,
         );
         const threadId =
@@ -1179,7 +1183,7 @@ const make = Effect.gen(function* () {
         yield* requireCapability(scope);
         const parent = yield* loadProjection(scope.threadId);
         const existing = yield* loadScopedScheduledTask(
-          parent.thread.projectId,
+          parent.thread.projectId ?? (yield* failure("invalid_request", "Attach a project before managing scheduled work.")),
           input.scheduledTaskId,
         );
         yield* scheduledTasks
@@ -1626,6 +1630,7 @@ const make = Effect.gen(function* () {
         const statuses = input.statuses === undefined ? null : new Set(input.statuses);
         const titleContains = input.titleContains?.toLocaleLowerCase();
         const filtered = projectThreads
+          .filter((thread) => parent.thread.projectId !== null || thread.lineage.rootThreadId === parent.thread.lineage.rootThreadId)
           .filter(
             (thread) =>
               statuses === null || statuses.has(thread.activityRunStatus ?? thread.status),

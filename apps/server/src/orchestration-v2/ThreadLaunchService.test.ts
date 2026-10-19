@@ -1563,3 +1563,36 @@ for (const action of ["retry", "work_locally"] as const) {
       }),
   );
 }
+
+it.effect("temporary preparation cannot fall back to the shared project checkout", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const harness = makeHarness({
+      createWorktree: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const launched = yield* launches.launch({
+        ...launchInput({
+          command: "temporary:prepare",
+          thread: "temporary:prepare-thread",
+          message: "Work safely",
+          workspace: { type: "worktree", baseRef: "main" },
+        }),
+        temporary: true,
+      });
+      yield* Deferred.await(entered);
+      const error = yield* launches
+        .controlPreparation({
+          commandId: CommandId.make("temporary:work-locally"),
+          threadId: launched.threadId,
+          runId: launched.projection.runs[0]!.id,
+          action: "work_locally",
+        })
+        .pipe(Effect.flip);
+      assert.instanceOf(error, ThreadLaunch.ThreadLaunchError);
+      assert.include(String(error.cause), "dedicated worktree");
+      assert.equal(harness.removeWorktree.mock.calls.length, 0);
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);

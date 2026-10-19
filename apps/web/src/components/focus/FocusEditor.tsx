@@ -44,6 +44,9 @@ export function FocusEditor(props: {
   const [name, setName] = useState(focus?.name ?? "");
   const [iconName, setIconName] = useState(focus?.iconName ?? "Briefcase");
   const [accentColor, setAccentColor] = useState(focus?.accentColor ?? FOCUS_ACCENT_COLORS[0]);
+  const [includeConversations, setIncludeConversations] = useState(
+    focus?.includeConversations ?? false,
+  );
   const [selectedProjectKeys, setSelectedProjectKeys] = useState<ReadonlySet<FocusProjectKey>>(
     () =>
       new Set(
@@ -95,6 +98,7 @@ export function FocusEditor(props: {
           name: trimmedName,
           iconName,
           accentColor,
+          includeConversations,
           orderKey: focusOrderKeyAfter(ordered.at(-1)?.orderKey ?? null),
           projectKeys: [...selectedProjectKeys],
         });
@@ -104,6 +108,7 @@ export function FocusEditor(props: {
           name: trimmedName,
           iconName,
           accentColor,
+          includeConversations,
         });
         const currentlyAssigned = new Set(
           props.assignments
@@ -157,7 +162,7 @@ export function FocusEditor(props: {
           <h2 className="text-sm font-semibold text-foreground">
             {focus === null ? "Create Focus" : "Edit Focus"}
           </h2>
-          <p className="text-xs text-muted-foreground">Choose the projects that belong here.</p>
+          <p className="text-xs text-muted-foreground">Choose what belongs here.</p>
         </div>
       </div>
 
@@ -230,6 +235,20 @@ export function FocusEditor(props: {
       <fieldset className="grid min-h-0 gap-2">
         <legend className="text-xs font-medium text-foreground">Projects</legend>
         <div className="max-h-48 overflow-y-auto rounded-lg border border-border/70 p-1">
+          <label className="flex cursor-pointer items-start gap-2.5 rounded-md px-2 py-1.5 hover:bg-accent/70">
+            <Checkbox
+              className="mt-0.5"
+              checked={includeConversations}
+              disabled={saving}
+              onCheckedChange={(checked) => setIncludeConversations(checked === true)}
+            />
+            <span className="min-w-0 flex-1">
+              <span className="block text-xs font-medium text-foreground">Conversations</span>
+              <span className="block text-[10px] text-muted-foreground">
+                Personal conversations without a project, across all companies.
+              </span>
+            </span>
+          </label>
           {props.projects.length === 0 ? (
             <p className="px-2 py-4 text-center text-xs text-muted-foreground">
               No projects are visible in this company.

@@ -27,6 +27,7 @@ export class RelayConnectionTarget extends Schema.TaggedClass<RelayConnectionTar
   "RelayConnectionTarget",
   {
     ...ConnectionTargetBase,
+    conversationShareId: Schema.optional(Schema.String),
   },
 ) {}
 

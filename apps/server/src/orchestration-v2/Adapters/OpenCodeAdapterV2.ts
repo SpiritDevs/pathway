@@ -596,6 +596,9 @@ export function openCodePermissionRules(
   }
 
   if (!requiresApproval && sandboxType === "workspaceWrite") {
+    for (const root of runtimePolicy.additionalDirectories ?? []) {
+      rules.push({ permission: "external_directory", pattern: `${root.replace(/\/$/, "")}/*`, action: "allow" });
+    }
     const writableRoots = recordValue(sandboxPolicy, "writableRoots");
     if (Array.isArray(writableRoots)) {
       for (const root of writableRoots) {

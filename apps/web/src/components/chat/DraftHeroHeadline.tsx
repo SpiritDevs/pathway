@@ -3,12 +3,16 @@ import type { ScopedProjectRef } from "@spiritdevs/contracts";
 import { WorkspaceProjectSelector } from "./WorkspaceProjectSelector";
 
 interface DraftHeroHeadlineProps {
+  readonly conversation?: boolean;
+  readonly onSelectConversation?: () => void;
   readonly activeProjectRef: ScopedProjectRef | null;
   readonly activeProjectTitle: string | null;
   readonly onSelectProject: (projectRef: ScopedProjectRef) => void | Promise<void>;
 }
 
 export function DraftHeroHeadline({
+  conversation = false,
+  onSelectConversation,
   activeProjectRef,
   activeProjectTitle,
   onSelectProject,
@@ -16,6 +20,8 @@ export function DraftHeroHeadline({
   const hasResolvedProject = activeProjectTitle !== null;
   const projectSelector = (
     <WorkspaceProjectSelector
+      conversation={conversation}
+      onSelectConversation={onSelectConversation}
       activeProjectRef={activeProjectRef}
       activeProjectTitle={activeProjectTitle}
       ariaLabel={hasResolvedProject ? "Change project" : "Choose a project"}
@@ -26,7 +32,12 @@ export function DraftHeroHeadline({
 
   return (
     <h1 className="mx-auto w-full max-w-5xl text-center font-normal text-2xl text-foreground tracking-tight sm:text-3xl">
-      {hasResolvedProject ? (
+      {conversation ? (
+        <>
+          What would you like to discuss?{" "}
+          <span className="mt-3 block text-base">{projectSelector}</span>
+        </>
+      ) : hasResolvedProject ? (
         <>What should we build in {projectSelector}?</>
       ) : (
         <>{projectSelector} to start</>

@@ -104,6 +104,21 @@ describe("active Focus persistence", () => {
     ).toBe(WORK);
   });
 
+  it("keeps a conversation Focus selected across company selections", () => {
+    const { storage } = memoryStorage({ [activeFocusIdStorageKey("account-a")]: WORK });
+    expect(
+      readActiveFocusId({
+        scope: "account-a",
+        readModel: {
+          ...READ_MODEL,
+          focuses: READ_MODEL.focuses.map((focus) => ({ ...focus, includeConversations: true })),
+        },
+        visibleProjectKeys: new Set(),
+        storage,
+      }),
+    ).toBe(WORK);
+  });
+
   it("writes All explicitly and tolerates unavailable storage", () => {
     const { storage, values } = memoryStorage();
     expect(writeActiveFocusId({ scope: "account-a", activeFocusId: ALL_FOCUS_ID, storage })).toBe(

@@ -1,6 +1,5 @@
 import {
   parseScopedThreadKey,
-  scopeProjectRef,
   scopeThreadRef,
   scopedThreadKey,
 } from "@spiritdevs/client-runtime/environment";
@@ -47,6 +46,8 @@ import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { useClientSettings } from "./useSettings";
 import { useAtomCommand } from "../state/use-atom-command";
+import { requestConfirmDialog } from "../confirmDialog";
+import { useRightPanelStore } from "../rightPanelStore";
 
 export class ThreadArchiveBlockedError extends Schema.TaggedErrorClass<ThreadArchiveBlockedError>()(
   "ThreadArchiveBlockedError",
@@ -171,6 +172,15 @@ export function useMarkThreadUnread() {
 }
 
 export function useThreadActions() {
+  const keepThreadMutation = useAtomCommand(threadEnvironment.keep, { reportFailure: false });
+  const keepThread = useCallback(
+    (target: ScopedThreadRef) =>
+      keepThreadMutation({
+        environmentId: target.environmentId,
+        input: { threadId: target.threadId },
+      }),
+    [keepThreadMutation],
+  );
   const closeTerminal = useAtomCommand(terminalEnvironment.close);
   const archiveThreadMutation = useAtomCommand(threadEnvironment.archive, {
     reportFailure: false,
@@ -281,7 +291,10 @@ export function useThreadActions() {
 
       if (shouldNavigateToDraft) {
         const navigationResult = await settlePromise(() =>
-          handleNewThreadRef.current(scopeProjectRef(thread.environmentId, thread.projectId)),
+          handleNewThreadRef.current({
+            environmentId: thread.environmentId,
+            projectId: thread.projectId,
+          }),
         );
         if (navigationResult._tag === "Failure") {
           return navigationResult;
@@ -328,10 +341,13 @@ export function useThreadActions() {
         const shell = readThreadShell(ref);
         return shell === null ? [] : [shell];
       });
-      const threadProject = readProject({
-        environmentId: threadRef.environmentId,
-        projectId: thread.projectId,
-      });
+      const threadProject =
+        thread.projectId === null
+          ? null
+          : readProject({
+              environmentId: threadRef.environmentId,
+              projectId: thread.projectId,
+            });
       const deletedIds =
         opts.deletedThreadKeys && opts.deletedThreadKeys.size > 0
           ? new Set<ThreadId>(
@@ -352,7 +368,8 @@ export function useThreadActions() {
       const displayWorktreePath = orphanedWorktreePath
         ? formatWorktreePathForDisplay(orphanedWorktreePath)
         : null;
-      const canDeleteWorktree = orphanedWorktreePath !== null && threadProject !== null;
+      const canDeleteWorktree =
+        !thread.temporary && orphanedWorktreePath !== null && threadProject !== null;
       const localApi = readLocalApi();
       let shouldDeleteWorktree = false;
       if (canDeleteWorktree && localApi) {
@@ -407,7 +424,7 @@ export function useThreadActions() {
       releaseComposerDraftUploads(threadRef);
       clearComposerDraftForThread(threadRef);
       clearProjectDraftThreadById(
-        scopeProjectRef(threadRef.environmentId, thread.projectId),
+        { environmentId: threadRef.environmentId, projectId: thread.projectId },
         threadRef,
       );
       clearTerminalUiState(threadRef);
@@ -553,16 +570,45 @@ export function useThreadActions() {
         : null;
       // Settle is a high-frequency lifecycle action and stays silent — no
       // toast.
-      const result = await settleThreadMutation({
+      let result = await settleThreadMutation({
         environmentId: target.environmentId,
         input: { threadId: target.threadId, ...(opts.force ? { force: true } : {}) },
       });
+      if (result._tag === "Failure" && resolved?.thread.temporary) {
+        const error = squashAtomCommandFailure(result);
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes("TEMPORARY_UNFINISHED_WORK")) {
+          const discard = await requestConfirmDialog(
+            "Delete this temporary conversation?\nThere are uncommitted changes or unpushed commits. Review the work before deleting, or discard it permanently.",
+            {
+              variant: "destructive",
+              confirmLabel: "Discard and delete",
+              onReview: () => {
+                useRightPanelStore.getState().open(target, "diff");
+                void router.navigate({
+                  to: "/threads/$environmentId/$threadId",
+                  params: buildThreadRouteParams(target),
+                });
+              },
+            },
+          );
+          if (!discard) return AsyncResult.failure(Cause.interrupt());
+          result = await settleThreadMutation({
+            environmentId: target.environmentId,
+            input: {
+              threadId: target.threadId,
+              discardChanges: true,
+              ...(opts.force ? { force: true } : {}),
+            },
+          });
+        }
+      }
       if (result._tag === "Success" && wokeAt !== null) {
         markThreadVisited(scopedThreadKey(target), wokeAt);
       }
       return result;
     },
-    [markThreadVisited, resolveThreadTarget, settleThreadMutation],
+    [markThreadVisited, resolveThreadTarget, router, settleThreadMutation],
   );
 
   const unsettleThread = useCallback(
@@ -774,6 +820,7 @@ export function useThreadActions() {
       deleteThread,
       confirmAndDeleteThread,
       settleThread,
+      keepThread,
       setSettleAfterCompletion,
       unsettleThread,
       snoozeThread,
@@ -791,6 +838,7 @@ export function useThreadActions() {
       pinThread,
       reorderPinnedThread,
       settleThread,
+      keepThread,
       setSettleAfterCompletion,
       snoozeThread,
       unarchiveThread,

@@ -54,6 +54,8 @@ import { OrchestrationV2EventSinkLayerLive, OrchestrationV2LayerLive } from "./r
 import { shellStreamItemFromThreadShell } from "./ShellStream.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import { ThreadManagementService } from "./ThreadManagementService.ts";
+import { ResourceCleanupService } from "./ResourceCleanupService.ts";
+import { ThreadProjectAttachment } from "./ThreadProjectAttachment.ts";
 
 const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "pathway-orchestration-v2-runtime-layer-",
@@ -2377,6 +2379,269 @@ it.layer(SharedApplicationDataPlaneTestLayer)("shared application data plane", (
         result.matches.map((match) => [match.threadId, match.source]),
         [[threadId, "user"]],
       );
+    }),
+  );
+});
+
+const ConversationLifecycleLayer = TestLayer.pipe(
+  Layer.provide(
+    Layer.succeed(ResourceCleanupService, {
+      cleanupTerminals: () => Effect.void,
+      cleanupAttachments: () => Effect.void,
+      cleanupWorkspace: () => Effect.void,
+      checkTemporaryWorkspace: ({ threadId }) =>
+        Effect.succeed({
+          hasUncommittedChanges: threadId.includes("dirty"),
+          hasUnpushedCommits: threadId.includes("unpushed"),
+        }),
+    }),
+  ),
+  Layer.provide(
+    Layer.succeed(ThreadProjectAttachment, {
+      prepare: ({ thread }) =>
+        Effect.succeed({
+          branch: thread.temporary ? "pathway/conversation-attached" : "main",
+          worktreePath: thread.temporary ? "/tmp/conversation-attached-worktree" : null,
+        }),
+    }),
+  ),
+);
+
+it.layer(ConversationLifecycleLayer)("Conversation and temporary lifecycle", (it) => {
+  const create = (id: string, temporary = true) => ({
+    type: "thread.create" as const,
+    commandId: CommandId.make(`create:${id}`),
+    threadId: ThreadId.make(id),
+    projectId: null,
+    temporary,
+    title: "Conversation",
+    modelSelection,
+    runtimeMode: "full-access" as const,
+    interactionMode: "default" as const,
+    branch: null,
+    worktreePath: null,
+    createdBy: "user" as const,
+    creationSource: "web" as const,
+  });
+
+  it.effect("creates projectless storage and settles through durable deletion cleanup", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const outbox = yield* EffectOutboxV2;
+      const command = create("conversation-clean");
+      yield* orchestrator.dispatch(command);
+      const before = yield* orchestrator.getThreadProjection(command.threadId);
+      assert.isNull(before.thread.projectId);
+      assert.include(
+        before.thread.conversationDirectory!,
+        "/conversations/thread-conversation-clean",
+      );
+      const settleId = CommandId.make("settle:conversation-clean");
+      const settled = yield* orchestrator.dispatch({
+        type: "thread.settle",
+        commandId: settleId,
+        threadId: command.threadId,
+      });
+      assert.equal(settled.storedEvents[0]?.event.type, "thread.deleted");
+      assert.isNotNull(
+        (yield* orchestrator.getThreadProjection(command.threadId)).thread.deletedAt,
+      );
+      const effects = yield* outbox.listByCommandId(settleId);
+      const cleanup = effects.find((effect) => effect.request.type === "workspace.cleanup");
+      assert.isDefined(cleanup);
+      if (cleanup.request.type === "workspace.cleanup") {
+        assert.equal(cleanup.request.conversationDirectory, before.thread.conversationDirectory);
+        assert.isFalse(cleanup.request.discardChanges);
+      }
+    }),
+  );
+
+  it.effect("Keep preserves storage and makes settlement retain the conversation", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const command = create("conversation-kept");
+      yield* orchestrator.dispatch(command);
+      const before = yield* orchestrator.getThreadProjection(command.threadId);
+      yield* orchestrator.dispatch({
+        type: "thread.keep",
+        commandId: CommandId.make("keep:conversation-kept"),
+        threadId: command.threadId,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("settle:conversation-kept"),
+        threadId: command.threadId,
+      });
+      const after = yield* orchestrator.getThreadProjection(command.threadId);
+      assert.isFalse(after.thread.temporary);
+      assert.isNull(after.thread.deletedAt);
+      assert.equal(after.thread.settledOverride, "settled");
+      assert.equal(after.thread.conversationDirectory, before.thread.conversationDirectory);
+    }),
+  );
+
+  for (const unfinished of ["dirty", "unpushed"]) {
+    it.effect(`requires explicit discard for ${unfinished} work and blocks automatic discard`, () =>
+      Effect.gen(function* () {
+        const orchestrator = yield* OrchestratorV2;
+        const command = create(`conversation-${unfinished}`);
+        yield* orchestrator.dispatch(command);
+        const blocked = yield* orchestrator
+          .dispatch({
+            type: "thread.settle",
+            commandId: CommandId.make(`settle:${unfinished}`),
+            threadId: command.threadId,
+          })
+          .pipe(Effect.flip);
+        assert.instanceOf(blocked, OrchestratorDispatchError);
+        assert.include(blocked.message, "TEMPORARY_UNFINISHED_WORK");
+        yield* orchestrator
+          .dispatch({
+            type: "thread.settle",
+            commandId: CommandId.make(`automatic:${unfinished}`),
+            threadId: command.threadId,
+            automatic: true,
+            discardChanges: true,
+          })
+          .pipe(Effect.flip);
+        assert.isNull((yield* orchestrator.getThreadProjection(command.threadId)).thread.deletedAt);
+        yield* orchestrator.dispatch({
+          type: "thread.settle",
+          commandId: CommandId.make(`discard:${unfinished}`),
+          threadId: command.threadId,
+          discardChanges: true,
+        });
+        assert.isNotNull(
+          (yield* orchestrator.getThreadProjection(command.threadId)).thread.deletedAt,
+        );
+      }),
+    );
+  }
+
+  it.effect("attaches a project without changing identity, retention, or scratch storage", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const command = create("conversation-attach");
+      yield* orchestrator.dispatch(command);
+      const before = yield* orchestrator.getThreadProjection(command.threadId);
+      const projectId = ProjectId.make("conversation-selected-project");
+      yield* orchestrator.dispatch({
+        type: "thread.project.attach",
+        commandId: CommandId.make("attach:conversation"),
+        threadId: command.threadId,
+        projectId,
+      });
+      const after = yield* orchestrator.getThreadProjection(command.threadId);
+      assert.equal(after.thread.projectId, projectId);
+      assert.equal(after.thread.conversationDirectory, before.thread.conversationDirectory);
+      assert.equal(after.thread.worktreePath, "/tmp/conversation-attached-worktree");
+      assert.isTrue(after.thread.temporary);
+      yield* orchestrator
+        .dispatch({
+          type: "thread.project.attach",
+          commandId: CommandId.make("reattach:conversation"),
+          threadId: command.threadId,
+          projectId,
+        })
+        .pipe(Effect.flip);
+    }),
+  );
+
+  for (const status of ["completed", "failed"] as const) {
+    it.effect(
+      `settle after completion ${status === "completed" ? "deletes a successful" : "retains a failed"} temporary run`,
+      () =>
+        Effect.gen(function* () {
+          const orchestrator = yield* OrchestratorV2;
+          const eventSink = yield* EventSinkV2;
+          const command = create(`conversation-finish-${status}`);
+          yield* orchestrator.dispatch(command);
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make(`message:finish-${status}`),
+            threadId: command.threadId,
+            messageId: MessageId.make(`message:finish-${status}`),
+            text: "Prepare",
+            attachments: [],
+            dispatchMode: { type: "start_immediately" },
+            createdBy: "user",
+            creationSource: "web",
+          });
+          yield* orchestrator.dispatch({
+            type: "thread.settle-after-completion.set",
+            commandId: CommandId.make(`arm:finish-${status}`),
+            threadId: command.threadId,
+            enabled: true,
+          });
+          const before = yield* orchestrator.getThreadProjection(command.threadId);
+          const run = before.runs[0]!;
+          const deleted = yield* Queue.unbounded<void>();
+          const afterSequence = yield* orchestrator.getThreadEventSequence(command.threadId);
+          yield* eventSink.stream({ threadId: command.threadId, afterSequence }).pipe(
+            Stream.runForEach((stored) =>
+              stored.event.type === "thread.deleted"
+                ? Queue.offer(deleted, undefined)
+                : Effect.void,
+            ),
+            Effect.forkScoped,
+          );
+          const now = yield* DateTime.now;
+          yield* eventSink.write({
+            events: [
+              {
+                id: EventId.make(`finish:conversation-${status}`),
+                type: "run.updated",
+                threadId: command.threadId,
+                runId: run.id,
+                providerInstanceId: run.providerInstanceId,
+                occurredAt: now,
+                payload: { ...run, status, completedAt: now },
+              },
+            ],
+          });
+          if (status === "completed") yield* Queue.take(deleted);
+          else yield* orchestrator.resumeQueuedRuns;
+          const after = yield* orchestrator.getThreadProjection(command.threadId);
+          if (status === "completed") assert.isNotNull(after.thread.deletedAt);
+          else assert.isNull(after.thread.deletedAt);
+        }),
+    );
+  }
+
+  it.effect("rejects forced settlement and attachment during preparing work", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const command = create("conversation-busy");
+      yield* orchestrator.dispatch(command);
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("message:conversation-busy"),
+        threadId: command.threadId,
+        messageId: MessageId.make("message:conversation-busy"),
+        text: "Prepare",
+        attachments: [],
+        dispatchMode: { type: "defer_start" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      yield* orchestrator
+        .dispatch({
+          type: "thread.settle",
+          commandId: CommandId.make("force:conversation-busy"),
+          threadId: command.threadId,
+          force: true,
+          discardChanges: true,
+        })
+        .pipe(Effect.flip);
+      yield* orchestrator
+        .dispatch({
+          type: "thread.project.attach",
+          commandId: CommandId.make("attach:conversation-busy"),
+          threadId: command.threadId,
+          projectId: ProjectId.make("conversation-selected-project"),
+        })
+        .pipe(Effect.flip);
+      assert.isNull((yield* orchestrator.getThreadProjection(command.threadId)).thread.deletedAt);
     }),
   );
 });

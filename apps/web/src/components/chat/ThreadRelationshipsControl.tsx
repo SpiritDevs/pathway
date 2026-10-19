@@ -1,3 +1,4 @@
+import { useThreadActions } from "~/hooks/useThreadActions";
 import { scopedThreadKey, scopeThreadRef } from "@spiritdevs/client-runtime/environment";
 import {
   deriveThreadRelationshipGraph,
@@ -162,7 +163,7 @@ function useThreadRelationshipsModel(props: {
   }, [archivedShells, projection, props.environmentId, threadShells]);
   const navigate = useNavigate();
   const mergeBack = useAtomCommand(threadEnvironment.mergeBack);
-  const settleThread = useAtomCommand(threadEnvironment.settle);
+  const { settleThread } = useThreadActions();
   const stopSession = useAtomCommand(threadEnvironment.stopSession);
   const [busyAction, setBusyAction] = useState<"merge" | "detach" | null>(null);
   const [settlingThreadId, setSettlingThreadId] = useState<ThreadId | null>(null);
@@ -237,10 +238,7 @@ function useThreadRelationshipsModel(props: {
   const settleChat = async (threadId: ThreadId, kind: "manual" | "side_chat") => {
     if (settlingThreadId !== null) return;
     setSettlingThreadId(threadId);
-    const result = await settleThread({
-      environmentId: props.environmentId,
-      input: { threadId },
-    });
+    const result = await settleThread(scopeThreadRef(props.environmentId, threadId));
     setSettlingThreadId(null);
     if (result._tag === "Success" && kind === "side_chat") {
       useRightPanelStore.getState().closeSurface(ref, `thread:${threadId}`);

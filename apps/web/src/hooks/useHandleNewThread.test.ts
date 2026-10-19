@@ -23,6 +23,9 @@ vi.mock("@tanstack/react-router", () => ({
     navigate: mocks.navigate,
   }),
 }));
+vi.mock("../state/environments", () => ({
+  usePrimaryEnvironmentId: () => EnvironmentId.make("env-a"),
+}));
 vi.mock("../state/server", () => ({ primaryServerSettingsAtom: {} }));
 vi.mock("./useSettings", () => ({ useClientSettings: () => ({}) }));
 vi.mock("../state/entities", () => ({
@@ -66,6 +69,18 @@ describe("new-thread creation while project defaults load", () => {
 
   afterEach(() => {
     useComposerDraftStore.persist.clearStorage();
+  });
+
+  it("creates a projectless conversation without reading project workspace defaults", async () => {
+    const handler = createHandler();
+    const result = await handler({ environmentId: EnvironmentId.make("env-a"), projectId: null });
+    expect(result).not.toBeNull();
+    expect(mocks.readDefaults).not.toHaveBeenCalled();
+    expect(useComposerDraftStore.getState().getDraftSession(result!.draftId)).toMatchObject({
+      projectId: null,
+      envMode: "local",
+      worktreePath: null,
+    });
   });
 
   it("leaves the current message in the sidebar when New Thread starts a separate draft", async () => {

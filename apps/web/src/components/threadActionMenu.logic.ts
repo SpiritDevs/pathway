@@ -10,6 +10,7 @@ export type ThreadActionMenuId =
   | "new-thread-on-branch"
   | "pin"
   | "unpin"
+  | "keep-conversation"
   | "settle"
   | "force-settle"
   | "settle-after-completion"
@@ -27,6 +28,8 @@ export type ThreadActionMenuId =
   | "delete";
 
 export interface ThreadActionMenuState {
+  readonly temporary?: boolean;
+  readonly readOnly?: boolean;
   readonly branch: string | null;
   readonly isPinned: boolean;
   readonly isSettled: boolean;
@@ -56,8 +59,10 @@ export interface ThreadActionMenuState {
 export function buildThreadActionMenuItems(
   state: ThreadActionMenuState,
 ): ReadonlyArray<ContextMenuItem<ThreadActionMenuId>> {
+  if (state.readOnly) return [{ id: "copy-thread-id", label: "Copy thread ID", icon: "copy" }];
   return [
-    ...(state.branch
+    ...(state.temporary ? [{ id: "keep-conversation" as const, label: "Keep conversation" }] : []),
+    ...(state.branch && !state.temporary
       ? [
           {
             id: "new-thread-on-branch" as const,
@@ -82,7 +87,7 @@ export function buildThreadActionMenuItems(
             : { id: "settle" as const, label: "Settle thread" },
         ]
       : []),
-    ...(!state.isSettled && state.supports.forceSettlement
+    ...(!state.temporary && !state.isSettled && state.supports.forceSettlement
       ? [{ id: "force-settle" as const, label: "Force settle thread" }]
       : []),
     ...(!state.isSettled && state.supports.settleAfterCompletion

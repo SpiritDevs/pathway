@@ -212,6 +212,38 @@ export default defineSchema({
     .index("by_user", ["userId"])
     .index("by_user_id", ["userId", "id"]),
 
+  /** Personal discovery stays outside company replication. Transcripts stay on the environment. */
+  personalConversations: defineTable({
+    environmentId: v.string(),
+    threadId: v.string(),
+    ownerUserId: v.id("users"),
+    shell: v.any(),
+    updatedAt: v.number(),
+  })
+    .index("by_environment_and_thread", ["environmentId", "threadId"])
+    .index("by_environment", ["environmentId"])
+    .index("by_owner", ["ownerUserId"]),
+
+  conversationShares: defineTable({
+    conversationId: v.id("personalConversations"),
+    ownerUserId: v.id("users"),
+    recipientUserId: v.id("users"),
+    companyId: v.id("companies"),
+    access: v.union(v.literal("view"), v.literal("collaborate")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_conversation", ["conversationId"])
+    .index("by_recipient", ["recipientUserId"])
+    .index("by_conversation_and_recipient", ["conversationId", "recipientUserId"]),
+
+  conversationConnectGrants: defineTable({
+    shareId: v.id("conversationShares"),
+    tokenHash: v.string(),
+    expiresAt: v.number(),
+    consumedAt: v.union(v.number(), v.null()),
+  }).index("by_token_hash", ["tokenHash"]),
+
   /** Account-owned Agent Threads filters. Selection stays local to each client. */
   focuses: defineTable({
     id: domainId,
@@ -219,6 +251,7 @@ export default defineSchema({
     name: v.string(),
     iconName: v.string(),
     accentColor: v.string(),
+    includeConversations: v.optional(v.boolean()),
     orderKey: v.string(),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -266,7 +299,7 @@ export default defineSchema({
     environmentId: v.string(),
     environmentPublicKey: v.string(),
     threadId: v.string(),
-    projectKey: v.string(),
+    projectKey: v.union(v.string(), v.null()),
     eventKind: attentionEventKind,
     alertProjectKey: v.optional(v.string()),
     alertEligibleAtCreation: v.optional(v.boolean()),

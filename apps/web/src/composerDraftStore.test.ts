@@ -2470,3 +2470,49 @@ describe("createDebouncedJSONStorage", () => {
     });
   });
 });
+
+describe("conversation draft workspace", () => {
+  beforeEach(resetComposerDraftStore);
+
+  it("keeps content and identity when a temporary conversation gets a project", () => {
+    const draftId = DraftId.make("conversation-draft");
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(
+      { environmentId: TEST_ENVIRONMENT_ID, projectId: null },
+      draftId,
+      { temporary: true },
+    );
+    store.setPrompt(draftId, "Explore this idea");
+    const original = store.getDraftSession(draftId)!;
+    expect(original).toMatchObject({ projectId: null, temporary: true, envMode: "local" });
+    store.setProjectDraftThreadId(
+      { environmentId: TEST_ENVIRONMENT_ID, projectId: ProjectId.make("attached-project") },
+      draftId,
+    );
+    expect(store.getDraftSession(draftId)).toMatchObject({
+      threadId: original.threadId,
+      temporary: true,
+      envMode: "worktree",
+      worktreePath: null,
+    });
+    expect(store.getComposerDraft(draftId)?.prompt).toBe("Explore this idea");
+  });
+
+  it("locks the temporary choice while the first message is being sent", () => {
+    const draftId = DraftId.make("sending-conversation");
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(
+      { environmentId: TEST_ENVIRONMENT_ID, projectId: null },
+      draftId,
+      { temporary: true },
+    );
+    store.setDraftPendingSend(draftId, {
+      messageId: MessageId.make("first-message"),
+      text: "Hello",
+      title: "Hello",
+      createdAt: new Date().toISOString(),
+    });
+    store.setDraftThreadContext(draftId, { temporary: false });
+    expect(store.getDraftSession(draftId)?.temporary).toBe(true);
+  });
+});

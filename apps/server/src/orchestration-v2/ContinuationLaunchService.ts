@@ -226,6 +226,7 @@ export const make = Effect.gen(function* () {
       )(`Source run ${input.sourceRunId} is not completed.`);
     }
 
+    if (source.thread.projectId === null) return yield* mapError(input, "resolve-project")("Attach a project before launching a separate continuation workspace.");
     const project = yield* projects.getById(source.thread.projectId).pipe(
       Effect.mapError(mapError(input, "resolve-project")),
       Effect.flatMap(

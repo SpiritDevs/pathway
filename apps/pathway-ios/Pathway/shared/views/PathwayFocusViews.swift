@@ -8,6 +8,7 @@ struct PathwayFocusEditorView: View {
     @State private var name = ""
     @State private var color = "#6366f1"
     @State private var selectedProjects: Set<String> = []
+    @State private var includeConversations = false
     @State private var saving = false
     @State private var errorMessage: String?
     @State private var deleting = false
@@ -26,6 +27,7 @@ struct PathwayFocusEditorView: View {
                     }
                 }
                 Section("Projects") {
+                    Toggle("Conversations", systemImage: "bubble.left", isOn: $includeConversations)
                     ForEach(appModel.cloud.environmentBindings) { binding in
                         let key = "\(binding.binding.environmentId):\(binding.binding.localProjectId)"
                         Toggle(isOn: Binding(get: { selectedProjects.contains(key) }, set: { if $0 { selectedProjects.insert(key) } else { selectedProjects.remove(key) } })) {
@@ -46,6 +48,7 @@ struct PathwayFocusEditorView: View {
                 ToolbarItem(placement: .confirmationAction) { Button("Save") { Task { await save() } }.disabled(saving || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
             }
             .task {
+                includeConversations = focus?.includeConversations ?? false
                 name = focus?.name ?? ""; color = focus?.accentColor ?? "#6366f1"
                 selectedProjects = Set(model.assignments.filter { $0.focusId == focus?.id }.map(\.projectKey))
             }
@@ -68,7 +71,7 @@ struct PathwayFocusEditorView: View {
         saving = true; defer { saving = false }
         do {
             if let focus {
-                _ = try await appModel.cloud.request(kind: "mutation", name: "focuses:update", arguments: .object(["focusId": .string(focus.id), "name": .string(name), "accentColor": .string(color)]))
+                _ = try await appModel.cloud.request(kind: "mutation", name: "focuses:update", arguments: .object(["focusId": .string(focus.id), "name": .string(name), "accentColor": .string(color), "includeConversations": .bool(includeConversations)]))
                 let original = Set(model.assignments.filter { $0.focusId == focus.id }.map(\.projectKey))
                 for key in original.subtracting(selectedProjects).sorted() {
                     _ = try await appModel.cloud.request(kind: "mutation", name: "focuses:unassignProject", arguments: .object(["projectKey": .string(key)]))
@@ -79,7 +82,7 @@ struct PathwayFocusEditorView: View {
             } else {
                 _ = try await appModel.cloud.request(kind: "mutation", name: "focuses:create", arguments: .object([
                     "id": .string(UUID().uuidString.lowercased()), "name": .string(name), "iconName": .string("target"),
-                    "accentColor": .string(color), "projectKeys": .array(selectedProjects.sorted().map(JSONValue.string))
+                    "accentColor": .string(color), "includeConversations": .bool(includeConversations), "projectKeys": .array(selectedProjects.sorted().map(JSONValue.string))
                 ]))
             }
             dismiss()

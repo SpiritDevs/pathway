@@ -147,7 +147,7 @@ extension PathwayAgentThread {
         }
 
         if shell.settledOverride == "settled" { return true }
-        if shell.settledOverride == "active" { return false }
+        if shell.settledOverride == "active" || shell.temporary == true { return false }
         if changeRequestState == .merged { return true }
         if changeRequestState == .open || changeRequestState == .closed { return false }
         guard let autoSettleAfterDays, let latestActivityDate else { return false }

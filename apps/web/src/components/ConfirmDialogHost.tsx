@@ -64,6 +64,7 @@ export function ConfirmDialogHost() {
   const confirmVariant = state.status === "idle" ? "default" : state.variant;
   const onCancel = () => respondToConfirmDialog(false);
   const onConfirm = () => respondToConfirmDialog(true);
+  const actions = state.status === "idle" ? undefined : state.actions;
 
   return (
     <AlertDialog
@@ -86,8 +87,20 @@ export function ConfirmDialogHost() {
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+          {actions?.onReview ? (
+            <Button
+              variant="outline"
+              onClick={() => {
+                const review = actions.onReview;
+                respondToConfirmDialog(false);
+                review?.();
+              }}
+            >
+              {actions.reviewLabel ?? "Review changes"}
+            </Button>
+          ) : null}
           <Button variant={confirmVariant} onClick={onConfirm}>
-            Confirm
+            {actions?.confirmLabel ?? "Confirm"}
           </Button>
         </AlertDialogFooter>
       </AlertDialogPopup>

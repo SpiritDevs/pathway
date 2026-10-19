@@ -148,6 +148,8 @@ interface ActiveRemotePoller {
 
 interface StreamStatusOptions {
   readonly automaticRemoteRefreshInterval?: Effect.Effect<Duration.Duration, never>;
+  /** Server-owned lifecycle work must keep observing PR state without an open client. */
+  readonly runInBackground?: boolean;
 }
 
 export function remoteRefreshFailureDelay(
@@ -206,6 +208,7 @@ export const make = Effect.gen(function* () {
     Scope.close(scope, Exit.void),
   );
   const cacheRef = yield* Ref.make(new Map<string, CachedVcsStatus>());
+  const backgroundSubscribers = new Map<string, number>();
   const statusRefreshSequenceRef = yield* SynchronizedRef.make<StatusRefreshSequenceState>({
     latestLocalRefreshIdByCwd: new Map(),
     latestRemoteRefreshIdByCwd: new Map(),
@@ -540,6 +543,7 @@ export const make = Effect.gen(function* () {
         const demandCwds = yield* Ref.get(demandCwdsRef);
         const shouldRun =
           needsInitialRefresh ||
+          (backgroundSubscribers.get(cwd) ?? 0) > 0 ||
           (yield* Effect.all(
             [...demandCwds.keys()].map((demandCwd) =>
               backgroundPolicy.shouldRunScopeWork({
@@ -696,6 +700,19 @@ export const make = Effect.gen(function* () {
     Stream.unwrap(
       Effect.gen(function* () {
         const cwd = yield* withFileSystem(normalizeCwd(input.cwd));
+        if (options?.runInBackground === true) {
+          yield* Effect.acquireRelease(
+            Effect.sync(() =>
+              backgroundSubscribers.set(cwd, (backgroundSubscribers.get(cwd) ?? 0) + 1),
+            ),
+            () =>
+              Effect.sync(() => {
+                const remaining = (backgroundSubscribers.get(cwd) ?? 1) - 1;
+                if (remaining === 0) backgroundSubscribers.delete(cwd);
+                else backgroundSubscribers.set(cwd, remaining);
+              }),
+          );
+        }
         const subscription = yield* PubSub.subscribe(changesPubSub);
         const initialLocal = yield* getOrLoadLocalStatus(cwd);
         const cachedStatus = yield* getCachedStatus(cwd);

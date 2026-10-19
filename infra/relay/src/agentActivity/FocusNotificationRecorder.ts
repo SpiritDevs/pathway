@@ -49,6 +49,9 @@ export const make = Effect.gen(function* () {
           eventId: input.event.eventId,
           threadId: input.event.threadId,
           projectKey: input.event.projectKey,
+          ...(input.event.ownerUserId === undefined
+            ? {}
+            : { ownerUserId: input.event.ownerUserId }),
           eventKind: input.event.eventKind,
           ...(input.event.alertProjectKey !== undefined
             ? { alertProjectKey: input.event.alertProjectKey }
