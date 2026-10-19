@@ -287,6 +287,7 @@ describe("SETTINGS_NAV_GROUPS", () => {
       "/settings/appearance",
       "/settings/keybindings",
       "/settings/snap-shot",
+      "/settings/computer",
       "/settings/projects",
     ]);
     expect(searchSettings("projects")[0]).toMatchObject({
@@ -343,4 +344,22 @@ it("finds snapshot capture and metadata settings", () => {
     id: "snap-shot-accessibility",
     targetId: "snap-shot-enabled",
   });
+});
+
+it("finds Computer use settings by their Synara keywords", () => {
+  expect(searchSettings("open automatically")[0]?.id).toBe("computer-preview");
+  expect(searchSettings("approval gates")[0]).toMatchObject({
+    id: "computer-control",
+    title: "Computer control",
+    to: "/settings/computer",
+  });
+  expect(searchSettings("computer status")[0]).toMatchObject({
+    id: "computer-status",
+    targetId: "computer-control",
+  });
+  expect(searchSettings("who can use this computer")[0]?.id).toBe("computer-access-policy");
+  expect(searchSettings("computer autonomy")[0]?.id).toBe("computer-autonomy");
+  expect(
+    SETTINGS_NAV_GROUPS.filter((group) => group.paths.includes("/settings/computer")),
+  ).toHaveLength(1);
 });

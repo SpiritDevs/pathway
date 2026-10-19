@@ -274,10 +274,22 @@ final class PathwayAgentThreadModel {
     private(set) var runs: [PathwayThreadRun] = []
     private(set) var subagents: [PathwayThreadSubagent] = []
     private(set) var runtimeRequests: [JSONValue] = []
+    private(set) var approvalClaims: [String: String] = [:]
+    /// The environment's Computer access policy and this device's scopes there; nil while unknown.
+    var computerAccessPolicy: String?
+    var computerSessionScopes: Set<String>?
+    /// The thread's Computer control epoch, only while a watch has it confirmed on a live connection.
+    @ObservationIgnored var computerControlGeneration: Int?
+    /// Advances whenever this chat's connection ends or is replaced; fences Computer reads.
+    @ObservationIgnored var computerConnection = 0
+    /// Advances when a connection ends or settings change, so an older config read cannot land.
+    @ObservationIgnored var configRevision = 0
     private(set) var browserTakeover: [String: JSONValue]?
     private(set) var checkpoints: [JSONValue] = []
     private(set) var plans: [JSONValue] = []
     var isSending = false
+    /// An edit-and-restart is between its checks and its dispatch; Retry and Save wait for it.
+    private(set) var isRestartingMessage = false
     var activity: PathwayThreadActivity? {
         let run = runs.first { $0.id == activeRunID }
             ?? runs.first { $0.status == "queued" }
@@ -336,7 +348,9 @@ final class PathwayAgentThreadModel {
     @ObservationIgnored private var streamTask: Task<Void, Never>?
     @ObservationIgnored private var cacheWriteTask: Task<Void, Never>?
     @ObservationIgnored private var pendingCacheWrite: PathwayThreadCachePendingWrite?
-    @ObservationIgnored private var configTask: Task<Void, Never>?
+    @ObservationIgnored private(set) var configTask: Task<Void, Never>?
+    @ObservationIgnored private var settingsTask: Task<Void, Never>?
+    @ObservationIgnored private var settingsRPC: PathwayRPCClient?
     @ObservationIgnored private var lastSequence = 0
     @ObservationIgnored var childRoster: PathwayThreadSubagent?
     @ObservationIgnored var parentModelSelection: PathwayModelSelection?
@@ -372,13 +386,14 @@ final class PathwayAgentThreadModel {
     }
 
     isolated deinit {
-        streamTask?.cancel(); configTask?.cancel(); cacheWriteTask?.cancel(); draftWriteTask?.cancel()
+        streamTask?.cancel(); configTask?.cancel(); settingsTask?.cancel(); cacheWriteTask?.cancel(); draftWriteTask?.cancel()
         if let pendingDraftWrite, let draftStore { Task { try? await draftStore.save(pendingDraftWrite) } }
         if let pending = pendingCacheWrite {
             let cache = cache; let id = thread.id
             Task { await cache.save(items: pending.items, threadID: id, revision: pending.revision) }
         }
         if let rpc { Task { await rpc.stop() } }
+        if let settingsRPC { Task { await settingsRPC.stop() } }
     }
 
     func start() {
@@ -392,12 +407,29 @@ final class PathwayAgentThreadModel {
             }
             guard !Task.isCancelled else { return }
             let environment = environment
-            let rpc = PathwayRPCClient { try await connect.prepare(environment: environment).webSocketURL }
+            let rpc = PathwayRPCClient { [weak self] in
+                let connection = try await connect.prepare(environment: environment)
+                await self?.setComputerSessionScopes(connection.scopes)
+                return connection.webSocketURL
+            }
             self.rpc = rpc
-            configTask = Task { [weak self] in
-                if let value = try? await rpc.request("server.getConfig", payload: .object([:])) {
-                    self?.installServerConfig(value)
+            // Each RPC client owns one subscription; settings must not replace the thread stream.
+            let settingsRPC = PathwayRPCClient { try await connect.prepare(environment: environment).webSocketURL }
+            self.settingsRPC = settingsRPC
+            settingsTask = Task { @MainActor [weak self] in
+                do {
+                    for try await value in await settingsRPC.subscribe("subscribeServerConfig", payload: .object([:])) {
+                        guard !Task.isCancelled, let self else { return }
+                        if value.objectValue?["_pathwayTransport"] != nil { invalidateServerConfig() }
+                        else { applySubscriptionValue(value) }
+                    }
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    self?.invalidateServerConfig()
                 }
+            }
+            configTask = Task { [weak self] in
+                await self?.refreshServerConfig()
                 await self?.refreshParentRoster()
             }
             do {
@@ -412,12 +444,17 @@ final class PathwayAgentThreadModel {
 
     func stop() async {
         streamTask?.cancel(); streamTask = nil; configTask?.cancel(); configTask = nil
+        settingsTask?.cancel(); settingsTask = nil
         isSubscriptionReady = false
+        invalidateComputerConnection()
+        invalidateServerConfig()
         connectionState = items.isEmpty ? .idle : .cached
         await persistDraftNow()
         let previousRPC = rpc; rpc = nil
+        let previousSettingsRPC = settingsRPC; settingsRPC = nil
         let cacheWrite = takePendingCacheWrite()
         await previousRPC?.stop()
+        await previousSettingsRPC?.stop()
         if let cacheWrite { await cache.save(items: cacheWrite.items, threadID: thread.id, revision: cacheWrite.revision) }
     }
 
@@ -443,6 +480,8 @@ final class PathwayAgentThreadModel {
     }
 
     func send(mode: String = "queue") async {
+        // Keep the draft: the command still needs its task.
+        if PathwayComputerInvocation.isBare(draft), draftAttachments.isEmpty { actionError = PathwayComputerInvocation.bareCommandMessage; return }
         if let threadQueue {
             let retriesDirectSend = preparedSend?.attachmentsPrepared == true
                 && preparedSend?.text == draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -517,9 +556,10 @@ final class PathwayAgentThreadModel {
                 await persistDraftNow()
             }
             guard let prepared = preparedSend else { return }
+            let computer = try await computerFields(for: prepared.text)
             try await dispatch("message.dispatch", fields: ["commandId": .string(prepared.messageID), "createdBy": .string("user"), "creationSource": .string("mobile"),
                 "messageId": .string(prepared.messageID), "text": .string(prepared.text), "attachments": .array(prepared.attachments), "dispatchMode": prepared.dispatchMode,
-                "modelSelection": try Self.json(currentModelSelection), "runtimeMode": .string(runtimeMode), "interactionMode": .string(interactionMode)])
+                "modelSelection": try Self.json(currentModelSelection), "runtimeMode": .string(runtimeMode), "interactionMode": .string(interactionMode)].merging(computer) { $1 })
             if draft.trimmingCharacters(in: .whitespacesAndNewlines) == text { draft = "" }
             preparedSend = nil
             let sentIDs = Set(selected.map(\.id))
@@ -547,6 +587,7 @@ final class PathwayAgentThreadModel {
             var command = PathwayAgentThreadCommands.dispatchMessage(threadID: threadID, text: text,
                 hasActiveRun: true, identifier: preparedSend.messageID).objectValue ?? [:]
             command["modelSelection"] = try Self.json(currentModelSelection)
+            command.merge(try await computerFields(for: text, queued: true)) { $1 }
             if mode == "steer", let activeRunID {
                 command["dispatchMode"] = .object(["type": .string("steer_active"), "targetRunId": .string(activeRunID)])
             }
@@ -593,11 +634,22 @@ final class PathwayAgentThreadModel {
         }
     }
     func editLatestUserMessage(_ item: PathwayTimelineItem, text: String) async throws {
-        guard activeRunID == nil, canEdit(item), let messageID = item.messageID, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw PathwayThreadConversationError.message("Only the latest message can be edited after the agent stops.")
+        let notEditable = PathwayThreadConversationError.message("Only the latest message can be edited after the agent stops.")
+        guard !isRestartingMessage else { throw PathwayThreadConversationError.message("This message is already restarting.") }
+        // The restarted message keeps the original's attachments, so those still count as the task.
+        if PathwayComputerInvocation.isBare(text), item.attachments.isEmpty {
+            throw PathwayThreadConversationError.message(PathwayComputerInvocation.bareCommandMessage)
         }
+        guard activeRunID == nil, canEdit(item), let messageID = item.messageID, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw notEditable
+        }
+        isRestartingMessage = true
+        defer { isRestartingMessage = false }
+        let computer = try await computerFields(for: text)
+        guard activeRunID == nil, canEdit(item) else { throw notEditable }
         try await dispatch("message.edit-and-restart", fields: ["createdBy": .string("user"), "creationSource": .string("mobile"),
-            "messageId": .string(messageID), "replacementMessageId": .string(UUID().uuidString), "text": .string(Self.preservingMessageContext(original: item.text ?? "", edited: text))])
+            "messageId": .string(messageID), "replacementMessageId": .string(UUID().uuidString),
+            "text": .string(Self.preservingMessageContext(original: item.text ?? "", edited: text))].merging(computer) { $1 })
     }
     func fork(from item: PathwayTimelineItem? = nil) async throws -> String {
         guard !thread.shell.isTemporary else {
@@ -698,9 +750,29 @@ final class PathwayAgentThreadModel {
         if !isSubscriptionReady { return "Reconnect and wait for the latest thread state before responding." }
         return canRespond(to: item) ? nil : "This request is no longer connected to a live agent."
     }
+    /// One response attempt of a request: its id plus the live provider session the
+    /// answer goes to, so a request re-posted to a new session can be answered again.
+    func approvalAttemptKey(requestID: String) -> String {
+        let capability = runtimeRequests.first { $0.objectValue?["id"]?.stringValue == requestID }?
+            .objectValue?["responseCapability"]?.objectValue
+        let session = capability?["type"]?.stringValue == "live" ? capability?["providerSessionId"]?.stringValue : nil
+        return "\(requestID)|\(session ?? "")"
+    }
+    func hasAnsweredApproval(_ item: PathwayTimelineItem) -> Bool {
+        guard let requestID = item.requestID else { return false }
+        return approvalClaims[requestID] == approvalAttemptKey(requestID: requestID)
+    }
+    /// Sends one decision per response attempt. Only a sent response keeps the claim;
+    /// a failed send, or one a local guard refused, releases it so the user can retry.
     func respondToApproval(requestID: String, decision: String) async {
+        let key = approvalAttemptKey(requestID: requestID)
+        guard approvalClaims[requestID] != key else { return }
+        approvalClaims[requestID] = key
         do { try await respond(requestID: requestID, fields: ["decision": .string(decision)]) }
-        catch { actionError = error.localizedDescription }
+        catch {
+            if approvalClaims[requestID] == key { approvalClaims[requestID] = nil }
+            actionError = error.localizedDescription
+        }
     }
     func respondToQuestion(requestID: String, questionID: String, answer: String) async {
         do { try await respondToQuestions(requestID: requestID, answers: [questionID: .string(answer)]) }
@@ -833,10 +905,27 @@ final class PathwayAgentThreadModel {
     }
     func applySubscriptionValue(_ value: JSONValue) {
         guard let object = value.objectValue else { return }
-        if object["_pathwayTransport"] != nil {
+        if let transport = object["_pathwayTransport"] {
+            // Every pending request fails when a socket drops, so a success still in flight came from the old one.
+            if transport.stringValue == "disconnected" { invalidateServerConfig() }
+            computerAccessPolicy = nil
             isSubscriptionReady = false
+            invalidateComputerConnection()
             connectionState = items.isEmpty ? .connecting : .cached
             return
+        }
+        switch object["type"]?.stringValue {
+        case "snapshot":
+            invalidateServerConfig()
+            if let config = object["config"] { installServerConfig(config) }
+            return
+        case "settingsUpdated", "configUpdated":
+            invalidateServerConfig()
+            var config = serverConfig
+            for (key, value) in object["payload"]?.objectValue ?? [:] { config[key] = value }
+            installServerConfig(.object(config))
+            return
+        default: break
         }
         switch object["kind"]?.stringValue {
         case "snapshot": if let projection = object["projection"] { installSnapshot(projection, sequence: object["snapshotSequence"]?.intValue ?? 0) }
@@ -880,9 +969,19 @@ final class PathwayAgentThreadModel {
                 reconcileQuestionAttachments()
             }
             if isSubscriptionReady { connectionState = .live }
-        case "synchronized": isSubscriptionReady = true; connectionState = .live
+        case "synchronized":
+            isSubscriptionReady = true; connectionState = .live
+            configTask?.cancel()
+            configTask = Task { [weak self] in
+                await self?.refreshServerConfig()
+                await self?.refreshParentRoster()
+            }
         default: break
         }
+    }
+    private func invalidateServerConfig() {
+        configRevision += 1
+        computerAccessPolicy = nil
     }
     private func applyThread(_ value: JSONValue?) {
         guard let object = value?.objectValue else { return }

@@ -33,7 +33,6 @@ import {
   exportSnapShot,
   decodeSnapShotExportImage,
   setSnapShotAccount,
-  watchSnapShotAccountRenderer,
   requestSnapShotPermissions,
   setupSnapShot,
   previewSnapShotConfig,
@@ -43,6 +42,7 @@ import {
   snapShotScreenFrame,
   snapShotRelativeFrame,
 } from "./snapShot.ts";
+import { watchRendererLifetime } from "../watchRendererLifetime.ts";
 
 describe("window capture IPC", () => {
   it.effect("forwards an explicitly selected capture type only from the trusted renderer", () => {
@@ -140,12 +140,9 @@ describe("window capture IPC", () => {
   it("revokes the account on full navigation, renderer crash, and destruction", () => {
     const renderer = new NodeEvents.EventEmitter();
     let revocations = 0;
-    const dispose = watchSnapShotAccountRenderer(
-      renderer as unknown as Electron.WebContents,
-      () => {
-        revocations++;
-      },
-    );
+    const dispose = watchRendererLifetime(renderer as unknown as Electron.WebContents, () => {
+      revocations++;
+    });
     renderer.emit("did-start-navigation", {}, "https://app/login", true, true);
     renderer.emit("did-start-navigation", {}, "https://embedded.test", false, false);
     assert.equal(revocations, 0);

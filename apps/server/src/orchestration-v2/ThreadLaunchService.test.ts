@@ -30,8 +30,10 @@ import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.t
 import { makeProviderRegistryLayer } from "../provider/testUtils/providerRegistryMock.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
+import { computerClearance } from "../computer/computerAccessPolicy.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
+import { ComputerDispatchAccess } from "./ComputerDispatchAccess.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as IdAllocator from "./IdAllocator.ts";
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
@@ -218,6 +220,8 @@ function launchInput(input: {
   readonly command: string;
   readonly thread: string;
   readonly message?: string;
+  readonly enableComputerControl?: boolean;
+  readonly computerControlGeneration?: number;
   readonly workspace?: ThreadLaunch.ThreadLaunchWorkspaceStrategy;
 }) {
   return {
@@ -236,6 +240,12 @@ function launchInput(input: {
             messageId: MessageId.make(`${input.message}:id`),
             text: input.message,
             attachments: [],
+            ...(input.enableComputerControl === undefined
+              ? {}
+              : { enableComputerControl: input.enableComputerControl }),
+            ...(input.computerControlGeneration === undefined
+              ? {}
+              : { computerControlGeneration: input.computerControlGeneration }),
           },
         }),
     createdBy: "user" as const,
@@ -273,6 +283,118 @@ it.effect("persists the views selected for a launched thread", () =>
       const projection = yield* threads.getThreadProjection(launched.threadId);
 
       assert.deepEqual(projection.thread.locations, ["issues"]);
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("refuses a launch that asks for Computer when the caller fails the access policy", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness({
+      serverSettings: {
+        computer: { ...DEFAULT_SERVER_SETTINGS.computer, accessPolicy: "admins-only" },
+      },
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const operator = {
+        clearance: computerClearance("admins-only", ["orchestration:operate"]),
+      };
+      const refused = yield* launches
+        .launch(
+          launchInput({
+            command: "command:launch:computer-policy",
+            thread: "thread:launch:computer-policy",
+            message: "/computer-use Open Calculator",
+          }),
+        )
+        .pipe(Effect.provideService(ComputerDispatchAccess, operator), Effect.exit);
+
+      assert.isTrue(Exit.isFailure(refused));
+      const projection = yield* threads.getThreadProjection(
+        ThreadId.make("thread:launch:computer-policy"),
+      );
+      assert.isEmpty(projection.runs);
+
+      const plain = yield* launches
+        .launch(
+          launchInput({
+            command: "command:launch:computer-policy-plain",
+            thread: "thread:launch:computer-policy-plain",
+            message: "Open Calculator",
+          }),
+        )
+        .pipe(Effect.provideService(ComputerDispatchAccess, operator));
+      assert.lengthOf((yield* threads.getThreadProjection(plain.threadId)).runs, 1);
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("refuses a launch that asks for Computer when no edge said who is sending", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness();
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const refused = yield* launches
+        .launch(
+          launchInput({
+            command: "command:launch:computer-unprovided",
+            thread: "thread:launch:computer-unprovided",
+            message: "/computer-use Open Calculator",
+          }),
+        )
+        .pipe(Effect.exit);
+      assert.isTrue(Exit.isFailure(refused));
+      assert.isEmpty(
+        (yield* threads.getThreadProjection(ThreadId.make("thread:launch:computer-unprovided")))
+          .runs,
+      );
+
+      const served = yield* launches
+        .launch(
+          launchInput({
+            command: "command:launch:computer-server",
+            thread: "thread:launch:computer-server",
+            message: "/computer-use Open Calculator",
+          }),
+        )
+        .pipe(Effect.provideService(ComputerDispatchAccess, ComputerDispatchAccess.server));
+      const [run] = (yield* threads.getThreadProjection(served.threadId)).runs;
+      assert.strictEqual(run?.computerControl?.clearance, "admins-only");
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("arms chat-mode Computer for a first message sent with the chat setting on", () =>
+  Effect.gen(function* () {
+    const dispatched: Array<import("@spiritdevs/contracts").OrchestrationV2Command> = [];
+    const harness = makeHarness({
+      onDispatch: (command) => Effect.sync(() => void dispatched.push(command)),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const launched = yield* launches
+        .launch(
+          launchInput({
+            command: "command:launch:computer-chat",
+            thread: "thread:launch:computer-chat",
+            message: "Open Calculator",
+            enableComputerControl: true,
+            computerControlGeneration: 4,
+          }),
+        )
+        .pipe(
+          Effect.provideService(ComputerDispatchAccess, {
+            clearance: computerClearance("scoped", ["orchestration:operate", "computer:operate"]),
+          }),
+        );
+
+      const message = dispatched.find((command) => command.type === "message.dispatch");
+      assert.deepInclude(message, { enableComputerControl: true, computerControlGeneration: 4 });
+      const [run] = (yield* threads.getThreadProjection(launched.threadId)).runs;
+      assert.strictEqual(run?.computerControl?.mode, "chat");
     }).pipe(Effect.provide(harness.layer));
   }),
 );
