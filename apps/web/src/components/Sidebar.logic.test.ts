@@ -24,6 +24,7 @@ import {
   isSidebarSubagentThread,
   isTrailingDoubleClick,
   mergeActiveThreadOrderPreference,
+  retainSameKeys,
   orderItemsByPreferredIds,
   pinOrderKeyBetween,
   planPinnedReorder,
@@ -618,6 +619,18 @@ describe("shouldClearThreadSelectionOnMouseDown", () => {
     } as unknown as HTMLElement;
 
     expect(shouldClearThreadSelectionOnMouseDown(unrelated)).toBe(true);
+  });
+});
+
+describe("retainSameKeys", () => {
+  it("keeps the sortable items identity until the keys or their order change", () => {
+    const keys = Array.from({ length: 1_000 }, (_, index) => `thread-${index}`);
+    // A route switch or minute tick rebuilds an equal key list.
+    expect(retainSameKeys(keys, [...keys])).toBe(keys);
+    const reordered = [keys[1]!, keys[0]!, ...keys.slice(2)];
+    expect(retainSameKeys(keys, reordered)).toBe(reordered);
+    const shorter = keys.slice(1);
+    expect(retainSameKeys(keys, shorter)).toBe(shorter);
   });
 });
 

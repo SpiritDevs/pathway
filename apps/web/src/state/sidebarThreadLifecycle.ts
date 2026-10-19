@@ -236,15 +236,22 @@ export function updateSidebarChangeRequest(
   failed = false,
 ): ReadonlyMap<string, ThreadChangeRequestState> {
   const previous = current.get(key);
-  if (
-    previous?.source === value.source &&
-    (failed ||
-      (previous.state === value.state &&
-        (previous.presentation === value.presentation ||
-          JSON.stringify(previous.presentation) === JSON.stringify(value.presentation)) &&
-        value.checkedAt === undefined))
-  )
-    return current;
+  if (previous?.source === value.source) {
+    if (failed) return current;
+    if (
+      previous.state === value.state &&
+      // The background pass reports state alone, leaving the row's last badge inputs in place.
+      (value.presentation === undefined ||
+        previous.presentation === value.presentation ||
+        JSON.stringify(previous.presentation) === JSON.stringify(value.presentation))
+    ) {
+      // Freshness changes neither section nor badge. Advancing it in place keeps an unchanged pass
+      // from copying the map once per thread and repartitioning the sidebar; the atom write that
+      // follows still persists it.
+      if (value.checkedAt !== undefined) previous.checkedAt = value.checkedAt;
+      return current;
+    }
+  }
   return new Map(current).set(key, {
     ...value,
     checkedAt: failed ? undefined : (value.checkedAt ?? Date.now()),

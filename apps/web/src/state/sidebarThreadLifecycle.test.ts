@@ -429,6 +429,45 @@ it("retains freshness across cache reads and errors, and advances it on successf
   }
 });
 
+it("advances freshness for a large unchanged pass in place and persists it", async () => {
+  vi.useFakeTimers();
+  const { storage } = memoryStorage();
+  vi.stubGlobal("window", { localStorage: storage });
+  const registry = AtomRegistry.make();
+  const scope = JSON.stringify(["account-a", "freshness-company"]);
+  const atom = sidebarThreadChangeRequestsAtom(scope);
+  const stop = registry.subscribe(atom, () => {});
+  const keys = Array.from({ length: 1_000 }, (_, index) => `thread-${index}`);
+  const presentation = { branchPullRequest: null, attachedDetails: [], provider: undefined };
+  try {
+    setManagedRelaySession(registry, { accountId: "account-a", readClerkToken: async () => null });
+    const states = new Map(keys.map((item) => [item, { ...merged, checkedAt: 1, presentation }]));
+    registry.set(atom, states);
+    const notified = vi.fn();
+    const unsubscribe = registry.subscribe(atom, notified);
+    // Background answers carry state alone; they keep the row's badge inputs.
+    for (const item of keys)
+      registry.set(atom, updateSidebarChangeRequest(registry.get(atom), item, { ...merged, checkedAt: 2 }));
+    unsubscribe();
+    expect(registry.get(atom)).toBe(states);
+    expect(notified).not.toHaveBeenCalled();
+    expect(states.get(keys[0]!)?.presentation).toBe(presentation);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const persisted = readSidebarChangeRequests(scope, storage);
+    expect(persisted.size).toBe(keys.length);
+    expect([...persisted.values()].every((value) => value.checkedAt === 2)).toBe(true);
+    // A real change still publishes a new map.
+    const reopened = updateSidebarChangeRequest(states, keys[0]!, { ...merged, state: "open", checkedAt: 3 });
+    expect(reopened).not.toBe(states);
+    expect(reopened.get(keys[0]!)?.state).toBe("open");
+  } finally {
+    stop();
+    registry.dispose();
+    clearSidebarChangeRequests("account-a");
+    vi.unstubAllGlobals();
+  }
+});
+
 it("retains badge inputs across navigation and refresh errors, and updates checks without changing classification", () => {
   const presentation: NonNullable<ThreadChangeRequestState["presentation"]> = {
     branchPullRequest: {

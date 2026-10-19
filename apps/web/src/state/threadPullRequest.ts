@@ -97,8 +97,11 @@ export function threadPullRequestBadgeDetail(
 export interface ThreadChangeRequestState {
   readonly source: string;
   readonly state: "open" | "closed" | "merged" | null;
-  /** Last conclusive classification check; retained across sidebar navigation. */
-  readonly checkedAt?: number | undefined;
+  /**
+   * Last conclusive classification check; retained across sidebar navigation. Mutable: an
+   * unchanged answer advances it in place (see `updateSidebarChangeRequest`).
+   */
+  checkedAt?: number | undefined;
   /** Last successful badge inputs, retained without keeping status queries mounted. */
   readonly presentation?: {
     readonly branchPullRequest: VcsStatusResult["pr"];
