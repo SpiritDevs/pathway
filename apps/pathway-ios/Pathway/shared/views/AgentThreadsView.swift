@@ -1659,7 +1659,8 @@ struct AgentThreadConversationView: View {
         }
         Button("Fork thread", systemImage: "arrow.triangle.branch") { fork() }.disabled(isForking || actionThread.shell.isTemporary)
         if actionThread.shell.isTemporary { Text("Keep conversation before forking or starting a side chat.") }
-        Button("Copy conversation", systemImage: "doc.on.doc") {
+        // Long threads load their history as the reader scrolls; say when the copy is partial.
+        Button(model.history?.hasOlder == true ? "Copy loaded messages" : "Copy conversation", systemImage: "doc.on.doc") {
             UIPasteboard.general.string = model.transcriptItems.filter(\.isConversation).compactMap(\.text).joined(separator: "\n\n")
         }
         if let path = actionThread.shell.worktreePath ?? currentWorkspaceRoot {
@@ -1747,7 +1748,9 @@ struct AgentThreadConversationView: View {
                     dismiss()
                 } else {
                     // A refresh failure must not roll back a command the server accepted.
-                    if let projection = try? await model.request("orchestration.getThreadProjection",
+                    if let page = await model.latestHistoryPage(threadID: model.threadID)?.objectValue, let projection = page["projection"] {
+                        model.installSnapshot(projection, history: page["history"])
+                    } else if let projection = try? await model.request("orchestration.getThreadProjection",
                         payload: .object(["threadId": .string(model.threadID)]), reportsErrors: false) {
                         model.installSnapshot(projection)
                     }

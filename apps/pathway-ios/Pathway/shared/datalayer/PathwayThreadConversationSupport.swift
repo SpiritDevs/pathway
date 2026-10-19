@@ -126,8 +126,16 @@ extension PathwayAgentThreadModel {
                                      showsInteractionMode: object["showInteractionModeToggle"]?.boolValue ?? false, unavailableReason: reason)
     }
 
+    /// The latest page of a thread, or nil when the environment can't serve one.
+    func latestHistoryPage(threadID: String) async -> JSONValue? {
+        try? await historyPageLoader?(threadID, PathwayThreadHistory.latestPageLimit, nil)
+    }
+
     func makeChildModel(threadID: String) async throws -> PathwayAgentThreadModel {
-        let projection = try await request("orchestration.getThreadProjection", payload: .object(["threadId": .string(threadID)]))
+        let page = await latestHistoryPage(threadID: threadID)?.objectValue
+        let projection: JSONValue
+        if let paged = page?["projection"] { projection = paged }
+        else { projection = try await request("orchestration.getThreadProjection", payload: .object(["threadId": .string(threadID)])) }
         guard var raw = projection.objectValue?["thread"]?.objectValue, raw["id"]?.stringValue == threadID else {
             throw PathwayThreadConversationError.message("The thread could not be found in this environment.")
         }
@@ -142,7 +150,7 @@ extension PathwayAgentThreadModel {
         else if let injectedRequest { model = PathwayAgentThreadModel(thread: child, environment: environment, request: injectedRequest) }
         else { throw PathwayThreadConversationError.message("Connect to the environment to open this thread.") }
         model.threadQueue = threadQueue
-        model.installSnapshot(projection)
+        model.installSnapshot(projection, history: page?["history"])
         model.providers = providers
         model.supportsAttachmentUploads = supportsAttachmentUploads
         model.maximumFileAttachmentBytes = maximumFileAttachmentBytes

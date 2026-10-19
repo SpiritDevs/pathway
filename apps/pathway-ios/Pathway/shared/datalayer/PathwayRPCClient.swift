@@ -95,6 +95,7 @@ private struct PathwayRPCResponse: Decodable, Sendable {
 // swiftlint:disable type_body_length
 actor PathwayRPCClient {
     typealias EndpointProvider = @Sendable () async throws -> URL
+    static let maximumMessageBytes = 16 * 1024 * 1024
 
     private let endpointProvider: EndpointProvider
     private let session: URLSession
@@ -132,11 +133,13 @@ actor PathwayRPCClient {
         socket?.cancel(with: .goingAway, reason: nil)
     }
 
+    /// Servers with thread history answer with the latest page; older servers ignore `history`.
     func subscribeToThread(_ threadID: String) -> AsyncThrowingStream<JSONValue, Error> {
         subscribe(
             "orchestration.subscribeThread",
             payload: .object([
                 "threadId": .string(threadID),
+                "history": .object(["limit": .number(Double(PathwayThreadHistory.latestPageLimit))]),
                 "requestCompletionMarker": .bool(true)
             ])
         )
@@ -261,6 +264,8 @@ actor PathwayRPCClient {
                 let url = try await endpointProvider()
                 guard desired, !Task.isCancelled else { return }
                 let task = session.webSocketTask(with: url)
+                // Foundation's 1 MiB default fails a history page carrying one large tool output.
+                task.maximumMessageSize = Self.maximumMessageBytes
                 task.resume()
                 install(task, id: id)
                 try await receiveLoop(task, id: id)
