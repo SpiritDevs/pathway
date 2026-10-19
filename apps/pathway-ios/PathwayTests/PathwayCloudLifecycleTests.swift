@@ -305,6 +305,97 @@ import Testing
         await model.stop()
     }
 
+    @Test func coldLaunchWithAnUnchangedHeadResumesTheSavedReplicaWithoutBootstrap() async throws {
+        let (model, client, directory) = await restoredModel(epochs: ["company": 1])
+        defer { try? FileManager.default.removeItem(at: directory) }
+        await model.received(companies: [company()])
+        // The saved replica stays unsynchronized until the live head confirms its epoch.
+        #expect(model.connectionState == .syncing)
+        model.received(head: .init(version: 10, authorizationEpoch: 1), companyId: "company")
+        #expect(model.connectionState == .connected)
+        #expect(model.entities(kind: "test", companyID: "company") == [.string("cached")])
+        #expect(client.bootstrapCount == 0)
+        await model.stop()
+    }
+
+    @Test func coldLaunchWithANewerHeadCatchesUpFromTheSavedCursor() async throws {
+        let (model, client, directory) = await restoredModel(epochs: ["company": 1])
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var drains = client.changeEvents.makeAsyncIterator()
+        await model.received(companies: [company()])
+        model.received(head: .init(version: 12, authorizationEpoch: 1), companyId: "company")
+        let drain = try #require(await drains.next())
+        #expect(drain.cursor == 10)
+        drain.resume(.init(tag: "Changes", changes: [change("cached", tombstone: true), change("delta")], cursor: 12, hasMore: false, latestVersion: 12, authorizationEpoch: 1))
+        await observed { model.entities(kind: "test", companyID: "company") == [.string("delta")] }
+        #expect(client.bootstrapCount == 0)
+        await model.stop()
+    }
+
+    @Test func coldLaunchWithoutASavedEpochBootstrapsAgain() async throws {
+        let (model, client, directory) = await restoredModel(epochs: nil)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var bootstrap = client.bootstrapEvents.makeAsyncIterator()
+        await model.received(companies: [company()])
+        let request = try #require(await bootstrap.next())
+        #expect(request.cursor == nil)
+        request.resume(page(epoch: 1, entities: [change("fresh")]))
+        await observed { model.entities(kind: "test", companyID: "company") == [.string("fresh")] }
+        await model.stop()
+    }
+
+    @Test func coldLaunchWithAChangedEpochDropsTheSavedReplicaAndBootstraps() async throws {
+        let (model, client, directory) = await restoredModel(epochs: ["company": 1])
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var bootstrap = client.bootstrapEvents.makeAsyncIterator()
+        await model.received(companies: [company()])
+        model.received(head: .init(version: 10, authorizationEpoch: 2), companyId: "company")
+        let request = try #require(await bootstrap.next())
+        #expect(model.entities(kind: "test", companyID: "company").isEmpty)
+        #expect(model.connectionState == .syncing)
+        request.resume(page(epoch: 2, entities: [change("authorized")]))
+        await observed { model.connectionState == .connected }
+        await model.stop()
+    }
+
+    @Test func coldLaunchWithAReplacedMembershipBootstraps() async throws {
+        let (model, client, directory) = await restoredModel(epochs: ["company": 1])
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var bootstrap = client.bootstrapEvents.makeAsyncIterator()
+        await model.received(companies: [company(membership: "replacement")])
+        let request = try #require(await bootstrap.next())
+        #expect(request.cursor == nil)
+        #expect(model.entities(kind: "test", companyID: "company").isEmpty)
+        await model.stop()
+    }
+
+    @Test func savedReplicaKeepsItsEpochWithItsCursor() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let client = ControlledCloudClient()
+        let model = PathwayCloudModel(client: client)
+        await model.configureLocalStorage(directory: directory)
+        var bootstrap = client.bootstrapEvents.makeAsyncIterator()
+        await model.received(companies: [company()])
+        try #require(await bootstrap.next()).resume(page(epoch: 3, entities: [change("saved")]))
+        await observed { model.cachedAt != nil }
+        let snapshot = try #require(await PathwayDiscoveryCache(directory: directory).load())
+        #expect(snapshot.versions == ["company": 10])
+        #expect(snapshot.authorizationEpochs == ["company": 3])
+        await model.stop()
+    }
+
+    private func restoredModel(epochs: [String: Int]?) async -> (PathwayCloudModel, ControlledCloudClient, URL) {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        await PathwayDiscoveryCache(directory: directory).save(.init(companies: [company()], entities: ["company": [change("cached")]],
+            versions: ["company": 10], savedAt: Date(), authorizationEpochs: epochs), revision: 1)
+        let client = ControlledCloudClient()
+        let model = PathwayCloudModel(client: client)
+        await model.configureLocalStorage(directory: directory)
+        #expect(model.entities(kind: "test", companyID: "company") == [.string("cached")])
+        return (model, client, directory)
+    }
+
     private func company(membership: String = "member", name: String = "Workspace") -> PathwayCompany {
         .init(id: "company", membershipId: membership, name: name, workspaceKind: "personal", issueKeyPrefix: "P", lifecycleState: "active", syncVersion: 10, isOwner: true)
     }

@@ -177,7 +177,7 @@ final class PathwayRemoteBrowserModel {
             if injectedRequest == nil && commandRPC == nil {
                 guard let connect = thread.connect else { error = "Connect to an environment to use its browser."; return }
                 let environment = thread.environment
-                httpBaseURL = try await connect.prepare(environment: environment).httpBaseURL
+                httpBaseURL = try await connect.authorize(environment: environment).httpBaseURL
                 commandRPC = PathwayRPCClient { try await connect.prepare(environment: environment).webSocketURL }
             }
             guard await command("selectHost", fields: ["host": .string("environment")]), !Task.isCancelled else { return }

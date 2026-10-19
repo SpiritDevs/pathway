@@ -307,6 +307,14 @@ final class PathwayAgentThreadCreationModel {
         }
     }
 
+    /// A rejected connection stays failed until the user asks again.
+    func retryConnection() async {
+        guard case .failed = connectionState else { return }
+        await stop()
+        errorMessage = nil
+        start()
+    }
+
     func stop() async {
         streamTask?.cancel()
         streamTask = nil

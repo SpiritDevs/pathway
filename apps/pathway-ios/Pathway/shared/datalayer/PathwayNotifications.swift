@@ -28,6 +28,7 @@ struct PathwayNotificationPreferences: Codable, Equatable {
     @ObservationIgnored private var activityConfigurationTask: Task<Void, Never>?
     @ObservationIgnored private var needsActivityConfiguration = false
     @ObservationIgnored private var activityStopTask: Task<Void, Never>?
+    @ObservationIgnored private var configurationRegistration: Task<Void, Never>?
     private let deviceID: String
 
     private init() {
@@ -37,6 +38,8 @@ struct PathwayNotificationPreferences: Codable, Equatable {
         if stored == nil { UserDefaults.standard.set(deviceID, forKey: key) }
     }
 
+    /// Binds notifications to `appModel`'s account, awaiting only the previous account's cleanup.
+    /// Relay registration and the Live Activity refresh continue after the workspace is shown.
     func configure(appModel: PathwayAppModel) async {
         await activityStopTask?.value
         activityStopTask = nil
@@ -45,7 +48,9 @@ struct PathwayNotificationPreferences: Codable, Equatable {
         if preferenceKey != key {
             let drain = registrationWriter.fence()
             generation += 1; registered = false
+            let registration = takeConfigurationRegistration()
             await drain?.value
+            await registration?.value
             await activityConfigurationTask?.value
             #if os(iOS)
             await PathwayLiveActivities.shared.stop()
@@ -59,7 +64,14 @@ struct PathwayNotificationPreferences: Codable, Equatable {
         if preferences.notificationsEnabled && authorization == .authorized {
             UIApplication.shared.registerForRemoteNotifications()
         }
-        if preferences.liveActivitiesEnabled { await register() }
+        if preferences.liveActivitiesEnabled {
+            let epoch = generation
+            configurationRegistration?.cancel()
+            configurationRegistration = Task { [weak self] in
+                guard let self, generation == epoch else { return }
+                await register()
+            }
+        }
     }
 
     func refreshAuthorization() async {
@@ -175,8 +187,10 @@ struct PathwayNotificationPreferences: Codable, Equatable {
         let connect = appModel?.connect
         let drain = registrationWriter.fence()
         generation += 1
+        let registration = takeConfigurationRegistration()
         let activityConfiguration = activityConfigurationTask
         clearLocalState()
+        await registration?.value
         await drain?.value
         await activityConfiguration?.value
         await activityStopTask?.value
@@ -190,11 +204,13 @@ struct PathwayNotificationPreferences: Codable, Equatable {
         let connect = appModel?.connect
         let drain = registrationWriter.fence()
         generation += 1
+        let registration = takeConfigurationRegistration()
         let activityConfiguration = activityConfigurationTask
         let previousStop = activityStopTask
         clearLocalState()
         activityStopTask = Task {
             await previousStop?.value
+            await registration?.value
             await drain?.value
             await activityConfiguration?.value
             #if os(iOS)
@@ -202,6 +218,12 @@ struct PathwayNotificationPreferences: Codable, Equatable {
             #endif
             if let connect { _ = try? await connect.relayRequest(method: "DELETE", path: "/v1/mobile/devices/\(deviceID)") }
         }
+    }
+
+    private func takeConfigurationRegistration() -> Task<Void, Never>? {
+        defer { configurationRegistration = nil }
+        configurationRegistration?.cancel()
+        return configurationRegistration
     }
 
     private func clearLocalState() {

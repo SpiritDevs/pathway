@@ -1813,7 +1813,12 @@ struct AgentThreadConversationView: View {
         } else {
         switch model.connectionState {
         case let .failed(message):
-            Label(message, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.red)
+            HStack {
+                Label(message, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
+                Spacer()
+                Button("Try again") { subscriptionLifetime.restart() }
+            }
+            .font(.footnote)
         default: EmptyView()
         }
         }

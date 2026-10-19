@@ -93,6 +93,9 @@ final class PathwayCloudModel {
     @ObservationIgnored private var latestVersionByCompany: [String: Int] = [:]
     @ObservationIgnored private var authorizationEpochByCompany: [String: Int] = [:]
     @ObservationIgnored private var latestHeadByCompany: [String: PathwaySyncHead] = [:]
+    /// Cursors restored from disk. A company's replica resumes from one only after its current
+    /// membership and live sync head confirm the saved membership and authorization epoch.
+    @ObservationIgnored private var cachedCheckpoints: [String: PathwayDiscoveryCheckpoint] = [:]
     @ObservationIgnored private var lifecycleGeneration = 0
     @ObservationIgnored private var lifecycleTask: Task<Void, Never>?
     @ObservationIgnored private var lifecycleTaskID: UUID?
@@ -139,6 +142,7 @@ final class PathwayCloudModel {
         entitiesByCompany = snapshot.entities.mapValues { PathwayReplicaEntities($0) }
         cachedAt = snapshot.savedAt
         cursorByCompany = [:]
+        cachedCheckpoints = PathwayDiscoveryCheckpoint.restore(from: snapshot)
         rebuildDiscoveryModels(persist: false)
     }
 
@@ -406,6 +410,7 @@ final class PathwayCloudModel {
         latestVersionByCompany = [:]
         authorizationEpochByCompany = [:]
         latestHeadByCompany = [:]
+        cachedCheckpoints = [:]
         changeRequestStatuses = [:]
         threadPullRequestStatuses = [:]
         issues.replaceReplica([:])
@@ -581,7 +586,7 @@ extension PathwayCloudModel {
         let activeCompanyIds = Set(newCompanies.map(\.id))
         removeCompanies(notIn: activeCompanyIds)
         for company in newCompanies {
-            if cursorByCompany[company.id] == nil {
+            if cursorByCompany[company.id] == nil, cachedCheckpoints[company.id]?.membershipID != company.membershipId {
                 startBootstrap(companyId: company.id)
             } else {
                 // A restart (session refresh, retry) cancels head subscriptions but keeps the
@@ -599,6 +604,7 @@ extension PathwayCloudModel {
         let taskID = UUID()
         let generation = lifecycleGeneration
         bootstrapTaskIDs[companyId] = taskID
+        cachedCheckpoints.removeValue(forKey: companyId)
         connectionState = .syncing
         subscribeToHead(companyId: companyId)
         bootstrapTasks[companyId] = Task { @MainActor [weak self] in
@@ -712,6 +718,17 @@ extension PathwayCloudModel {
             invalidateReplica(companyId: companyId)
         }
         guard bootstrapTasks[companyId] == nil else { return }
+        if cursorByCompany[companyId] == nil, let checkpoint = cachedCheckpoints.removeValue(forKey: companyId) {
+            if checkpoint.membershipID == companies.first(where: { $0.id == companyId })?.membershipId,
+               checkpoint.authorizationEpoch == head.authorizationEpoch, checkpoint.version <= head.version {
+                authorizationEpochByCompany[companyId] = checkpoint.authorizationEpoch
+                cursorByCompany[companyId] = checkpoint.version
+                updateConnectionStateIfReady()
+            } else {
+                // Authorization changed while the app was closed; the saved replica may hold revoked data.
+                invalidateReplica(companyId: companyId)
+            }
+        }
         guard let cursor = cursorByCompany[companyId] else { startBootstrap(companyId: companyId); return }
         guard cursor < head.version, drainTasks[companyId] == nil,
               let membershipID = companies.first(where: { $0.id == companyId })?.membershipId else { return }
@@ -781,6 +798,7 @@ extension PathwayCloudModel {
         entitiesByCompany[companyId] = PathwayReplicaEntities()
         cursorByCompany.removeValue(forKey: companyId)
         authorizationEpochByCompany.removeValue(forKey: companyId)
+        cachedCheckpoints.removeValue(forKey: companyId)
         rebuildDiscoveryModels()
     }
 
@@ -886,8 +904,11 @@ extension PathwayCloudModel {
             let date = Date()
             let generation = lifecycleGeneration
             let directory = storageDirectory
+            // A checkpoint still waiting for its head keeps its cached entities, so it stays saved with them.
             let snapshot = PathwayDiscoveryCache.Snapshot(companies: companies,
-                entities: entitiesByCompany.mapValues(\.values), versions: cursorByCompany, savedAt: date)
+                entities: entitiesByCompany.mapValues(\.values),
+                versions: cachedCheckpoints.mapValues(\.version).merging(cursorByCompany) { $1 }, savedAt: date,
+                authorizationEpochs: cachedCheckpoints.mapValues(\.authorizationEpoch).merging(authorizationEpochByCompany) { $1 })
             await cache.save(snapshot, revision: DispatchTime.now().uptimeNanoseconds)
             if storageDirectory == directory, lifecycleGeneration == generation, !Task.isCancelled { cachedAt = date }
         }
@@ -963,6 +984,7 @@ extension PathwayCloudModel {
             latestVersionByCompany.removeValue(forKey: companyId)
             authorizationEpochByCompany.removeValue(forKey: companyId)
             latestHeadByCompany.removeValue(forKey: companyId)
+            cachedCheckpoints.removeValue(forKey: companyId)
             headSubscriptions.removeValue(forKey: companyId)?.cancel()
             bootstrapTasks.removeValue(forKey: companyId)?.cancel()
             bootstrapTaskIDs.removeValue(forKey: companyId)
@@ -1060,6 +1082,22 @@ private struct PathwayDiscoverySnapshot {
         } catch {
             return
         }
+    }
+}
+
+private struct PathwayDiscoveryCheckpoint {
+    let membershipID: String
+    let version: Int
+    let authorizationEpoch: Int
+
+    static func restore(from snapshot: PathwayDiscoveryCache.Snapshot) -> [String: Self] {
+        var checkpoints: [String: Self] = [:]
+        for company in snapshot.companies where snapshot.entities[company.id] != nil {
+            guard let version = snapshot.versions[company.id],
+                  let epoch = snapshot.authorizationEpochs?[company.id] else { continue }
+            checkpoints[company.id] = .init(membershipID: company.membershipId, version: version, authorizationEpoch: epoch)
+        }
+        return checkpoints
     }
 }
 

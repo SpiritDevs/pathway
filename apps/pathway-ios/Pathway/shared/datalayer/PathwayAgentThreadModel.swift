@@ -448,7 +448,8 @@ final class PathwayAgentThreadModel {
                     applySubscriptionValue(value)
                 }
             } catch is CancellationError { return }
-            catch { connectionState = items.isEmpty ? .failed(error.localizedDescription) : .cached }
+            // The stream ends only for a rejection retrying cannot fix. Saved messages stay visible.
+            catch { connectionState = .failed(error.localizedDescription) }
         }
     }
 
