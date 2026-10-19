@@ -12,6 +12,7 @@ Version 1 includes:
 - Full offline issue-domain editing with deterministic conflict resolution.
 - Web and Electron issue/company UI.
 - A reusable typed sync engine and mobile storage adapter, without a mobile issue UI.
+- Remote agent control between machines: company-wide environment discovery over the existing relay/tunnel data plane, offline-tolerant remote dispatch through Convex command records, and direct environment-to-environment control over the existing WS RPC surface.
 - Foundations for a later Vercel portal and email domain, without implementing either yet.
 
 ## System boundaries
@@ -26,6 +27,8 @@ Version 1 includes:
 | Integration credentials              | Application-encrypted vault                    | Never returned to human clients; temporarily available only to the leased executor |
 | Project identity                     | Cloud project                                  | Environment-specific local project/folder binding                                  |
 | Thread links                         | Cloud record with environment ID and thread ID | Local thread itself remains environment-owned                                      |
+| Environment registry, connect grants | Canonical registrations, descriptors, grants   | Device-local connection catalog merges registry entries                            |
+| Remote dispatch commands             | Command records, claims, status, results       | Claimed execution state is environment-owned                                       |
 | Provider processes, Git state, paths | Registration/results only                      | Environment-owned runtime state                                                    |
 | Sync operations/change feed          | Convex                                         | Cursor, confirmed state, pending overlay, and rejected operations                  |
 
@@ -109,6 +112,7 @@ Define switches for:
 - automation run/manage;
 - integrations read/manage;
 - environments read/manage;
+- remote agents dispatch/control;
 - audit read;
 - data export.
 
@@ -365,6 +369,42 @@ Execution model:
 - Shared Slack cursors, processed-message IDs, outbound IDs, automation audit records, and operation IDs prevent duplicate work after failover.
 - Tests advance a controlled clock and await receipts/worker drains; never use sleeps or polling.
 
+## Remote agent control between machines
+
+Deliver cross-machine agent control in three layers, each behind its own capability flag and landed in order. This is new capability, not a restoration: the existing Connect stack provides client-to-environment control only, and nothing environment-to-environment has ever existed.
+
+### Company environment registry and discovery
+
+Replace the device-local-only connection catalog with a Convex-backed company registry:
+
+- Environment registrations (already required for bindings) additionally publish the environment descriptor, relay link state, managed-endpoint availability, and last-seen metadata.
+- Any member with `environments.read` may list and inspect company environments; `environments.manage` administers registrations.
+- Clients merge registry entries into the existing device-local catalog. Connecting reuses the existing relay brokering and Cloudflare tunnel data plane unchanged; the relay remains a credential/endpoint broker only.
+- Connect authorization extends beyond device-local link records: the client presents a short-lived Convex-issued connect grant (environment ID, user, permission, expiry) that the relay validates against the Convex issuer, and the target environment independently re-checks the connecting identity's company permissions against its synced replica before minting a credential or accepting the WebSocket ticket.
+- Revoking membership, the `environments.read` grant, or the environment registration invalidates future connects without waiting for token expiry.
+
+### Remote dispatch through Convex command records
+
+Promote project-bound job claims to a first-class remote command channel that works when the two machines can never reach each other directly:
+
+- Define company-scoped `environmentCommands`: start thread, send message, interrupt, and status query, each carrying target environment ID, project binding, acting identity, arguments, and TTL.
+- Issuing a command requires the remote-agents dispatch permission plus the relevant orchestration-equivalent permission.
+- Target environments claim their own commands through the existing transactional, idempotent, renewable claim machinery; losing a claim halts side effects immediately.
+- Execution results, thread status transitions, and created thread links sync back as command status records; other clients observe them through the normal change feed.
+- Commands for offline environments remain pending, visible, and cancellable until claimed or expired; expiry is recorded, never silent.
+- Command payloads respect the standard operation size bounds; transcripts and file contents never travel through command records.
+
+### Environment-to-environment direct control
+
+Ship direct control for live, low-latency cross-machine steering; Convex dispatch remains the fallback when no direct path exists:
+
+- Add a relay server client ID with the `environment:connect` scope. The initiating environment authenticates with its existing Ed25519 environment key via DPoP; today that scope is issued only to `t3-web`/`t3-mobile`.
+- Give `apps/server` a client-runtime connection handle by adopting (or extracting the transport core of) `packages/client-runtime`'s connection and RPC session layers, so an environment drives a peer through the same hardened WS RPC surface remote clients already use — no new federation protocol.
+- Every env-to-env call carries the initiating environment's service identity plus an on-behalf-of actor (member or agent). The target environment enforces that actor's company permissions from its synced replica; the initiating environment's identity alone grants nothing.
+- Expose remote targeting through the orchestrator MCP toolkit with an explicit target-environment parameter; the default remains the local environment, and the existing same-project scoping applies within the target.
+- Live thread streaming and steering flow over this direct connection (or an existing Connect tunnel), never through the Convex change feed; Convex carries discovery, authorization, dispatch, and results only.
+- This deliberately amends the current one-runtime-boundary invariant in `docs/internals/remote.md` and requires its own ADR before implementation.
+
 ## Encrypted integration vault
 
 Store per-company integration credentials as:
@@ -461,6 +501,7 @@ Web and Electron receive:
 - company creation and 30-day deletion recovery;
 - members, invitations, teams, owners, roles, and permission switches;
 - company/team-scoped environment and project binding settings;
+- company environment discovery with connect, remote thread start, and interrupt actions plus pending/claimed/expired command visibility;
 - company issue overview grouped by semantic category;
 - workflow-specific boards/lists;
 - workflow-owner selection on issues;
@@ -481,17 +522,24 @@ The mobile release receives shared contracts, sync engine compatibility, and a p
   - Supersede deferred ADR 0005’s Clerk-Organization decision.
   - Amend ADR 0006’s environment-scoped issue-tracker assumption.
   - Record tenancy, ownership, authorization, conflict, retention, lease, and offline decisions.
+- Add ADR `0008-cross-environment-agent-control.md`.
+  - Amend the one-runtime-boundary invariant in `docs/internals/remote.md`.
+  - Record the three-layer model (registry discovery, Convex dispatch, env-to-env direct control), the on-behalf-of authorization rule, and the relay server client ID.
 - Add `docs/internals/cloud-sync.md` covering protocol, local replicas, outbox, cursors, compatibility, and failure recovery.
 - Add `docs/internals/companies-and-permissions.md` covering companies, teams, multi-role authorization, owners, and invitations.
 - Update:
   - `docs/internals/issue-tracker.md`
   - `docs/internals/connection-runtime.md`
+  - `docs/internals/remote.md`
+  - `docs/internals/t3-connect.md`
+  - `docs/internals/environment-auth.md`
   - `docs/internals/overview.md`
   - `docs/internals/glossary.md`
 - Add user documentation for:
   - companies and teams;
   - roles and permissions;
   - offline issue behavior;
+  - company environment discovery and remote agent control;
   - migration and rejected changes.
 - Add `docs/operations/convex-sync.md` for deployment configuration, Resend, relay issuer setup, secret rotation, feed retention, import recovery, and incident diagnostics.
 
@@ -540,6 +588,16 @@ The mobile release receives shared contracts, sync engine compatibility, and a p
 - Lease failover resumes Slack work without duplicate intake or outbound messages.
 - Project jobs can be claimed only by environments with valid bindings and permissions.
 
+### Remote agent control
+
+- Registry discovery lists exactly the environments visible to the member’s `environments.read` grants; revoking membership or the grant removes discovery and blocks new connects before token expiry.
+- Connect grants are validated by both the relay and the target environment; a forged or expired grant fails at both layers.
+- A dispatched command is claimed exactly once, survives environment restart, and reports expiry rather than disappearing when the target stays offline past its TTL.
+- Interrupt commands take effect on the target thread and the resulting status syncs back to the issuing client.
+- Env-to-env calls without a valid on-behalf-of actor permission are rejected regardless of the initiating environment’s service identity.
+- The orchestrator MCP toolkit reaches a peer environment only through the explicit target parameter, and same-project scoping holds within the target.
+- Direct control falls back to Convex dispatch when no direct path exists, without duplicating the operation.
+
 ### Migration
 
 - Fixtures cover every issue-related table and attachment type.
@@ -567,10 +625,12 @@ The mobile release receives shared contracts, sync engine compatibility, and a p
 4. Port the complete issue domain and server replica.
 5. Add company/team/role/workflow UI and direct Convex authentication.
 6. Add attachments, invitations, encrypted secrets, Slack coordination, and project claims.
-7. Enable migration preview for internal companies and compare Convex/SQLite checksums without cutting over.
-8. Canary cutover selected companies; monitor mutation failures, OCC retries, change-feed lag, outbox age, rejected operations, lease churn, and migration mismatches.
-9. Enable cloud-required onboarding and migration for production after canary acceptance.
-10. Remove the transitional local issue authority only after all supported clients enforce the new protocol.
+7. Land the company environment registry, discovery UI, and Convex-validated connect grants over the existing relay/tunnel path.
+8. Land remote dispatch command records and claims, then land ADR 0008 and env-to-env direct control with the relay server client ID and the server-side connection handle.
+9. Enable migration preview for internal companies and compare Convex/SQLite checksums without cutting over.
+10. Canary cutover selected companies; monitor mutation failures, OCC retries, change-feed lag, outbox age, rejected operations, lease churn, command claim latency, connect-grant rejections, and migration mismatches.
+11. Enable cloud-required onboarding and migration for production after canary acceptance.
+12. Remove the transitional local issue authority only after all supported clients enforce the new protocol.
 
 ## Explicit assumptions and exclusions
 
@@ -583,5 +643,7 @@ The mobile release receives shared contracts, sync engine compatibility, and a p
 - Company workflow plus inherited team overrides is the only workflow model.
 - Company projects, issues, views, and related records can be visible to multiple teams.
 - Billing permissions are placeholders for later functionality.
+- Remote agent control ships in three ordered layers — registry discovery, Convex dispatch, env-to-env direct control — with direct control gated on ADR 0008. The relay remains a credential/endpoint broker; thread content never flows through the relay Worker or the Convex change feed.
+- Cross-machine control is new capability; legacy Connect provided client-to-environment access only, which remains supported unchanged.
 - The Vercel portal, real email synchronization, email UI, and mobile issue UI are outside v1.
 - The future portal and email domain must reuse the typed sync primitives rather than creating a second replication system.
