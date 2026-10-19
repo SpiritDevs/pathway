@@ -68,12 +68,12 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
     const loadShellSnapshot = Effect.fn("http.orchestration.loadShellSnapshot")(function* () {
       const base = yield* sql.withTransaction(
         Effect.gen(function* () {
-          const projects = yield* projectionSnapshotQuery.getShellSnapshotWithoutEnrichment();
+          const projects = yield* projectionSnapshotQuery.listProjectShells();
           const threads = yield* threadManagement.getShellSnapshot();
           return {
             schemaVersion: threads.schemaVersion,
             snapshotSequence: yield* applicationEvents.latestApplicationSequence,
-            projects: projects.projects,
+            projects,
             threads: threads.threads,
             archivedThreads: threads.archivedThreads,
           } as const;

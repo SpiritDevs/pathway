@@ -98,6 +98,15 @@ export interface ProjectionSnapshotQueryShape {
   >;
 
   /**
+   * Read active project shells with null repository metadata, and nothing else.
+   * Transactional callers enrich them after their transaction has closed.
+   */
+  readonly listProjectShells: () => Effect.Effect<
+    ReadonlyArray<OrchestrationProjectShell>,
+    ProjectionRepositoryError
+  >;
+
+  /**
    * Read archived thread shell summaries for the archive page.
    *
    * This query is separate from the main shell snapshot so archived threads

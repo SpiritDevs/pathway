@@ -50,6 +50,7 @@ import {
 } from "./providerPolicy.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { OrchestrationProjectShell } from "./orchestrationProject.ts";
+import { RepositoryIdentity } from "./environment.ts";
 import { ThreadLocation } from "./threadLocation.ts";
 import { RuntimeTaskUsage, ThreadTokenUsageSnapshot } from "./providerRuntime.ts";
 
@@ -1744,6 +1745,21 @@ export const OrchestrationV2ShellStreamItem = Schema.Union([
      */
     resolvedRepositoryIdentityRoots: Schema.optionalKey(Schema.Array(Schema.String)),
   }),
+  /**
+   * Resolved repository identities by workspace root, sent only to subscribers
+   * that pass `repositoryIdentityPatches`. Clients set each matching project's
+   * identity exactly (including null). It carries no sequence and never
+   * changes structure, so it cannot roll a newer shell back.
+   */
+  Schema.Struct({
+    kind: Schema.Literal("repositoryIdentities"),
+    identities: Schema.Array(
+      Schema.Struct({
+        workspaceRoot: TrimmedNonEmptyString,
+        repositoryIdentity: Schema.NullOr(RepositoryIdentity),
+      }),
+    ),
+  }),
   Schema.Struct({
     kind: Schema.Literal("project.updated"),
     sequence: NonNegativeInt,
@@ -3116,6 +3132,12 @@ export const OrchestrationV2SubscribeShellInput = Schema.Struct({
   afterSequence: Schema.optionalKey(NonNegativeInt),
   /** Requests a marker between initial catch-up and live delivery. */
   requestCompletionMarker: Schema.optionalKey(Schema.Boolean),
+  /**
+   * The client applies `repositoryIdentities` frames. The server then resumes
+   * a valid cursor without a full snapshot, and sends identity patches where
+   * older clients get a second, marked full snapshot. Older servers ignore it.
+   */
+  repositoryIdentityPatches: Schema.optionalKey(Schema.Boolean),
 });
 export type OrchestrationV2SubscribeShellInput = typeof OrchestrationV2SubscribeShellInput.Type;
 

@@ -25,7 +25,11 @@ import { EnvironmentCacheStore } from "../platform/persistence.ts";
 import { subscribeDynamic } from "../rpc/client.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import { ShellSnapshotLoader } from "./shellSnapshotHttp.ts";
-import { applyShellStreamEvent, mergeShellSnapshotProjects } from "./shellReducer.ts";
+import {
+  applyRepositoryIdentities,
+  applyShellStreamEvent,
+  mergeShellSnapshotProjects,
+} from "./shellReducer.ts";
 import type { EnvironmentCatalogState } from "./connections.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
 
@@ -193,9 +197,11 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         : Option.match(current.snapshot, {
             onNone: () => null,
             onSome: (snapshot) =>
-              item.sequence > snapshot.snapshotSequence
-                ? applyShellStreamEvent(snapshot, item)
-                : snapshot,
+              item.kind === "repositoryIdentities"
+                ? applyRepositoryIdentities(snapshot, item.identities)
+                : item.sequence > snapshot.snapshotSequence
+                  ? applyShellStreamEvent(snapshot, item)
+                  : snapshot,
           });
     if (nextSnapshot === null) {
       return;
@@ -268,7 +274,10 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         // If the authoritative refresh failed, omit the cached cursor so the
         // socket fallback sends a complete snapshot for this new session.
         if (!canResume || Option.isNone(current.snapshot)) {
-          return supportsCompletionMarker ? { requestCompletionMarker: true as const } : {};
+          return {
+            repositoryIdentityPatches: true as const,
+            ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
+          };
         }
         if (!supportsCompletionMarker) {
           // Without a completion marker there is no synchronized signal for a
@@ -281,6 +290,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         }
         return {
           afterSequence: current.snapshot.value.snapshotSequence,
+          repositoryIdentityPatches: true as const,
           ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
         };
       }),

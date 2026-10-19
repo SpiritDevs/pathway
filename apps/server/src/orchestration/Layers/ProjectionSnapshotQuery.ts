@@ -1837,6 +1837,21 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         }),
       );
 
+  const listProjectShells: ProjectionSnapshotQueryShape["listProjectShells"] = () =>
+    listProjectRows(undefined).pipe(
+      Effect.map((rows) =>
+        Arr.filterMap(rows, (row) =>
+          row.deletedAt === null ? Result.succeed(mapProjectShellRow(row, null)) : Result.failVoid,
+        ),
+      ),
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.listProjectShells:query",
+          "ProjectionSnapshotQuery.listProjectShells:decodeRows",
+        ),
+      ),
+    );
+
   const getShellSnapshotWithoutEnrichment: ProjectionSnapshotQueryShape["getShellSnapshotWithoutEnrichment"] =
     () =>
       sql
@@ -2715,6 +2730,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getSnapshot,
     getShellSnapshot,
     getShellSnapshotWithoutEnrichment,
+    listProjectShells,
     getArchivedShellSnapshot,
     searchThreads,
     getSnapshotSequence,

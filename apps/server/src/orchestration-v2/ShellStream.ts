@@ -1,5 +1,6 @@
 import type {
   ApplicationStoredEvent,
+  OrchestrationProjectShell,
   OrchestrationV2ArchivedShellStreamItem,
   OrchestrationV2ShellSnapshot,
   OrchestrationV2ThreadShell,
@@ -7,20 +8,49 @@ import type {
   OrchestrationV2StoredEvent,
 } from "@spiritdevs/contracts";
 import * as Duration from "effect/Duration";
-import type * as Effect from "effect/Effect";
+import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 
-/** Keep only the newest shell-relevant event per project/thread aggregate. */
-export function coalesceShellApplicationEvents(
-  events: ReadonlyArray<ApplicationStoredEvent>,
-): ReadonlyArray<ApplicationStoredEvent> {
-  const latestByAggregate = new Map<string, ApplicationStoredEvent>();
-  for (const stored of events) {
+import type { ApplicationAggregateChange } from "../persistence/Services/OrchestrationEventStore.ts";
+
+type ShellItem = OrchestrationV2ShellStreamItem;
+type RepositoryIdentityEntry = Extract<
+  OrchestrationV2ShellStreamItem,
+  { readonly kind: "repositoryIdentities" }
+>["identities"][number];
+
+/** The shell-relevant part of one committed application event. */
+export function aggregateChangeFromApplicationEvent(
+  stored: ApplicationStoredEvent,
+): ApplicationAggregateChange {
+  if ("aggregateKind" in stored) {
+    return {
+      aggregateKind: "project",
+      projectId: stored.aggregateId,
+      sequence: stored.sequence,
+      deleted: stored.type === "project.deleted",
+    };
+  }
+  return {
+    aggregateKind: "thread",
+    threadId: stored.event.threadId,
+    sequence: stored.sequence,
+    deletedFromArchive:
+      stored.event.type === "thread.deleted" && stored.event.payload.archivedAt !== null,
+  };
+}
+
+/** Keep only the newest change per project/thread aggregate. */
+export function coalesceAggregateChanges(
+  changes: ReadonlyArray<ApplicationAggregateChange>,
+): ReadonlyArray<ApplicationAggregateChange> {
+  const latestByAggregate = new Map<string, ApplicationAggregateChange>();
+  for (const change of changes) {
     const key =
-      "aggregateKind" in stored
-        ? `project:${stored.aggregateId}`
-        : `thread:${stored.event.threadId}`;
-    latestByAggregate.set(key, stored);
+      change.aggregateKind === "project"
+        ? `project:${change.projectId}`
+        : `thread:${change.threadId}`;
+    latestByAggregate.set(key, change);
   }
   return Array.from(latestByAggregate.values()).sort(
     (left, right) => left.sequence - right.sequence,
@@ -84,6 +114,24 @@ export function shellStreamItemsFromInitialSnapshot(input: {
   return input.resume === true ? [marked] : [authoritative, marked];
 }
 
+/** One patch entry per workspace root among `projects` whose identity resolved. */
+export function resolvedRepositoryIdentities(input: {
+  readonly projects: ReadonlyArray<OrchestrationProjectShell>;
+  readonly resolvedRepositoryIdentityRoots: ReadonlyArray<string>;
+}): ReadonlyArray<RepositoryIdentityEntry> {
+  const resolved = new Set(input.resolvedRepositoryIdentityRoots);
+  const byRoot = new Map<string, RepositoryIdentityEntry>();
+  for (const project of input.projects) {
+    if (project.workspaceRoot !== null && resolved.has(project.workspaceRoot)) {
+      byRoot.set(project.workspaceRoot, {
+        workspaceRoot: project.workspaceRoot,
+        repositoryIdentity: project.repositoryIdentity ?? null,
+      });
+    }
+  }
+  return Array.from(byRoot.values());
+}
+
 /**
  * Tracks the repository identity one shell subscriber already holds per
  * workspace root. Enrichment re-resolves roots when its cache expires and
@@ -94,13 +142,10 @@ export function makeDeliveredRepositoryIdentities() {
   const delivered = new Map<string, string>();
   const identityKey = (identity: unknown) => JSON.stringify(identity ?? null);
   return {
-    /** Records the identities a marked snapshot frame delivered for `roots`. */
-    recordSnapshot: (snapshot: OrchestrationV2ShellSnapshot, roots: ReadonlyArray<string>) => {
-      const resolved = new Set(roots);
-      for (const project of snapshot.projects) {
-        if (project.workspaceRoot !== null && resolved.has(project.workspaceRoot)) {
-          delivered.set(project.workspaceRoot, identityKey(project.repositoryIdentity));
-        }
+    /** Records identities an initial frame delivered. */
+    record: (identities: Iterable<RepositoryIdentityEntry>) => {
+      for (const entry of identities) {
+        delivered.set(entry.workspaceRoot, identityKey(entry.repositoryIdentity));
       }
     },
     /**
@@ -158,6 +203,123 @@ export function enrichmentRefreshes<
   );
 }
 
+/** A shell snapshot with the roots whose repository identity it resolved. */
+export interface LoadedShellSnapshot {
+  readonly snapshot: OrchestrationV2ShellSnapshot;
+  readonly resolvedRepositoryIdentityRoots: ReadonlyArray<string>;
+}
+
+/**
+ * Builds one shell subscription from its cursor.
+ *
+ * Without a usable cursor (none, ahead of the log, or more than `maxReplayGap`
+ * behind) it sends a full snapshot. With one, it replays the changed projects
+ * and threads. A client that accepts `repositoryIdentities` frames then gets a
+ * project-only identity patch and no full snapshot at all; older clients still
+ * get the marked full snapshot first.
+ *
+ * Enrichment refreshes merge only after the opening frames, so a refresh can
+ * never land before the frame that recorded what this subscriber holds.
+ */
+export const openShellSubscription = Effect.fn("ShellStream.openShellSubscription")(function* <
+  E,
+  R,
+>(input: {
+  readonly afterSequence: number | undefined;
+  readonly requestCompletionMarker: boolean;
+  readonly repositoryIdentityPatches: boolean;
+  readonly maxReplayGap: number;
+  readonly latestSequence: Effect.Effect<number, E, R>;
+  readonly loadSnapshot: Effect.Effect<LoadedShellSnapshot, E, R>;
+  /** Projects and the high-water sequence they reflect, read together. */
+  readonly loadProjects: Effect.Effect<
+    {
+      readonly highWater: number;
+      readonly projects: ReadonlyArray<OrchestrationProjectShell>;
+      readonly resolvedRepositoryIdentityRoots: ReadonlyArray<string>;
+    },
+    E,
+    R
+  >;
+  readonly replay: (range: {
+    readonly afterSequence: number;
+    readonly throughSequence: number;
+  }) => Stream.Stream<ShellItem, E, R>;
+  readonly live: (afterSequence: number) => Stream.Stream<ShellItem, E, R>;
+  readonly enrichment: Stream.Stream<ShellItem, E, R>;
+  readonly delivered: ReturnType<typeof makeDeliveredRepositoryIdentities>;
+}) {
+  const completionMarker: Stream.Stream<ShellItem> = input.requestCompletionMarker
+    ? Stream.make({ kind: "synchronized" })
+    : Stream.empty;
+  const canReplay = (afterSequence: number, highWater: number) =>
+    highWater >= afterSequence && highWater - afterSequence <= input.maxReplayGap;
+  const identityPatch = (
+    identities: ReadonlyArray<RepositoryIdentityEntry>,
+  ): Stream.Stream<ShellItem> => {
+    input.delivered.record(identities);
+    return identities.length === 0
+      ? Stream.empty
+      : Stream.make({ kind: "repositoryIdentities", identities });
+  };
+  const fromSnapshot = (loaded: LoadedShellSnapshot, resume: boolean): Stream.Stream<ShellItem> => {
+    const identities = resolvedRepositoryIdentities({
+      projects: loaded.snapshot.projects,
+      resolvedRepositoryIdentityRoots: loaded.resolvedRepositoryIdentityRoots,
+    });
+    if (input.repositoryIdentityPatches) {
+      return Stream.concat(
+        Stream.make({ kind: "snapshot", snapshot: loaded.snapshot }),
+        identityPatch(identities),
+      );
+    }
+    input.delivered.record(identities);
+    return Stream.fromIterable(
+      shellStreamItemsFromInitialSnapshot({
+        snapshot: loaded.snapshot,
+        resolvedRepositoryIdentityRoots: loaded.resolvedRepositoryIdentityRoots,
+        resume,
+      }),
+    );
+  };
+  const fullSnapshot = (loaded: LoadedShellSnapshot) =>
+    composeShellStreamWithEnrichment({
+      initial: fromSnapshot(loaded, false),
+      tail: Stream.concat(completionMarker, input.live(loaded.snapshot.snapshotSequence)),
+      enrichment: input.enrichment,
+    });
+
+  const afterSequence = input.afterSequence;
+  if (afterSequence !== undefined && input.repositoryIdentityPatches) {
+    const loaded = yield* input.loadProjects;
+    if (canReplay(afterSequence, loaded.highWater)) {
+      // The patch follows the replay so projects created inside the gap
+      // already exist on the client when their identity arrives.
+      return composeShellStreamWithEnrichment({
+        initial: Stream.concat(
+          input.replay({ afterSequence, throughSequence: loaded.highWater }),
+          identityPatch(resolvedRepositoryIdentities(loaded)),
+        ),
+        tail: Stream.concat(completionMarker, input.live(loaded.highWater)),
+        enrichment: input.enrichment,
+      });
+    }
+  }
+
+  const loaded = yield* input.loadSnapshot;
+  if (afterSequence === undefined || input.repositoryIdentityPatches) return fullSnapshot(loaded);
+  const highWater = yield* input.latestSequence;
+  if (!canReplay(afterSequence, highWater)) return fullSnapshot(loaded);
+  return composeShellStreamWithEnrichment({
+    initial: fromSnapshot(loaded, true),
+    tail: Stream.concat(
+      Stream.concat(input.replay({ afterSequence, throughSequence: highWater }), completionMarker),
+      input.live(highWater),
+    ),
+    enrichment: input.enrichment,
+  });
+});
+
 /** Keep only the newest stored event per thread within a coalescing window. */
 export function coalesceStoredThreadEvents(
   events: ReadonlyArray<OrchestrationV2StoredEvent>,
@@ -172,17 +334,17 @@ export function coalesceStoredThreadEvents(
 }
 
 /**
- * Converts a committed event and the affected thread's current shell into one
- * delta. `shell` is null when the thread is deleted or unknown.
+ * Converts a thread's newest change and its current shell into one delta.
+ * `shell` is null when the thread is deleted or unknown.
  */
 export function shellStreamItemFromThreadShell(input: {
-  readonly stored: OrchestrationV2StoredEvent;
+  readonly change: Extract<ApplicationAggregateChange, { readonly aggregateKind: "thread" }>;
   readonly shell: OrchestrationV2ThreadShell | null;
-}): Exclude<OrchestrationV2ShellStreamItem, { readonly kind: "snapshot" }> {
+}): Extract<ShellItem, { readonly kind: "thread.updated" | "thread.removed" }> {
   if (input.shell !== null) {
     return {
       kind: "thread.updated",
-      sequence: input.stored.sequence,
+      sequence: input.change.sequence,
       location: input.shell.archivedAt === null ? "active" : "archive",
       thread: input.shell,
     };
@@ -190,12 +352,9 @@ export function shellStreamItemFromThreadShell(input: {
 
   return {
     kind: "thread.removed",
-    sequence: input.stored.sequence,
-    location:
-      input.stored.event.type === "thread.deleted" && input.stored.event.payload.archivedAt !== null
-        ? "archive"
-        : "active",
-    threadId: input.stored.event.threadId,
+    sequence: input.change.sequence,
+    location: input.change.deletedFromArchive ? "archive" : "active",
+    threadId: input.change.threadId,
   };
 }
 
