@@ -95,6 +95,9 @@ private struct PathwayRPCResponse: Decodable, Sendable {
 // swiftlint:disable type_body_length
 actor PathwayRPCClient {
     typealias EndpointProvider = @Sendable () async throws -> URL
+    /// URLSession's 1 MiB default fails `receive()` on any larger frame, such as a long thread's
+    /// projection or a screenshot, and the reconnect would request that same frame forever.
+    static let maximumMessageBytes = 128 * 1024 * 1024
 
     private let endpointProvider: EndpointProvider
     private let session: URLSession
@@ -137,6 +140,8 @@ actor PathwayRPCClient {
             "orchestration.subscribeThread",
             payload: .object([
                 "threadId": .string(threadID),
+                // Large tool outputs, such as base64 screenshots, arrive as previews.
+                "payloadFormat": .string("compact-v1"),
                 "requestCompletionMarker": .bool(true)
             ])
         )
@@ -261,6 +266,7 @@ actor PathwayRPCClient {
                 let url = try await endpointProvider()
                 guard desired, !Task.isCancelled else { return }
                 let task = session.webSocketTask(with: url)
+                task.maximumMessageSize = Self.maximumMessageBytes
                 task.resume()
                 install(task, id: id)
                 try await receiveLoop(task, id: id)
