@@ -37,3 +37,7 @@ If connection reports missing browser authorization state, close the Google conn
 Disconnect removes Pathway's copy of the mailbox and schedules removal of its private stored files and Google authorization. It does not delete your messages from Gmail. Reconnecting starts a fresh import.
 
 SMTP capture remains available separately for development email.
+
+Once Gmail is connected, the setup instructions collapse under **Add or reconnect Gmail** in Email settings. Expand them to connect another account. If Google authorization expires, setup opens again so you can reconnect.
+
+A private mail storage error means Pathway could not save a private copy of a message. Your workspace administrator may need to check the storage credentials or private-file permissions. Synchronization retries automatically; reconnecting Google does not repair a storage error.

@@ -501,79 +501,97 @@ export function ConnectedMailSettings() {
                 />
               </section>
             ))}
-            {desktop ? (
-              <div className="grid gap-3 rounded-lg border p-4">
-                <h3 className="text-sm font-medium">Connect or reconnect Gmail</h3>
-                <p className="text-xs text-muted-foreground">
-                  Select the same workspace and complete Google sign-in on Pathway web, then return
-                  here. Your connected mailbox appears automatically.
-                </p>
-                <Button
-                  onClick={() =>
-                    void run(() => ensureLocalApi().shell.openExternal(buildHostedMailSetupUrl()))
-                  }
-                >
-                  Open Gmail setup on web
-                </Button>
-              </div>
-            ) : (
-              <form className="grid gap-3 rounded-lg border p-4" onSubmit={connect}>
-                <h3 className="text-sm font-medium">Connect or reconnect Gmail</h3>
-                {hostedEnabled ? (
-                  <label className="grid gap-1 text-xs">
-                    Google connection
-                    <select
-                      className="rounded border bg-background p-2"
-                      value={credentialSource}
-                      onChange={(event) =>
-                        setCredentialSource(event.target.value === "hosted" ? "hosted" : "byo")
+            {result.value ? (
+              <details
+                key={`${cloud.scope}:${result.value.map((account) => `${account.id}:${account.status}`).join(",")}`}
+                open={
+                  result.value.length === 0 ||
+                  result.value.some((account) => account.status !== "active")
+                    ? true
+                    : undefined
+                }
+                className="space-y-3"
+              >
+                <summary className="cursor-pointer text-sm font-medium">
+                  {result.value.length === 0 ? "Connect Gmail" : "Add or reconnect Gmail"}
+                </summary>
+                {desktop ? (
+                  <div className="grid gap-3 rounded-lg border p-4">
+                    <h3 className="text-sm font-medium">Connect or reconnect Gmail</h3>
+                    <p className="text-xs text-muted-foreground">
+                      Select the same workspace and complete Google sign-in on Pathway web, then
+                      return here. Your connected mailbox appears automatically.
+                    </p>
+                    <Button
+                      onClick={() =>
+                        void run(() =>
+                          ensureLocalApi().shell.openExternal(buildHostedMailSetupUrl()),
+                        )
                       }
                     >
-                      <option value="byo">Your OAuth client</option>
-                      <option value="hosted">Pathway OAuth</option>
-                    </select>
-                  </label>
-                ) : null}
-                {credentialSource === "byo" ? (
-                  <>
-                    <p className="text-xs text-muted-foreground">
-                      Use your Google Cloud OAuth web client. Add this authorized redirect URI to
-                      that client:
-                    </p>
-                    <code className="break-all text-xs select-all">
-                      {cloud.relayUrl}/v1/mail/oauth/callback
-                    </code>
-                    <label className="grid gap-1 text-xs">
-                      OAuth client ID
-                      <Input name="clientId" required autoComplete="off" />
-                    </label>
-                    <label className="grid gap-1 text-xs">
-                      OAuth client secret
-                      <Input name="clientSecret" type="password" required autoComplete="off" />
-                    </label>
-                    <label className="grid gap-1 text-xs">
-                      Pub/Sub topic, optional
-                      <Input
-                        name="pubsubTopic"
-                        placeholder="projects/your-project/topics/gmail"
-                        autoComplete="off"
-                      />
-                    </label>
-                    <p className="text-xs text-muted-foreground">
-                      A topic in the same Google Cloud project enables instant delivery. Without
-                      one, Pathway checks for mail every five minutes.
-                    </p>
-                  </>
+                      Open Gmail setup on web
+                    </Button>
+                  </div>
                 ) : (
-                  <p className="text-xs text-muted-foreground">
-                    Connect securely using Pathway’s Google OAuth client.
-                  </p>
+                  <form className="grid gap-3 rounded-lg border p-4" onSubmit={connect}>
+                    <h3 className="text-sm font-medium">Connect or reconnect Gmail</h3>
+                    {hostedEnabled ? (
+                      <label className="grid gap-1 text-xs">
+                        Google connection
+                        <select
+                          className="rounded border bg-background p-2"
+                          value={credentialSource}
+                          onChange={(event) =>
+                            setCredentialSource(event.target.value === "hosted" ? "hosted" : "byo")
+                          }
+                        >
+                          <option value="byo">Your OAuth client</option>
+                          <option value="hosted">Pathway OAuth</option>
+                        </select>
+                      </label>
+                    ) : null}
+                    {credentialSource === "byo" ? (
+                      <>
+                        <p className="text-xs text-muted-foreground">
+                          Use your Google Cloud OAuth web client. Add this authorized redirect URI
+                          to that client:
+                        </p>
+                        <code className="break-all text-xs select-all">
+                          {cloud.relayUrl}/v1/mail/oauth/callback
+                        </code>
+                        <label className="grid gap-1 text-xs">
+                          OAuth client ID
+                          <Input name="clientId" required autoComplete="off" />
+                        </label>
+                        <label className="grid gap-1 text-xs">
+                          OAuth client secret
+                          <Input name="clientSecret" type="password" required autoComplete="off" />
+                        </label>
+                        <label className="grid gap-1 text-xs">
+                          Pub/Sub topic, optional
+                          <Input
+                            name="pubsubTopic"
+                            placeholder="projects/your-project/topics/gmail"
+                            autoComplete="off"
+                          />
+                        </label>
+                        <p className="text-xs text-muted-foreground">
+                          A topic in the same Google Cloud project enables instant delivery. Without
+                          one, Pathway checks for mail every five minutes.
+                        </p>
+                      </>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        Connect securely using Pathway’s Google OAuth client.
+                      </p>
+                    )}
+                    <Button type="submit" disabled={pending || configStatus !== "ready"}>
+                      {pending ? "Connecting…" : "Continue with Google"}
+                    </Button>
+                  </form>
                 )}
-                <Button type="submit" disabled={pending || configStatus !== "ready"}>
-                  {pending ? "Connecting…" : "Continue with Google"}
-                </Button>
-              </form>
-            )}
+              </details>
+            ) : null}
           </>
         )}
       </SettingsSection>
