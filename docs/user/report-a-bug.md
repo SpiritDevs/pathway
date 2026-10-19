@@ -2,7 +2,7 @@
 
 On iPhone or iPad, open **Settings → Report a bug**. Choose your team's Pathway project as the destination. Pathway remembers the destination for your signed-in account on this device.
 
-On iPhone, you can also shake the phone to open the report form. Shake reporting starts enabled. Turn it off in Settings or in the report form. Shaking opens the form; it does not send a report.
+On iPhone, shaking the phone first opens a small **Report a bug?** card. Choose **Report bug** to open the full form, or dismiss the card if the shake was accidental. Dismissing the card does not create or change a draft. Shake reporting starts enabled; turn it off in the card, Settings, or the report form. Shaking never sends a report.
 
 Describe what went wrong, then choose **Report bug**. Pathway creates a task in the selected project and attaches recent app diagnostics. The title comes from the first line of your description.
 

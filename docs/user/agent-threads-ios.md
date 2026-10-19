@@ -82,3 +82,9 @@ threads you explicitly reopened keep their existing settlement safeguards.
 
 To search threads, open **Thread options** and choose **Search**. The search field opens
 at the top with the keyboard ready. Tap **Cancel** to clear the search and hide the field.
+
+Tap a file link in an agent message to open it in the app's file viewer. Pathway reads the file
+from that message's environment and workspace, including its worktree or conversation folder.
+Links with a line reference open at that line. Tap **Done** to return to the conversation.
+The environment must be connected and the file must still exist inside that workspace.
+Website links continue to open normally.

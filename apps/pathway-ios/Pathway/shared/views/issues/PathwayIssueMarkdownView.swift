@@ -15,6 +15,7 @@ struct PathwayIssueMarkdownView: View {
         }
         .font(.body).lineSpacing(4)
         .textSelection(.enabled)
+        .modifier(AgentMarkdownFileLinks(context: imageContext))
     }
 
     @ViewBuilder
