@@ -51,10 +51,10 @@ export const executeDictation = DesktopIpc.makeIpcMethod({
 });
 export const listDictationHistory = DesktopIpc.makeIpcMethod({
   channel: channels.DICTATION_HISTORY,
-  payload: Schema.Void,
+  payload: Schema.UndefinedOr(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
   result: Schema.Array(DictationHistoryEntry),
-  handler: Effect.fn("desktop.dictation.history")(function* (_, event) {
+  handler: Effect.fn("desktop.dictation.history")(function* (limit, event) {
     const dictation = yield* trusted(event);
-    return yield* dictationEffect(() => dictation.controller.listHistory());
+    return yield* dictationEffect(() => dictation.controller.listHistory(limit));
   }),
 });

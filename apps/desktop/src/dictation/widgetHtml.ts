@@ -160,7 +160,7 @@ function mountDictationOverlay() {
     recentLoading = true;
     render(true);
     try {
-      const entries = await bridge.listHistory();
+      const entries = await bridge.listHistory(5);
       if (!active || !recentOpen || request !== historyRequest) return;
       recent = entries.slice(0, 5);
       recentError = null;

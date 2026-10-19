@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Tests use isolated temporary desktop files.
+import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -67,6 +68,28 @@ describe("desktop dictation storage", () => {
     await storage.deleteHistory("first", null);
     expect(await storage.history("first")).toEqual([]);
     expect(await storage.history("second")).toEqual([first]);
+  });
+
+  it("reads only the newest entries needed for a limited request", async () => {
+    const storage = await setup();
+    const entries = Array.from({ length: 7 }, (_, index) =>
+      entry(
+        `aaaaaaaa-aaaa-4aaa-8aaa-${String(index).padStart(12, "0")}`,
+        `2026-09-1${index}T12:00:00.000Z`,
+      ),
+    );
+    for (const value of entries) await storage.saveHistory("first", value);
+    const directory = NodePath.join(
+      storage.directory,
+      "accounts",
+      NodeCrypto.createHash("sha256").update("first").digest("hex"),
+      "history",
+    );
+    // A newer empty record does not count toward the limit; an older unreadable one is never opened.
+    await NodeFSP.writeFile(NodePath.join(directory, `${Date.parse("2026-09-20T00:00:00Z")}_ff.json`), "null");
+    await NodeFSP.writeFile(NodePath.join(directory, `${Date.parse("2026-01-01T00:00:00Z")}_00.json`), "{");
+    expect(await storage.history("first", 5)).toEqual(entries.toReversed().slice(0, 5));
+    await expect(storage.history("first")).rejects.toThrow();
   });
 
   it("keeps independent dictionary caches for each account", async () => {

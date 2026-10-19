@@ -762,12 +762,12 @@ export class DictationController {
         Date.now(),
       );
   }
-  async listHistory() {
+  async listHistory(limit?: number) {
     await this.initialize();
     const accountId = this.accountId;
     if (!accountId) return [];
     await this.options.storage.prune(accountId, this.state.preferences.retentionDays, Date.now());
-    const entries = await this.options.storage.history(accountId);
+    const entries = await this.options.storage.history(accountId, limit);
     return accountId === this.accountId ? entries : [];
   }
   async dispose() {

@@ -3,6 +3,7 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
+import * as Schema from "effect/Schema";
 import type { DictationModelId, DictationModelState } from "@spiritdevs/contracts/dictation";
 
 export interface DictationModelArtifact {
@@ -129,6 +130,16 @@ const missing = (manifest: DictationModelManifest): DictationModelState => ({
 const isMissing = (error: unknown) =>
   error instanceof Error && "code" in error && error.code === "ENOENT";
 
+/**
+ * Written beside a model after every artifact passed SHA-256. Maps each filename to the hash it
+ * matched and the file identity at that moment. Writing, truncating, replacing, or touching a file
+ * changes its inode or ctime, so a later launch only skips hashing bytes nobody has changed.
+ */
+const VERIFIED_MARKER = ".verified.json";
+const decodeMarker = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.String));
+const fingerprint = (file: DictationModelArtifact, info: NodeFS.Stats) =>
+  `${file.sha256}:${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`;
+
 /** Explicit, verified installation into the supplied desktop data directory. No automatic networking. */
 export class DictationModels {
   private readonly manifests: readonly DictationModelManifest[];
@@ -253,9 +264,17 @@ export class DictationModels {
         const info = await NodeFSP.lstat(directory);
         if (!info.isDirectory() || info.isSymbolicLink())
           throw new Error("The installed model must be a regular directory.");
-        this.update(manifest.id, { status: "verifying", error: null });
-        for (const file of manifest.artifacts)
-          await this.verify(NodePath.join(directory, file.filename), file, this.lifetime.signal);
+        const verified = await this.readMarker(directory);
+        let hashed = false;
+        for (const file of manifest.artifacts) {
+          const filename = NodePath.join(directory, file.filename);
+          const info = await this.checkFile(filename, file);
+          if (verified[file.filename] === fingerprint(file, info)) continue;
+          if (!hashed) this.update(manifest.id, { status: "verifying", error: null });
+          hashed = true;
+          await this.hash(filename, file, this.lifetime.signal);
+        }
+        if (hashed) await this.writeMarker(directory, manifest);
         this.update(manifest.id, { status: "installed", downloadedBytes: missing(manifest).bytes });
       } catch (error) {
         this.lifetime.signal.throwIfAborted();
@@ -269,16 +288,45 @@ export class DictationModels {
     }
   }
 
-  private async verify(filename: string, file: DictationModelArtifact, signal: AbortSignal) {
+  private async checkFile(filename: string, file: DictationModelArtifact) {
     const info = await NodeFSP.lstat(filename);
     if (!info.isFile() || info.isSymbolicLink() || info.size !== file.bytes)
       throw new Error("Model size does not match the manifest.");
+    return info;
+  }
+
+  private async hash(filename: string, file: DictationModelArtifact, signal: AbortSignal) {
     const hash = NodeCrypto.createHash("sha256");
     const stream = NodeFS.createReadStream(filename, { signal });
     for await (const chunk of stream) hash.update(chunk);
     signal.throwIfAborted();
     if (hash.digest("hex") !== file.sha256)
       throw new Error("Model SHA-256 does not match the manifest.");
+  }
+
+  private async readMarker(directory: string): Promise<Record<string, string>> {
+    try {
+      return decodeMarker(
+        JSON.parse(await NodeFSP.readFile(NodePath.join(directory, VERIFIED_MARKER), "utf8")),
+      );
+    } catch {
+      return {};
+    }
+  }
+
+  /** Call only after every artifact's bytes matched the manifest. A failed write costs one rehash. */
+  private async writeMarker(directory: string, manifest: DictationModelManifest) {
+    try {
+      const marker: Record<string, string> = {};
+      for (const file of manifest.artifacts)
+        marker[file.filename] = fingerprint(
+          file,
+          await this.checkFile(NodePath.join(directory, file.filename), file),
+        );
+      await NodeFSP.writeFile(NodePath.join(directory, VERIFIED_MARKER), JSON.stringify(marker), {
+        mode: 0o600,
+      });
+    } catch {}
   }
 
   private async install(id: DictationModelId, signal: AbortSignal) {
@@ -317,6 +365,7 @@ export class DictationModels {
       await NodeFSP.rm(destination, { recursive: true, force: true });
       signal.throwIfAborted();
       await NodeFSP.rename(staging, destination);
+      await this.writeMarker(destination, manifest);
       // A cancellation racing rename must not publish a late installation.
       if (signal.aborted || this.disposed) {
         await NodeFSP.rm(destination, { recursive: true, force: true });
