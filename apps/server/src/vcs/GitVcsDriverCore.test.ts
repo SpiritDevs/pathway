@@ -1412,6 +1412,141 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
   });
 
   describe("worktree operations", () => {
+    for (const { stderr, detail } of [
+      {
+        stderr: "fatal: cannot create directory at 'secret-token-value': No space left on device",
+        detail:
+          "Not enough disk space to create the worktree. Free space on the environment's drive, then try again.",
+      },
+      {
+        stderr: "fatal: unable to write file: Disk quota exceeded",
+        detail:
+          "Not enough disk space to create the worktree. Free space on the environment's drive, then try again.",
+      },
+      {
+        stderr: "fatal: could not create work tree dir: Permission denied",
+        detail:
+          "Git could not write the worktree. Check write access to the repository and worktree folders, then try again.",
+      },
+      {
+        stderr: "fatal: could not create work tree dir: Read-only file system",
+        detail:
+          "Git could not write the worktree. Check write access to the repository and worktree folders, then try again.",
+      },
+      {
+        stderr: "fatal: 'main' is already checked out at 'secret-token-value'",
+        detail:
+          "The branch is already checked out in another worktree. Use that worktree or choose a different branch.",
+      },
+      {
+        stderr: "fatal: 'main' is already used by worktree at 'secret-token-value'",
+        detail:
+          "The branch is already checked out in another worktree. Use that worktree or choose a different branch.",
+      },
+      {
+        stderr: "fatal: a branch named 'secret-token-value' already exists",
+        detail:
+          "The new branch name already exists. Choose a different branch name or use its existing worktree.",
+      },
+      {
+        stderr: "fatal: 'secret-token-value' already exists",
+        detail:
+          "The worktree destination already exists or is still registered with Git. Use a different destination or resolve the existing worktree first.",
+      },
+      {
+        stderr:
+          "fatal: 'secret-token-value' is a missing but already registered worktree; use 'add -f' to override, or 'prune' or 'remove' to clear",
+        detail:
+          "The worktree destination already exists or is still registered with Git. Use a different destination or resolve the existing worktree first.",
+      },
+      {
+        stderr: "fatal: invalid reference: secret-token-value",
+        detail:
+          "Git could not find the worktree's base reference. Fetch the repository or choose an existing base branch, then try again.",
+      },
+      {
+        stderr: "fatal: not a valid object name: 'secret-token-value'",
+        detail:
+          "Git could not find the worktree's base reference. Fetch the repository or choose an existing base branch, then try again.",
+      },
+      {
+        stderr: "hook failed with secret-token-value",
+        detail: "git worktree add failed",
+      },
+    ]) {
+      it.effect(`explains worktree failure without leaking output: ${stderr}`, () =>
+        Effect.gen(function* () {
+          const cwd = yield* makeTmpDir();
+          const commands: ChildProcess.Command[] = [];
+          const spawner = ChildProcessSpawner.make((command) => {
+            commands.push(command);
+            return Effect.succeed({
+              ...makeSuccessfulHandle("secret-token-value"),
+              exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(128)),
+              stderr: Stream.encodeText(Stream.make("Preparing worktree\n", stderr)),
+            });
+          });
+          const driver = yield* makeGitVcsDriverCore().pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          );
+          const error = yield* driver
+            .createWorktree({
+              cwd,
+              path: "/unused",
+              refName: "HEAD",
+              newRefName: "feature/test",
+              baseRefName: "main",
+            })
+            .pipe(Effect.flip);
+
+          assert.instanceOf(error, GitCommandError);
+          assert.equal(error.detail, detail);
+          assert.equal(error.exitCode, 128);
+          assert.isAbove(error.stderrLength ?? 0, 0);
+          for (const value of Object.values(error)) {
+            if (typeof value === "string") assert.notInclude(value, "secret-token-value");
+          }
+          assert.notInclude(error.message, "secret-token-value");
+          assert.notProperty(error, "stderr");
+          assert.notProperty(error, "stdout");
+          assert.isTrue(
+            commands.every(
+              (command) =>
+                ChildProcess.isStandardCommand(command) &&
+                (command.args[0] === "rev-parse" ||
+                  (command.args[0] === "worktree" && command.args[1] === "add")),
+            ),
+            "a failed checkout must not configure or remove a worktree",
+          );
+        }).pipe(Effect.provide(ServerConfigLayer)),
+      );
+    }
+
+    it.effect("explains a branch collision without changing the existing branch", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        yield* git(cwd, ["branch", "feature/existing"]);
+        const originalTip = yield* git(cwd, ["rev-parse", "feature/existing"]);
+        const pathService = yield* Path.Path;
+        const worktreePath = pathService.join(yield* makeTmpDir("git-worktrees-"), "collision");
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const error = yield* driver
+          .createWorktree({
+            cwd,
+            path: worktreePath,
+            refName: "HEAD",
+            newRefName: "feature/existing",
+          })
+          .pipe(Effect.flip);
+
+        assert.include(error.detail, "The new branch name already exists.");
+        assert.equal(yield* git(cwd, ["rev-parse", "feature/existing"]), originalTip);
+        const fileSystem = yield* FileSystem.FileSystem;
+        assert.isFalse(yield* fileSystem.exists(worktreePath));
+      }),
+    );
+
     it.effect("preserves newline characters in worktree paths when listing refs", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
