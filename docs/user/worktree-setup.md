@@ -12,6 +12,8 @@ Open **More details** to see the base branch, branch name at creation, workspace
 
 The card stays in the conversation after creation. If preparation fails or is interrupted, it shows the failed or stopped stage and leaves later stages incomplete. Local folders and existing worktrees show the usual thinking or working status without a workspace setup card.
 
+Checkout errors explain common causes, including a full drive, missing write access, or an existing branch or worktree. If the environment's drive is full, free space there before trying again. For remote connections, this is the drive on the machine running the environment.
+
 **Worktree created** means the files are ready and the setup script has been started. The script runs in its terminal while the agent begins, so this status does not mean dependency installation or other script commands have finished.
 
 While a new worktree is being prepared, choose **Cancel** to return the submitted message and attachments to a new compose draft. The provisional conversation is removed. Text you typed while cancellation was in progress is kept with the restored message. If you have queued follow-up messages, remove them before cancelling.
