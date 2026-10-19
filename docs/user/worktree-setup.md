@@ -24,6 +24,10 @@ Choose **Work locally** to run the submitted message in the project's original f
 
 If checkout is already running, either action waits for it to finish safely before cleaning up. The buttons show that the action is in progress. Once the agent has started, preparation can no longer be cancelled or switched. If cleanup fails, the error stays visible and the agent is not started by the requested action.
 
+## Missing workspace folder
+
+A conversation can still point to a worktree after its folder has been deleted outside Pathway. Claude checks the workspace before starting and reports a workspace error if the folder is missing or the path points to a file. Restore the worktree on the connected environment or move the conversation to an existing workspace before retrying.
+
 ## Switching branches with local changes
 
 On web and desktop, if Git blocks a branch switch because files would be overwritten, the error card offers two actions:
