@@ -92,8 +92,10 @@ existing entries still follow retention and deletion settings.
 
 ## Bar, language, and memory settings
 
-The small idle bar appears at the bottom of your screen. Hover for Record, Settings, and History.
-History opens the five latest dictations with Copy actions and a link to the full History page.
+The idle bar keeps Record, Settings, and History visible near the bottom of your screen. Select
+Record to start without hovering first. Panels open upward above the Dock or taskbar, and the bar
+adjusts when the display layout changes. History opens the five latest dictations with Copy actions
+and a link to the full History page.
 Turn off **Show idle bar** to hide it between recordings. Recording and processing feedback still
 appears.
 

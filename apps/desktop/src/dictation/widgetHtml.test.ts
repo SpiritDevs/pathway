@@ -146,11 +146,24 @@ async function mount(state: DictationState) {
 describe("dictation overlay", () => {
   it("uses locked recording for the idle Record button and canonical navigation commands", async () => {
     const overlay = await mount(makeDictationFixture());
-    overlay.root.trigger("pointerenter");
     overlay.click("Record");
     expect(overlay.bridge.execute).toHaveBeenCalledWith({ type: "start", mode: "locked" });
     overlay.click("Settings");
     expect(overlay.bridge.execute).toHaveBeenCalledWith({ type: "open", page: "settings" });
+  });
+  it("keeps idle controls in place when the pointer enters or leaves", async () => {
+    const overlay = await mount(makeDictationFixture());
+    const record = overlay.root
+      .all()
+      .find((node) => node.attributes.get("aria-label") === "Record");
+    expect(record).toBeDefined();
+    const replacements = overlay.root.replacements;
+    overlay.bridge.resize.mockClear();
+    overlay.root.trigger("pointerenter");
+    overlay.root.trigger("pointerleave");
+    expect(overlay.root.replacements).toBe(replacements);
+    expect(overlay.bridge.resize).not.toHaveBeenCalled();
+    expect(overlay.root.all()).toContain(record);
   });
   it("updates recording indicators without replacing accept/cancel controls", async () => {
     const state = makeDictationFixture("recording-locked");
@@ -177,7 +190,6 @@ describe("dictation overlay", () => {
   });
   it("limits recent history to five entries and copies their actual text", async () => {
     const overlay = await mount(makeDictationFixture());
-    overlay.root.trigger("pointerenter");
     overlay.click("History");
     await overlay.recentLoaded;
     expect(overlay.root.all().filter((node) => node.className === "recent-row")).toHaveLength(5);
@@ -186,6 +198,9 @@ describe("dictation overlay", () => {
       type: "copy",
       text: dictationHistoryFixtures[0]!.text,
     });
+    overlay.click("Close recent dictations");
+    overlay.click("Record");
+    expect(overlay.bridge.execute).toHaveBeenCalledWith({ type: "start", mode: "locked" });
   });
   it("keeps processing visible with the idle bar hidden and removes account data on sign-out", async () => {
     const state = makeDictationFixture("processing");
