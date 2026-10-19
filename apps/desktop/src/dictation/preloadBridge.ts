@@ -6,7 +6,7 @@ export function createDictationPreloadBridge(): DictationBridge {
   return {
     getState: () => ipcRenderer.invoke(channels.DICTATION_GET_STATE),
     execute: (command) => ipcRenderer.invoke(channels.DICTATION_EXECUTE, command),
-    listHistory: () => ipcRenderer.invoke(channels.DICTATION_HISTORY),
+    listHistory: (limit) => ipcRenderer.invoke(channels.DICTATION_HISTORY, limit),
     onState(listener) {
       let current: DictationState | undefined;
       let active = true;

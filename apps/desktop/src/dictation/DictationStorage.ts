@@ -73,7 +73,8 @@ export class DictationStorage {
     return this.write(NodePath.join(this.accountDirectory(accountId), "dictionary.json"), value);
   }
 
-  async history(accountId: string): Promise<readonly DictationHistoryEntry[]> {
+  /** Newest first. A limit stops reading files once that many valid entries are decoded. */
+  async history(accountId: string, limit = Infinity): Promise<readonly DictationHistoryEntry[]> {
     await this.writes;
     const directory = NodePath.join(this.accountDirectory(accountId), "history");
     let files: string[];
@@ -88,6 +89,7 @@ export class DictationStorage {
       .filter((file) => /^\d+_[\da-f-]+\.json$/.test(file))
       .sort()
       .toReversed()) {
+      if (entries.length >= limit) break;
       const entry = await this.read(
         NodePath.join(directory, name),
         Schema.decodeUnknownSync(Schema.NullOr(DictationHistoryEntry)),

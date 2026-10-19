@@ -160,7 +160,8 @@ export type DictationCommand = typeof DictationCommand.Type;
 export interface DictationBridge {
   getState(): Promise<DictationState>;
   execute(command: DictationCommand): Promise<DictationState>;
-  listHistory(): Promise<readonly DictationHistoryEntry[]>;
+  /** Newest first. Pass a limit when only the most recent entries are shown. */
+  listHistory(limit?: number): Promise<readonly DictationHistoryEntry[]>;
   onState(listener: (state: DictationState) => void): () => void;
   onNavigate?(
     listener: (page: "models" | "history" | "dictionary" | "settings") => void,

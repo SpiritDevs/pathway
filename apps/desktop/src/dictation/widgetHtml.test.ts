@@ -107,10 +107,10 @@ async function mount(state: DictationState) {
   const bridge = {
     getState: async () => state,
     execute,
-    listHistory: async () => [
+    listHistory: vi.fn(async (_limit?: number) => [
       ...dictationHistoryFixtures,
       { ...dictationHistoryFixtures[0]!, id: "sixth" },
-    ],
+    ]),
     onState: (next: typeof listener) => {
       listener = next;
       return vi.fn();
@@ -406,6 +406,7 @@ describe("dictation overlay", () => {
     overlay.root.trigger("pointerenter");
     overlay.click("History");
     await overlay.recentLoaded;
+    expect(overlay.bridge.listHistory).toHaveBeenCalledWith(5);
     const size = overlay.bridge.resize.mock.lastCall;
     overlay.root.trigger("pointerleave");
     expect(overlay.bridge.resize.mock.lastCall).toEqual(size);
