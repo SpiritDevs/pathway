@@ -413,10 +413,13 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
   it.effect("truncates latest visible message text in thread shells", () =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStoreV2;
+      const sql = yield* SqlClient.SqlClient;
       const now = yield* DateTime.now;
       const threadId = ThreadId.make("thread:projection-message-preview");
       const projectId = ProjectId.make("project:projection-message-preview");
-      const oversizedText = "x".repeat(201);
+      const messageId = MessageId.make("message:projection-message-preview");
+      // The emoji straddles the 200th UTF-16 unit, so the preview keeps its high surrogate.
+      const oversizedText = `${"x".repeat(199)}\u{1F600}${"y".repeat(500)}`;
       const expectedPreview = oversizedText.slice(0, 200);
 
       yield* projectionStore.apply({
@@ -460,7 +463,7 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
         payload: {
           createdBy: "agent",
           creationSource: "provider",
-          id: MessageId.make("message:projection-message-preview"),
+          id: messageId,
           threadId,
           runId: null,
           nodeId: null,
@@ -488,7 +491,25 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
       assert.equal(threadShell?.latestVisibleMessage?.text, expectedPreview);
       for (const shell of [threadShellFromProjection(projection), snapshotShell!, threadShell!]) {
         assert.isFalse(Object.hasOwn(shell, "orchestratorOrigin"));
+        assert.deepEqual(shell.latestVisibleMessage, {
+          id: messageId,
+          role: "assistant",
+          text: expectedPreview,
+          updatedAt: now,
+        });
       }
+
+      // Shells read only the preview fields, so a body they never show cannot break them.
+      yield* sql`
+        UPDATE orchestration_v2_projection_messages
+        SET payload_json = json_set(payload_json, '$.attachments', json('[{"unknown":true}]'))
+        WHERE message_id = ${messageId}
+      `;
+      const projectionExit = yield* Effect.exit(projectionStore.getThreadProjection(threadId));
+      const shellAfterCorruption = yield* projectionStore.getThreadShell(threadId);
+
+      assert.equal(projectionExit._tag, "Failure");
+      assert.deepEqual(shellAfterCorruption?.latestVisibleMessage, threadShell?.latestVisibleMessage);
     }),
   );
 
